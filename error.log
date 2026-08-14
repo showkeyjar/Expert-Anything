@@ -1,6 +1,6 @@
-=== 2026-08-14T15:26:44.893526 ===
+=== 2026-08-14T15:50:08.259733 ===
 Traceback (most recent call last):
-  File "D:\data\AutoClaw\.openclaw\tmp\debug_right_panel.py", line 49, in <module>
-    print("layout stretch:", [rp.layout().itemAt(i).stretch() for i in range(rp.layout().count())])
-                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'PySide6.QtWidgets.QWidgetItem' object has no attribute 'stretch'
+  File "D:\data\AutoClaw\.openclaw\tmp\verify_i18n_final2.py", line 72, in <module>
+    assert len(bad) == 0, f"leftovers: {bad}"
+           ^^^^^^^^^^^^^
+AssertionError: leftovers: [(1, '薄弱'), (1, '未学'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (6, 'Location: 全局')]

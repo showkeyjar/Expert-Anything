@@ -48,14 +48,17 @@ MASTERY_COLORS = {
     "unstudied": "#9E9E9E",
 }
 
-TAG_LABELS = {
-    "weak": _t("legend_weak"),
-    "anom": _t("legend_anomaly"),
-    "foundation": _t("legend_unstudied"),
-    "ready": _t("legend_mastered"),
-    "blocked": _t("legend_learning"),
-    "path": _t("legend_focus"),
-}
+def _tag_label(tag: str) -> str:
+    """Translated tag label — looked up at render time so language switches
+    take effect immediately (module-level _t() would freeze the first lang)."""
+    return {
+        "weak": _t("legend_weak"),
+        "anom": _t("legend_anomaly"),
+        "foundation": _t("legend_unstudied"),
+        "ready": _t("legend_mastered"),
+        "blocked": _t("legend_learning"),
+        "path": _t("legend_focus"),
+    }.get(tag, tag)
 
 
 def mastery_level(m: float) -> str:
@@ -219,7 +222,7 @@ class ConceptDetailPanel(QDialog):
         root.setSpacing(10)
 
         if concept is None:
-            root.addWidget(QLabel("（概念不存在）"))
+            root.addWidget(QLabel(_t("panel_not_exist")))
             return
 
         # title row: name + mastery badge
@@ -300,7 +303,7 @@ class ConceptDetailPanel(QDialog):
             for label, other_id, direction in rels:
                 other = asset.concept_by_id(other_id)
                 arrow = "→" if direction == "out" else "←"
-                item = QListWidgetItem(f"{arrow} {label or '关联'}　{other.name if other else other_id}")
+                item = QListWidgetItem(f"{arrow} {label or _t('edge_related')}　{other.name if other else other_id}")
                 item.setData(Qt.ItemDataRole.UserRole, other_id)
                 rel_list.addItem(item)
             rel_list.itemClicked.connect(self._on_neighbor_clicked)
@@ -487,7 +490,7 @@ class PathLadderView(QWidget):
             color = {"weak": "#F44336", "anom": "#E67828",
                      "foundation": "#0284C7", "ready": "#2E7D32",
                      "blocked": "#78909C", "path": "#64748B"}.get(tag, "#64748B")
-            name_row.addWidget(tag_chip(TAG_LABELS.get(tag, tag), color))
+            name_row.addWidget(tag_chip(_tag_label(tag), color))
         name_row.addStretch()
         col.addLayout(name_row)
 
@@ -505,7 +508,7 @@ class PathLadderView(QWidget):
         row.addLayout(col, 1)
 
         # score hint
-        hint = QLabel(f"优先级 {item.get('score', 0):.2f}")
+        hint = QLabel(_t("priority_fmt", s=item.get("score", 0)))
         hint.setStyleSheet("color: #9E9E9E; font-size: 10.5px;")
         row.addWidget(hint)
 
@@ -559,7 +562,7 @@ class TeachResultView(QWidget):
         # header: concept + style badge
         head = QHBoxLayout()
         head.setSpacing(10)
-        title = QLabel(result.get("concept", "概念"))
+        title = QLabel(result.get("concept", _t("stat_total")))
         title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1565C0;")
         head.addWidget(title)
         style = result.get("style", "")
@@ -742,7 +745,7 @@ class TeachResultView(QWidget):
         chips_lay.setSpacing(6)
         for label, name, _cid in neighbors:
             chip = QPushButton(name)
-            chip.setToolTip(label or "关联概念")
+            chip.setToolTip(label or _t("related_concepts"))
             chip.setStyleSheet(
                 "QPushButton { background-color: #E1F0FA; color: #0369A1;"
                 "border: 1px solid #BAE6FD; border-radius: 12px; padding: 4px 12px;"
@@ -943,7 +946,7 @@ class MasteryDistributionBar(QWidget):
             small = _QFont()
             small.setPointSize(9)
             painter.setFont(small)
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无学习数据")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, _t("trend_empty"))
             painter.end()
             return
         x = 0.0
@@ -1057,11 +1060,11 @@ class NodeDetailCard(QFrame):
             if r.source == concept.id:
                 other = asset.concept_by_id(r.target)
                 if other:
-                    rels.append((r.label or "关联", other.name, other.id))
+                    rels.append((r.label or _t("edge_related"), other.name, other.id))
             elif r.target == concept.id:
                 other = asset.concept_by_id(r.source)
                 if other:
-                    rels.append((r.label or "关联", other.name, other.id))
+                    rels.append((r.label or _t("edge_related"), other.name, other.id))
         if rels:
             self._layout.addWidget(_sec_title(_t("detail_relations"), "#0284C7"))
             for label, other_name, other_id in rels[:6]:

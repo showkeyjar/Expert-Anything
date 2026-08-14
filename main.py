@@ -76,10 +76,8 @@ def _install_excepthook():
             )
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.critical(
-                None, "程序错误",
-                f"发生未处理的错误：\n{exc}\n\n"
-                f"详情已写入 error.log（{log.name}）。您可以继续使用，"
-                f"但建议反馈此问题。",
+                None, _t("app_error"),
+                _t("app_error_body", exc=exc, log=log.name),
             )
         except Exception:
             pass
@@ -122,10 +120,7 @@ class ExtractWorker(QThread):
             else:
                 text = extract_from_bytes(self.raw, self.filename)
             if not text.strip():
-                self.error.emit(
-                    "无法从文件中提取文本。扫描版 PDF 需要 OCR，暂不支持；"
-                    "请确认文件不是加密或损坏的。"
-                )
+                self.error.emit(_t("extract_failed_text"))
                 return
             asset = extract_knowledge(
                 text,
@@ -265,7 +260,7 @@ class KnowledgeCard(QFrame):
         # Action button
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        learn_btn = QPushButton("开始学习")
+        learn_btn = QPushButton(_t("panel_teach"))
         learn_btn.setStyleSheet("""
             QPushButton {
                 background-color: #1565C0;
@@ -369,7 +364,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("ExpertAnything · 个人学习 OS")
+        self.setWindowTitle(f"ExpertAnything · {_t('app_tagline')}")
         self.setMinimumSize(1100, 760)
         self.resize(1200, 800)
         self.setStyleSheet(self._get_stylesheet())
@@ -545,11 +540,11 @@ class MainWindow(QMainWindow):
         stats_layout.setSpacing(12)
         stats = self._compute_stats()
         for card in [
-            ("📚", "总概念", stats['total'], "#1565C0"),
-            ("✓", "已掌握", stats['mastered'], "#4CAF50"),
-            ("↗", "学习中", stats['learning'], "#FF9800"),
-            ("○", "未学习", stats['unstudied'], "#9E9E9E"),
-            ("⚠", "异常", stats['anomalies'], "#F44336"),
+            ("📚", _t("stat_total"), stats['total'], "#1565C0"),
+            ("✓", _t("legend_mastered"), stats['mastered'], "#4CAF50"),
+            ("↗", _t("legend_learning"), stats['learning'], "#FF9800"),
+            ("○", _t("stat_unstudied"), stats['unstudied'], "#9E9E9E"),
+            ("⚠", _t("stat_anomaly"), stats['anomalies'], "#F44336"),
         ]:
             stats_layout.addWidget(StatCard(*card))
         stats_layout.addStretch()
@@ -675,13 +670,13 @@ class MainWindow(QMainWindow):
                 (v.get('mastery', 0) for k2, v in concepts_all.items() if v.get('name') == n), 0)),
         )[:3]
 
-        summary = f"你共接触 {total_c} 个概念：已掌握 {mastered_c} 个（{mastered_c / total_c:.0%}），平均掌握度 {avg_c:.0%}。"
+        summary = _t("overview_summary", total=total_c, m=mastered_c, pct=mastered_c / total_c, avg=avg_c)
         if due:
-            summary += f"有 {len(due)} 个概念到了复习时间（如「{due[0]['name']}」），现在复习效果最好。"
+            summary += _t("overview_due", n=len(due), first=due[0]["name"])
         if weak_names:
-            summary += f"较薄弱的是：{'、'.join(weak_names)}。"
+            summary += _t("overview_weak", names="、".join(weak_names))
         elif total_c and mastered_c == total_c:
-            summary += "全部掌握，非常棒！"
+            summary += _t("overview_all")
 
         overview = QFrame()
         overview.setStyleSheet(
@@ -710,10 +705,10 @@ class MainWindow(QMainWindow):
         leg_row = QHBoxLayout()
         leg_row.setSpacing(6)
         for color, text in [
-            ("#4CAF50", f"已掌握 {mastered_c}"),
-            ("#FF9800", f"学习中 {learning_c}"),
-            ("#F44336", f"薄弱 {weak_c}"),
-            ("#BDBDBD", f"未学 {unstudied_c}"),
+            ("#4CAF50", f"{_t('legend_mastered')} {mastered_c}"),
+            ("#FF9800", f"{_t('legend_learning')} {learning_c}"),
+            ("#F44336", f"{_t('legend_weak')} {weak_c}"),
+            ("#BDBDBD", f"{_t('legend_unstudied')} {unstudied_c}"),
         ]:
             dot = QLabel("●")
             dot.setStyleSheet(f"color: {color}; font-size: 10px;")
@@ -749,7 +744,7 @@ class MainWindow(QMainWindow):
                 card = KnowledgeCard(
                     concept_name=d['name'],
                     mastery=d['mastery'],
-                    tags=[f"距上次 {d['days_since']:.0f} 天"],
+                    tags=[_t("due_days", d=d["days_since"])],
                     is_top=False,
                 )
                 card.clicked.connect(
@@ -773,10 +768,10 @@ class MainWindow(QMainWindow):
 
         for gid, items in groups.items():
             g_title = (
-                self.assets.get(gid, {}).get('title', '未知资产')
-                if gid != '?' else '其他来源'
+                self.assets.get(gid, {}).get('title', _t('group_unknown'))
+                if gid != '?' else _t('group_other')
             )
-            g_label = QLabel(f"📚 {g_title}（{len(items)} 个概念）")
+            g_label = QLabel(_t("group_fmt", title=g_title, n=len(items)))
             g_label.setStyleSheet(
                 "font-size: 12.5px; font-weight: bold; color: #0c4a6e;"
                 "background-color: #E8F0F8; border-radius: 4px; padding: 4px 8px; margin-top: 6px;"
@@ -789,9 +784,9 @@ class MainWindow(QMainWindow):
                 sources = concept.get('sources', [])
                 tags = []
                 if mastery < 0.3:
-                    tags.append("薄弱")
+                    tags.append(_t("legend_weak"))
                 if len(sources) > 1:
-                    tags.append("跨资产")
+                    tags.append(_t("tag_cross"))
 
                 card = KnowledgeCard(
                     concept_name=name,
@@ -803,7 +798,7 @@ class MainWindow(QMainWindow):
                 concepts_layout.addWidget(card)
 
         concepts_layout.addStretch()
-        tabs.addTab(concepts_widget, "概念掌握度")
+        tabs.addTab(concepts_widget, _t("tab_concepts"))
 
         # History tab
         history_widget = QWidget()
@@ -898,7 +893,7 @@ class MainWindow(QMainWindow):
         history_layout.addWidget(export_btn)
         history_layout.addStretch()
 
-        tabs.addTab(history_widget, "学习历史")
+        tabs.addTab(history_widget, _t("tab_history"))
 
         layout.addWidget(tabs)
 
@@ -911,8 +906,8 @@ class MainWindow(QMainWindow):
             title = data.get('title', self.current_asset_id)
             method = data.get('method', 'llm_extraction_chunked_v1')
             concepts = len(data.get('concepts', []))
-            return f"来源：{title} | 概念数：{concepts} | 方法：{method}"
-        return "加载知识数据..."
+            return _t("dash_subtitle", title=title, concepts=concepts, method=method)
+        return _t("dash_loading")
 
     def _compute_stats(self):
         """Compute dashboard statistics."""
@@ -976,7 +971,7 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(16, 8, 16, 8)
         lay.setSpacing(12)
 
-        self._topbar_asset = QLabel("未选择资产")
+        self._topbar_asset = QLabel(_t("topbar_no_asset"))
         self._topbar_asset.setStyleSheet(
             "font-size: 13.5px; font-weight: bold; color: #1F2933;"
         )
@@ -1104,7 +1099,7 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        assets_label = QLabel("知识资产")
+        assets_label = QLabel(_t("assets_label"))
         assets_label.setStyleSheet("color: #90CAF9; font-size: 11px;")
         layout.addWidget(assets_label)
 
@@ -1268,7 +1263,7 @@ class MainWindow(QMainWindow):
                     if a < b:
                         relations.append(Relation(
                             id=str(_uuid4()), source=a, target=b,
-                            label="共享概念", type="related"))
+                            label=_t("share_concept"), type="related"))
 
         # supplement edges from teacher notes: prerequisites -> '前置' edges,
         # connections mentioning another concept -> '关联' edges. This makes
@@ -1290,7 +1285,7 @@ class MainWindow(QMainWindow):
                     if tgt and tgt != src_id:
                         relations.append(Relation(
                             id=str(_uuid4()), source=tgt, target=src_id,
-                            label="前置", type="related"))
+                            label=_t("edge_prereq"), type="related"))
                 for conn in n.get("connections", []) or []:
                     for c in data.get("concepts", []):
                         cname = c.get("name", "")
@@ -1298,13 +1293,13 @@ class MainWindow(QMainWindow):
                         if cname and tgt and tgt != src_id and cname in conn:
                             relations.append(Relation(
                                 id=str(_uuid4()), source=src_id, target=tgt,
-                                label="关联", type="related"))
+                                label=_t("edge_related"), type="related"))
         path = []
         if cur is not None:
             path = [id_map.get((self.current_asset_id, cid), cid)
                     for cid in cur.learning_path]
         return KnowledgeAsset(
-            asset_id="global", type="global", title="全局知识图谱",
+            asset_id="global", type="global", title=_t("global_map_title"),
             source_name="", created_at="", source_text="",
             concepts=concepts, relations=relations, learning_path=path,
         ), grey_ids
@@ -1376,7 +1371,7 @@ class MainWindow(QMainWindow):
         """Handle starting teaching session."""
         selected = self._teach_concept_list.currentItem()
         if not selected:
-            QMessageBox.warning(self, "提示", "请先选择一个概念")
+            QMessageBox.warning(self, _t("hint"), _t("pick_concept_first"))
             return
 
         concept_name = selected.text()
@@ -1392,7 +1387,7 @@ class MainWindow(QMainWindow):
                 break
 
         if not concept:
-            QMessageBox.warning(self, "提示", f"未找到概念: {concept_name}")
+            QMessageBox.warning(self, _t("hint"), _t("concept_not_found", name=concept_name))
             return
 
         # Create tutor if needed
@@ -1412,7 +1407,7 @@ class MainWindow(QMainWindow):
         # Show progress
         self._teach_progress.setVisible(True)
         self._teach_progress.setValue(30)
-        self._teach_result_label.setText("正在生成教学内容...")
+        self._teach_result_label.setText(_t("generating_lesson"))
         self._teach_result_label.repaint()
 
         # focus the position graph on the concept being taught
@@ -1463,7 +1458,7 @@ class MainWindow(QMainWindow):
     def _on_teach_error(self, error_msg):
         """Handle teaching error."""
         self._teach_progress.setVisible(False)
-        QMessageBox.critical(self, "错误", f"教学失败: {error_msg}")
+        QMessageBox.critical(self, _t("error"), _t("teach_error", msg=error_msg))
 
     def _display_teach_result(self, result):
         """Display teaching result in the UI (structured cards)."""
@@ -1493,12 +1488,12 @@ class MainWindow(QMainWindow):
                         other = asset.concept_by_id(r.target)
                         if other and other.id not in seen:
                             seen.add(other.id)
-                            neighbors.append((r.label or "关联", other.name, other.id))
+                            neighbors.append((r.label or _t("edge_related"), other.name, other.id))
                     elif r.target == concept.id:
                         other = asset.concept_by_id(r.source)
                         if other and other.id not in seen:
                             seen.add(other.id)
-                            neighbors.append((r.label or "关联", other.name, other.id))
+                            neighbors.append((r.label or _t("edge_related"), other.name, other.id))
                     if len(neighbors) >= 6:
                         break
                 view.set_neighbors(neighbors)
@@ -1527,7 +1522,7 @@ class MainWindow(QMainWindow):
         )
         self._followup_worker.finished.connect(self._on_followup_done)
         self._followup_worker.error.connect(
-            lambda msg: self._teach_view.append_exchange(question, f"（追问失败：{msg}）")
+            lambda msg: self._teach_view.append_exchange(question, _t("followup_failed", msg=msg))
         )
         self._followup_worker.start()
 
@@ -1560,11 +1555,11 @@ class MainWindow(QMainWindow):
         """Handle answer submission."""
         box = getattr(self, "_teach_answer_input", None)
         if box is None or not hasattr(box, "toPlainText"):
-            QMessageBox.warning(self, "提示", "当前没有可提交的教学内容，请重新开始教学。")
+            QMessageBox.warning(self, _t("hint"), _t("no_submittable"))
             return
         answer = box.toPlainText().strip()
         if not answer:
-            QMessageBox.warning(self, "提示", "请先输入你的回答")
+            QMessageBox.warning(self, _t("hint"), _t("no_answer"))
             return
         
         selected = self._teach_concept_list.currentItem()
@@ -1584,7 +1579,7 @@ class MainWindow(QMainWindow):
                 break
         
         if not concept:
-            QMessageBox.warning(self, "提示", f"未找到概念: {concept_name}")
+            QMessageBox.warning(self, _t("hint"), _t("concept_not_found", name=concept_name))
             return
         
         # Evaluate answer
@@ -1613,15 +1608,15 @@ class MainWindow(QMainWindow):
                     score, feedback, reference, gap
                 )
             else:
-                msg = f"得分: {score:.2f}\n"
-                msg += "已掌握" if understood else "需继续努力"
-                msg += f"\n\n反馈: {feedback}"
-                QMessageBox.information(self, "评估结果", msg)
+                msg = _t("score_line", s=score) + "\n"
+                msg += _t("eval_mastered") if understood else _t("eval_keep_going")
+                msg += "\n\n" + _t("feedback_line", fb=feedback)
+                QMessageBox.information(self, _t("eval_result"), msg)
             
             # Refresh learner view if needed
             self._refresh_all_views()
         else:
-            QMessageBox.warning(self, "提示", "请先开始教学会话")
+            QMessageBox.warning(self, _t("hint"), _t("start_teach_first"))
 
     def save_learner_state(self):
         """Persist the in-memory learner model to disk (learner.json)."""
@@ -1664,7 +1659,7 @@ class MainWindow(QMainWindow):
         content_layout.setSpacing(12)
 
         # File selection
-        file_label = QLabel("选择文件:")
+        file_label = QLabel(_t("choose_file") + ":")
         file_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         content_layout.addWidget(file_label)
 
@@ -1680,12 +1675,12 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self._import_fname)
 
         # Paste area
-        paste_label = QLabel("或粘贴内容:")
+        paste_label = QLabel(_t("paste_hint"))
         paste_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         content_layout.addWidget(paste_label)
 
         self._import_paste = QTextEdit()
-        self._import_paste.setPlaceholderText("在此粘贴你的学习材料...")
+        self._import_paste.setPlaceholderText(_t("paste_placeholder"))
         self._import_paste.setMinimumHeight(200)
         self._import_paste.setStyleSheet("""
             QTextEdit {
@@ -1700,7 +1695,7 @@ class MainWindow(QMainWindow):
         # Buttons
         btn_layout = QHBoxLayout()
         
-        choose_btn = QPushButton("选择文件")
+        choose_btn = QPushButton(_t("choose_file"))
         choose_btn.setStyleSheet("""
             QPushButton {
                 background-color: #FF9800;
@@ -1717,7 +1712,7 @@ class MainWindow(QMainWindow):
         choose_btn.clicked.connect(self._on_choose_file)
         btn_layout.addWidget(choose_btn)
 
-        generate_btn = QPushButton("生成知识图谱")
+        generate_btn = QPushButton(_t("start_analysis"))
         generate_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -1750,7 +1745,7 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(self._import_status_label)
         
         # LLM status
-        llm_status = "✓ LLM 已配置" if self.llm_client else "⚠ LLM 未配置（使用确定性回退）"
+        llm_status = _t("llm_ready") if self.llm_client else _t("llm_not_ready")
         llm_label = QLabel(llm_status)
         llm_label.setStyleSheet("color: #4CAF50; font-size: 12px; margin-top: 8px;") if self.llm_client else llm_label.setStyleSheet("color: #FF9800; font-size: 12px; margin-top: 8px;")
         content_layout.addWidget(llm_label)
@@ -1871,13 +1866,12 @@ class MainWindow(QMainWindow):
 
             # Legend
             legend_label = QLabel(
-                "图例：绿色 已掌握 · 琥珀 学习中 · 橙色 薄弱 · 深灰 未学 · 浅灰 其它资产概念 ·"
-                "蓝框 聚焦/推荐 · 橙框 系统存疑 · 悬停节点高亮邻居"
+                _t("legend_full")
             )
             legend_label.setStyleSheet("font-size: 11px; color: #666; margin-top: 8px;")
             content_layout.addWidget(legend_label)
         else:
-            placeholder = QLabel("请先导入知识资产")
+            placeholder = QLabel(_t("no_asset_placeholder"))
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             placeholder.setStyleSheet("color: #757575; font-size: 14px; margin: 40px;")
             content_layout.addWidget(placeholder)
@@ -1937,7 +1931,7 @@ class MainWindow(QMainWindow):
             if kw in name.lower():
                 gv.focus_concept(cid)
                 return
-        QMessageBox.information(self, "未找到", f"图谱中没有名为「{self._map_search.text().strip()}」的概念")
+        QMessageBox.information(self, _t("not_found_in_map").split("「")[0], _t("not_found_in_map", kw=self._map_search.text().strip()))
 
     def _on_map_scope(self, _idx: int) -> None:
         self._refresh_map_view()
@@ -2021,7 +2015,7 @@ class MainWindow(QMainWindow):
             )
             layout.addWidget(self._source_view_widget, 1)
         else:
-            placeholder = QLabel("请先导入知识资产")
+            placeholder = QLabel(_t("no_asset_placeholder"))
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             placeholder.setStyleSheet("color: #757575; font-size: 14px; margin: 40px;")
             layout.addWidget(placeholder)
@@ -2185,13 +2179,7 @@ class MainWindow(QMainWindow):
         ex_t = QLabel(_t("teacher_explain_title"))
         ex_t.setStyleSheet("font-size: 12.5px; font-weight: bold; color: #B45309;")
         ex_lay.addWidget(ex_t)
-        ex_b = QLabel(
-            "教师模型 = 系统对这本书自己的理解（不是你的学习记录）。"
-            "它深读材料后，为每个概念标注「为什么重要 / 前置知识 / 常见误解 / 外部连接」，"
-            "并标出材料中矛盾、未定义、逻辑断点等可疑点（待解项）。"
-            "「重新自检」= 让系统再深读一遍材料并更新理解（需要 LLM）。"
-            "下方「概念笔记」逐条对应书中的概念，点击笔记可查看概念详情并开始学习。"
-        )
+        ex_b = QLabel(_t("teacher_explain_body"))
         ex_b.setWordWrap(True)
         ex_b.setStyleSheet("font-size: 12px; color: #5D4037;")
         ex_lay.addWidget(ex_t)
@@ -2204,7 +2192,7 @@ class MainWindow(QMainWindow):
             
             # Display teacher status
             status = teacher_data.get('status', 'unknown')
-            status_label = QLabel(f"状态: {status}")
+            status_label = QLabel(_t("teacher_status_" + {"done": "done", "fallback": "fallback", "failed": "failed"}.get(status, "done")))
             status_color = "#2E7D32" if status == "done" else ("#FF9800" if status == "fallback" else "#F44336")
             status_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {status_color};")
             content_layout.addWidget(status_label)
@@ -2212,14 +2200,14 @@ class MainWindow(QMainWindow):
             # Method info
             method = teacher_data.get('method', '')
             if method:
-                method_label = QLabel(f"方法: {method}")
+                method_label = QLabel(_t("teacher_method", m=method))
                 method_label.setStyleSheet("font-size: 12px; color: #666;")
                 content_layout.addWidget(method_label)
             
             # Synthesized time
             synthesized = teacher_data.get('synthesized_at', '')
             if synthesized:
-                synth_label = QLabel(f"生成时间: {synthesized[:19]}")
+                synth_label = QLabel(_t("teacher_time", t=synthesized[:19]))
                 synth_label.setStyleSheet("font-size: 12px; color: #666;")
                 content_layout.addWidget(synth_label)
             
@@ -2259,9 +2247,9 @@ class MainWindow(QMainWindow):
                 content_layout.addWidget(anom_label)
                 
                 kind_labels = {
-                    "contradiction": "矛盾", "undefined_term": "未定义术语",
-                    "logical_gap": "逻辑断点", "surprising_claim": "反常主张",
-                    "learner_gap": "学习者信号", "needs_llm": "需要 LLM",
+                    "contradiction": _t("kind_contradiction"), "undefined_term": _t("kind_undefined_term"),
+                    "logical_gap": _t("kind_logical_gap"), "surprising_claim": _t("kind_surprising_claim"),
+                    "learner_gap": _t("kind_learner_gap"), "needs_llm": _t("kind_needs_llm"),
                 }
                 sev_colors = {
                     "high": "#C62828", "medium": "#E65100",
@@ -2297,7 +2285,7 @@ class MainWindow(QMainWindow):
                     )
                     head.addWidget(badge)
                     if loc:
-                        loc_lbl = QLabel(f"位置：{loc[:40]}")
+                        loc_lbl = QLabel(_t("anomaly_loc", loc=loc[:40]))
                         loc_lbl.setStyleSheet("color: #757575; font-size: 10.5px;")
                         head.addWidget(loc_lbl)
                     head.addStretch()
@@ -2316,9 +2304,7 @@ class MainWindow(QMainWindow):
                 notes_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #666; margin-top: 12px;")
                 content_layout.addWidget(notes_label)
                 
-                notes_hint = QLabel(
-                    f"{len(notes)} 个概念的理解笔记——点击任意一条，查看该概念的证据、关系与教师理解。"
-                )
+                notes_hint = QLabel(_t("notes_hint", n=len(notes)))
                 notes_hint.setStyleSheet("font-size: 11.5px; color: #8D6E63;")
                 content_layout.addWidget(notes_hint)
 
@@ -2344,7 +2330,7 @@ class MainWindow(QMainWindow):
                     if sign:
                         parts.append(sign[:46] + ("…" if len(sign) > 46 else ""))
                     if miscon:
-                        parts.append(f"误区：{miscon[0][:24]}")
+                        parts.append(_t("detail_miscon", s=miscon[0][:24]))
                     item = QListWidgetItem("　".join(parts))
                     item.setData(Qt.ItemDataRole.UserRole, note.get('concept_id', ''))
                     notes_list.addItem(item)
@@ -2354,13 +2340,13 @@ class MainWindow(QMainWindow):
                 )
                 content_layout.addWidget(notes_list)
         else:
-            placeholder = QLabel("教师模型数据尚未生成\n请先完成知识资产导入和自学习过程")
+            placeholder = QLabel(_t("teacher_empty"))
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
             placeholder.setStyleSheet("color: #757575; font-size: 14px; margin: 40px;")
             content_layout.addWidget(placeholder)
             
             # Try to build teacher model now
-            build_btn = QPushButton("立即生成教师模型")
+            build_btn = QPushButton(_t("teacher_build_now"))
             build_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #4CAF50;
@@ -2384,24 +2370,24 @@ class MainWindow(QMainWindow):
     def _on_recheck_teacher(self):
         """Handle re-checking teacher model."""
         if not self.llm_client:
-            QMessageBox.warning(self, "提示", "需要配置 LLM 才能重新自检")
+            QMessageBox.warning(self, _t("hint"), _t("recheck_needs_llm"))
             return
         
         asset = self.get_asset()
         if not asset:
             return
         
-        QMessageBox.information(self, "提示", "正在重新自检，请稍候...")
+        QMessageBox.information(self, _t("hint"), _t("rechecking"))
         
         self._teacher_worker = TeacherWorker(asset, self.llm_client)
         self._teacher_worker.finished.connect(self._on_teacher_recheck_finished)
-        self._teacher_worker.error.connect(lambda e: QMessageBox.critical(self, "错误", f"自检失败: {e}"))
+        self._teacher_worker.error.connect(lambda e: QMessageBox.critical(self, _t("error"), _t("recheck_failed", e=e)))
         self._teacher_worker.start()
 
     def _on_teacher_recheck_finished(self, teacher):
         """Handle teacher recheck completion."""
         self.teacher_models[teacher.asset_id] = teacher.to_dict()
-        QMessageBox.information(self, "完成", f"自检完成: {len(teacher.anomalies)} 条待解项")
+        QMessageBox.information(self, _t("done"), _t("recheck_done", n=len(teacher.anomalies)))
         # Refresh teacher view
         old_view = self.content_stack.widget(6)
         new_view = self._build_teacher_view()
@@ -2411,24 +2397,24 @@ class MainWindow(QMainWindow):
     def _on_build_teacher_now(self):
         """Handle building teacher model now."""
         if not self.llm_client:
-            QMessageBox.warning(self, "提示", "需要配置 LLM 才能生成教师模型")
+            QMessageBox.warning(self, _t("hint"), _t("build_needs_llm"))
             return
         
         asset = self.get_asset()
         if not asset:
             return
         
-        QMessageBox.information(self, "提示", "正在生成教师模型，请稍候...")
+        QMessageBox.information(self, _t("hint"), _t("building_teacher"))
         
         self._teacher_worker = TeacherWorker(asset, self.llm_client)
         self._teacher_worker.finished.connect(self._on_teacher_build_finished)
-        self._teacher_worker.error.connect(lambda e: QMessageBox.critical(self, "错误", f"生成失败: {e}"))
+        self._teacher_worker.error.connect(lambda e: QMessageBox.critical(self, _t("error"), _t("build_failed", e=e)))
         self._teacher_worker.start()
 
     def _on_teacher_build_finished(self, teacher):
         """Handle teacher model building completion."""
         self.teacher_models[teacher.asset_id] = teacher.to_dict()
-        QMessageBox.information(self, "完成", f"教师模型生成完成: {len(teacher.anomalies)} 条待解项")
+        QMessageBox.information(self, _t("done"), _t("build_done", n=len(teacher.anomalies)))
         # Refresh teacher view
         old_view = self.content_stack.widget(6)
         new_view = self._build_teacher_view()
@@ -2437,9 +2423,9 @@ class MainWindow(QMainWindow):
         """Handle file selection."""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "选择文件",
+             _t("choose_file"),
             str(Path(__file__).parent / "data" / "samples"),
-            "支持的文件 (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;PDF (*.pdf);;EPUB (*.epub);;Word (*.docx);;Markdown/文本 (*.md *.markdown *.txt);;HTML (*.html *.htm);;所有文件 (*.*)"
+            _t("filter_supported") + " (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;PDF (*.pdf);;EPUB (*.epub);;Word (*.docx);;Markdown/Text (*.md *.markdown *.txt);;HTML (*.html *.htm);;All (*.*)"
         )
         if file_path:
             self._import_fname.setText(file_path)
@@ -2448,9 +2434,9 @@ class MainWindow(QMainWindow):
         """Handle file selection."""
         file_path, _ = QFileDialog.getOpenFileName(
             self,
-            "选择文件",
+             _t("choose_file"),
             str(Path(__file__).parent / "data" / "samples"),
-            "支持的文件 (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;PDF (*.pdf);;EPUB (*.epub);;Word (*.docx);;Markdown/文本 (*.md *.markdown *.txt);;HTML (*.html *.htm);;所有文件 (*.*)"
+            _t("filter_supported") + " (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;PDF (*.pdf);;EPUB (*.epub);;Word (*.docx);;Markdown/Text (*.md *.markdown *.txt);;HTML (*.html *.htm);;All (*.*)"
         )
         if file_path:
             self._import_fname.setText(file_path)
@@ -2460,7 +2446,7 @@ class MainWindow(QMainWindow):
         # Read file content
         fname = self._import_fname.text().strip()
         if not fname:
-            QMessageBox.warning(self, "错误", "请先选择或输入文件名")
+            QMessageBox.warning(self, _t("error"), _t("import_file_prompt"))
             return
         
         # Try to read from file path (raw bytes; binary formats parsed later)
@@ -2469,20 +2455,20 @@ class MainWindow(QMainWindow):
             try:
                 raw = Path(fname).read_bytes()
             except Exception as e:
-                QMessageBox.critical(self, "错误", f"读取文件失败: {e}")
+                QMessageBox.critical(self, _t("error"), _t("read_failed", e=e))
                 return
         else:
             # Use pasted content
             raw = self._import_paste.toPlainText().encode("utf-8")
         
         if not raw.strip():
-            QMessageBox.warning(self, "错误", "内容为空，请提供学习材料")
+            QMessageBox.warning(self, _t("error"), _t("empty_content"))
             return
         
         # Show progress
         self._import_progress.setVisible(True)
         self._import_progress.setValue(10)
-        self._import_status_label.setText("正在分析文本...")
+        self._import_status_label.setText(_t("analyzing"))
         self._import_status_label.repaint()
         
         # Run extraction in background thread
@@ -2494,7 +2480,7 @@ class MainWindow(QMainWindow):
     def _on_extraction_finished(self, asset):
         """Handle extraction completion."""
         self._import_progress.setValue(80)
-        self._import_status_label.setText(f"已抽取 {len(asset.concepts)} 个概念")
+        self._import_status_label.setText(_t("extracted_x", n=len(asset.concepts)))
         
         # Register asset in learner
         register_asset(self.learner, asset)
@@ -2513,7 +2499,7 @@ class MainWindow(QMainWindow):
         
         # Build teacher model
         self._import_progress.setValue(85)
-        self._import_status_label.setText("正在自我学习...")
+        self._import_status_label.setText(_t("selflearning"))
         self._teacher_worker = TeacherWorker(asset, self.llm_client)
         self._teacher_worker.finished.connect(self._on_teacher_finished)
         self._teacher_worker.error.connect(self._on_extraction_error)
@@ -2522,7 +2508,7 @@ class MainWindow(QMainWindow):
     def _on_teacher_finished(self, teacher):
         """Handle teacher model building."""
         self._import_progress.setValue(95)
-        self._import_status_label.setText(f"自我学习完成: {len(teacher.anomalies)} 条待解项")
+        self._import_status_label.setText(_t("selflearning_done", n=len(teacher.anomalies)))
         
         # Save teacher model
         self.teacher_models[teacher.asset_id] = teacher.to_dict()
@@ -2536,11 +2522,11 @@ class MainWindow(QMainWindow):
         self._import_progress.setValue(100)
         QMessageBox.information(
             self,
-            "导入成功",
-            f"知识资产《{self.assets[self.current_asset_id]['title']}》导入完成！\n\n"
-            f"概念数: {len(self.assets[self.current_asset_id]['concepts'])}\n"
-            f"关系数: {len(self.assets[self.current_asset_id]['relations'])}\n"
-            f"异常数: {len(self.teacher_models[self.current_asset_id]['anomalies']) if self.current_asset_id in self.teacher_models else 0}"
+            _t("import_success_title"),
+            _t("import_done",
+               title=self.assets[self.current_asset_id]["title"],
+               c=len(self.assets[self.current_asset_id]["concepts"]),
+               r=len(self.assets[self.current_asset_id]["relations"]))
         )
         # Switch to knowledge view
         self.on_nav_click("knowledge")
@@ -2548,7 +2534,7 @@ class MainWindow(QMainWindow):
     def _on_extraction_error(self, error_msg):
         """Handle extraction error."""
         self._import_progress.setVisible(False)
-        QMessageBox.critical(self, "错误", f"处理失败: {error_msg}")
+        QMessageBox.critical(self, _t("error"), _t("import_failed", msg=error_msg))
 
     def _refresh_asset_list(self):
         """Refresh asset list in sidebar."""
@@ -2560,7 +2546,7 @@ class MainWindow(QMainWindow):
         # Re-add asset buttons
         sidebar = self.findChildren(QFrame)[0]  # Get sidebar
         layout = sidebar.layout()
-        assets_label = QLabel("知识资产")
+        assets_label = QLabel(_t("assets_label"))
         assets_label.setStyleSheet("color: #90CAF9; font-size: 11px;")
         layout.addWidget(assets_label)
 
@@ -2592,24 +2578,24 @@ class MainWindow(QMainWindow):
         # Build report content
         report_lines = []
         report_lines.append("=" * 70)
-        report_lines.append("ExpertAnything 学习报告")
+        report_lines.append(_t("report_title"))
         report_lines.append("=" * 70)
-        report_lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        report_lines.append(_t("report_generated", t=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         report_lines.append("")
 
         # Asset info
-        report_lines.append("【知识资产】")
+        report_lines.append(_t("report_assets"))
         report_lines.append("-" * 70)
         for aid, data in self.assets.items():
             title = data.get('title', aid)
             concepts = len(data.get('concepts', []))
             relations = len(data.get('relations', []))
             report_lines.append(f"  • {title}")
-            report_lines.append(f"    概念数: {concepts}, 关系数: {relations}")
+            report_lines.append("    " + _t("report_concepts", c=concepts, r=relations))
         report_lines.append("")
 
         # Concept mastery
-        report_lines.append("【概念掌握度】")
+        report_lines.append(_t("report_mastery"))
         report_lines.append("-" * 70)
         concepts = self.learner.get('concepts', {})
         sorted_concepts = sorted(concepts.values(), key=lambda x: -x.get('mastery', 0))
@@ -2619,13 +2605,13 @@ class MainWindow(QMainWindow):
             sources = ', '.join(c.get('sources', []))
             bar = '█' * int(mastery * 10) + '░' * (10 - int(mastery * 10))
             report_lines.append(f"  [{bar}] {name}: {mastery:.0%}")
-            report_lines.append(f"      来源: {sources}")
+            report_lines.append("      " + _t("report_sources", s=sources))
         report_lines.append("")
 
         # History
         history = self.learner.get('history', [])
         if history:
-            report_lines.append("【最近评估记录】")
+            report_lines.append(_t("report_history"))
             report_lines.append("-" * 70)
             for h in history[-10:]:
                 at = h.get('at', '')[:19]
@@ -2633,19 +2619,19 @@ class MainWindow(QMainWindow):
                 concept = h.get('concept', '?')
                 feedback = h.get('feedback', '')[:60]
                 report_lines.append(f"  [{at}] {concept}")
-                report_lines.append(f"    得分: {score:.2f} | 反馈: {feedback}")
+                report_lines.append("    " + _t("report_score_fb", s=score, fb=feedback))
             report_lines.append("")
 
         report_lines.append("=" * 70)
-        report_lines.append("报告生成完毕")
+        report_lines.append(_t("report_done"))
 
         # Save to file
         report_content = "\n".join(report_lines)
         filename, _ = QFileDialog.getSaveFileName(
             self,
-            "保存学习报告",
-            f"学习报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            "文本文件 (*.txt);;所有文件 (*.*)"
+            _t("save_report"),
+            _t("report_filename", ts=datetime.now().strftime("%Y%m%d_%H%M%S")),
+            "Text (*.txt);;All (*.*)"
         )
         if filename:
             try:
@@ -2653,11 +2639,11 @@ class MainWindow(QMainWindow):
                     f.write(report_content)
                 QMessageBox.information(
                     self,
-                    "导出成功",
-                    f"学习报告已保存到:\n{filename}"
+                    _t("done"),
+                    _t("report_saved", filename=filename)
                 )
             except Exception as e:
-                QMessageBox.critical(self, "错误", f"导出失败: {e}")
+                QMessageBox.critical(self, _t("error"), _t("report_failed", e=e))
 
     def _get_stylesheet(self):
         return """

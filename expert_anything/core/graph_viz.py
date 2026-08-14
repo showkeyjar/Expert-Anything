@@ -345,9 +345,9 @@ def _render(
     if title:
         draw.text((MARGIN, 8), title, fill=TITLE, font=title_font)
     elif focus_id:
-        draw.text((MARGIN, 8), f"聚焦：{focus_name}（概念结构图）", fill=TITLE, font=title_font)
+        draw.text((MARGIN, 8), _t("focus_title", name=focus_name), fill=TITLE, font=title_font)
     else:
-        draw.text((MARGIN, 8), "概念结构图", fill=TITLE, font=title_font)
+        draw.text((MARGIN, 8), _t("concept_structure"), fill=TITLE, font=title_font)
 
     half = (BOX_W / 2, BOX_H / 2)
     fhalf = (FBOX_W / 2, FBOX_H / 2)
