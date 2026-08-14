@@ -2,6 +2,8 @@
 
 > Make anyone expert in anything.
 
+[中文](README.md) · [English](README.en.md) · [日本語](README.ja.md)
+
 把任何知识资产（书、论文、课程、笔记）转化为**可交互、可教学、可进化的知识模型**，通过「学习闭环」帮人真正掌握，而不是做一个 RAG 聊天机器人。
 
 ## 运行
