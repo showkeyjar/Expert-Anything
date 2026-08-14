@@ -36,8 +36,18 @@ def _tolerant_json(text: str) -> dict:
     return {}
 
 
+def _lang_instruction() -> str:
+    """Instruction that makes LLM output follow the active UI language."""
+    from expert_anything.core.i18n import get_lang as _gl
+    return {
+        "zh-CN": "",
+        "en": "Answer in English.",
+        "ja": "日本語で回答してください。",
+    }.get(_gl(), "")
+
+
 TEACH_SYSTEM_BASE = (
-    "你是耐心的私人导师。根据给出的【概念】和【原文证据】，用中文向学习者讲解。\n"
+    "你是耐心的私人导师。根据给出的【概念】和【原文证据】，向学习者讲解。\n"
     "铁律：只基于给定证据讲解，不编造原文没有的内容；用学习者能理解的方式表达。\n"
     "最重要的一条：你讲到的【每一个概念都必须是独一无二的】——必须紧扣该概念自己的原文证据、"
     "它在知识网络里的具体位置与关系，绝不能给出放之四海皆准的通用套话或只替换概念名的模板。"
@@ -103,7 +113,7 @@ def _neighbor_context(asset: "KnowledgeAsset", concept: "Concept") -> str:
 
 def _teach_system(style: str) -> str:
     hint = STYLE_HINT.get(style, STYLE_HINT["例子"])
-    return TEACH_SYSTEM_BASE + "\n" + hint
+    return TEACH_SYSTEM_BASE + _lang_instruction() + "\n" + hint
 
 
 def _teach_user(goal, baseline, style, name, definition, evidence, relations, vary: int = 0) -> str:
@@ -325,6 +335,7 @@ class Tutor:
         if qtype == "ordering":
             sys_prompt = (
                 "你是严格的导师。根据【概念】和【原文证据】，设计一道「步骤排序」自测题："
+                + _lang_instruction() + "\n"
                 "把该概念的关键流程/逻辑步骤打乱顺序，让学习者重排。"
                 "只输出 JSON：{type:'ordering', question:'题目', "
                 "options:['步骤A','步骤B',...](乱序), correct_order:[正确顺序的选项索引], "
@@ -333,6 +344,7 @@ class Tutor:
         else:
             sys_prompt = (
                 "你是严格的导师。根据【概念】和【原文证据】，设计一道「判断正误」自测题："
+                + _lang_instruction() + "\n"
                 "给出一个关于该概念的陈述，学习者判断对错。"
                 "只输出 JSON：{type:'true_false', question:'陈述', correct:true或false, "
                 "explanation:'基于证据的解释'}。陈述必须能由证据直接判定，不许模棱两可。"
@@ -422,7 +434,7 @@ class Tutor:
             return self.llm.chat(
                 [
                     Message("system", FOLLOWUP_SYSTEM.format(
-                        title=self.asset.title, name=concept.name)),
+                        title=self.asset.title, name=concept.name) + _lang_instruction()),
                     Message("user", user),
                 ],
                 temperature=0.4,
@@ -438,7 +450,7 @@ class Tutor:
             try:
                 content = self.llm.chat(
                     [
-                        Message("system", EVALUATE_SYSTEM),
+                        Message("system", EVALUATE_SYSTEM + _lang_instruction()),
                         Message(
                             "user",
                             EVALUATE_USER.format(

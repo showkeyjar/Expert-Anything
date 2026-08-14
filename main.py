@@ -31,7 +31,8 @@ if sys_path not in sys.path:
 
 from expert_anything.core.learner import (
     adaptive_path, normalize, register_asset, record_evaluation,
-    mark_completed, due_for_review, load as load_learner, save as save_learner,
+    mark_completed, due_for_review, topic_clusters,
+    load as load_learner, save as save_learner,
 )
 from expert_anything.core.extraction import extract_knowledge
 from expert_anything.core.teacher import build_teacher_model, TeacherModel
@@ -550,6 +551,121 @@ class MainWindow(QMainWindow):
             stats_layout.addWidget(StatCard(*card))
         stats_layout.addStretch()
         scroll_layout.addLayout(stats_layout)
+        # Chapter table of contents + topic clusters (structure map, P0-1/P1-3)
+        asset = self.get_asset()
+        if asset is not None:
+            toc_card = QFrame()
+            toc_card.setStyleSheet(
+                "QFrame { background-color: white; border: 1px solid #E0E0E0;"
+                "border-radius: 10px; }"
+            )
+            toc_lay = QVBoxLayout(toc_card)
+            toc_lay.setContentsMargins(16, 12, 16, 12)
+            toc_lay.setSpacing(6)
+
+            toc_title = QLabel(_t("toc_title"))
+            toc_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
+            toc_lay.addWidget(toc_title)
+
+            toc_hint = QLabel(_t("toc_hint"))
+            toc_hint.setStyleSheet("font-size: 11px; color: #9E9E9E;")
+            toc_lay.addWidget(toc_hint)
+
+            self._toc_tree = QTreeWidget()
+            self._toc_tree.setHeaderHidden(True)
+            self._toc_tree.setMaximumHeight(240)
+            self._toc_tree.setStyleSheet(
+                "QTreeWidget { background-color: #FAFAFA; border: 1px solid #E0E0E0;"
+                "border-radius: 6px; font-size: 12.5px; }"
+                "QTreeWidget::item { padding: 3px; }"
+            )
+            by_ch = {}
+            for c in asset.concepts:
+                by_ch.setdefault(c.chapter or "", []).append(c)
+            ordered = []
+            seen = set()
+            for ch in asset.chapters:
+                if ch.title in by_ch and ch.title not in seen:
+                    ordered.append(ch.title)
+                    seen.add(ch.title)
+            for k in by_ch:
+                if k and k not in seen:
+                    ordered.append(k)
+                    seen.add(k)
+            for ch_title in ordered:
+                top = QTreeWidgetItem([ch_title])
+                top.setData(0, Qt.ItemDataRole.UserRole, ("chapter", ch_title))
+                for c in by_ch[ch_title][:25]:
+                    child = QTreeWidgetItem([f"  {c.name}"])
+                    child.setData(0, Qt.ItemDataRole.UserRole, ("concept", c.id))
+                    top.addChild(child)
+                self._toc_tree.addTopLevelItem(top)
+            unassigned = [c for k, lst in by_ch.items() if not k for c in lst]
+            if unassigned:
+                top = QTreeWidgetItem([_t("toc_other")])
+                top.setData(0, Qt.ItemDataRole.UserRole, ("chapter", ""))
+                for c in unassigned[:20]:
+                    child = QTreeWidgetItem([f"  {c.name}"])
+                    child.setData(0, Qt.ItemDataRole.UserRole, ("concept", c.id))
+                    top.addChild(child)
+                self._toc_tree.addTopLevelItem(top)
+            if self._toc_tree.topLevelItemCount() == 0:
+                self._toc_tree.addTopLevelItem(QTreeWidgetItem([_t("chapter_empty")]))
+            self._toc_tree.itemClicked.connect(self._on_toc_clicked)
+            toc_lay.addWidget(self._toc_tree)
+            scroll_layout.addWidget(toc_card)
+
+            # Topic clusters (P1-3)
+            clusters = topic_clusters(asset)
+            big = [c for c in clusters if c["size"] >= 2][:8]
+            if big:
+                topic_card = QFrame()
+                topic_card.setStyleSheet(
+                    "QFrame { background-color: white; border: 1px solid #E0E0E0;"
+                    "border-radius: 10px; }"
+                )
+                tp_lay = QVBoxLayout(topic_card)
+                tp_lay.setContentsMargins(16, 12, 16, 12)
+                tp_lay.setSpacing(6)
+                tp_title = QLabel(_t("topics_title"))
+                tp_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
+                tp_lay.addWidget(tp_title)
+                tp_hint = QLabel(_t("topics_hint"))
+                tp_hint.setWordWrap(True)
+                tp_hint.setStyleSheet("font-size: 11px; color: #9E9E9E;")
+                tp_lay.addWidget(tp_hint)
+                for cl in big:
+                    row = QHBoxLayout()
+                    row.setSpacing(8)
+                    name_lbl = QLabel(f"{cl['name']}  ·  {_t('topic_size', n=cl['size'])}")
+                    name_lbl.setStyleSheet(
+                        "font-size: 12.5px; font-weight: bold; color: #0c4a6e;"
+                        "background-color: #E8F0F8; border-radius: 6px; padding: 4px 10px;"
+                    )
+                    row.addWidget(name_lbl)
+                    for cid in cl["concept_ids"][:5]:
+                        c = asset.concept_by_id(cid)
+                        if c:
+                            chip = QLabel(c.name)
+                            chip.setStyleSheet(
+                                "background-color: #F3E5F5; color: #6A1B9A;"
+                                "border-radius: 10px; padding: 2px 8px; font-size: 10.5px;"
+                            )
+                            row.addWidget(chip)
+                    row.addStretch()
+                    learn_btn = QPushButton(_t("learn_topic"))
+                    learn_btn.setStyleSheet(
+                        "QPushButton { background-color: white; color: #6A1B9A;"
+                        "border: 1px solid #CE93D8; border-radius: 6px; padding: 3px 10px;"
+                        "font-size: 11px; }"
+                        "QPushButton:hover { background-color: #F3E5F5; }"
+                    )
+                    learn_btn.clicked.connect(
+                        lambda checked, cid=cl["id"]: self._start_topic(cid))
+                    row.addWidget(learn_btn)
+                    tp_lay.addLayout(row)
+                scroll_layout.addWidget(topic_card)
+
 
         # Concept cards from adaptive path
         cards_container = QWidget()
@@ -720,74 +836,6 @@ class MainWindow(QMainWindow):
         leg_row.addStretch()
         ov_lay.addLayout(leg_row)
         layout.addWidget(overview)
-
-        # Chapter table of contents (structure map first, per gap analysis P0-1)
-        if self.current_asset_id and self.current_asset_id in self.assets:
-            toc_card = QFrame()
-            toc_card.setStyleSheet(
-                "QFrame { background-color: white; border: 1px solid #E0E0E0;"
-                "border-radius: 10px; }"
-            )
-            toc_lay = QVBoxLayout(toc_card)
-            toc_lay.setContentsMargins(16, 12, 16, 12)
-            toc_lay.setSpacing(6)
-
-            toc_title = QLabel(_t("toc_title"))
-            toc_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
-            toc_lay.addWidget(toc_title)
-
-            toc_hint = QLabel(_t("toc_hint"))
-            toc_hint.setStyleSheet("font-size: 11px; color: #9E9E9E;")
-            toc_lay.addWidget(toc_hint)
-
-            self._toc_tree = QTreeWidget()
-            self._toc_tree.setHeaderHidden(True)
-            self._toc_tree.setMaximumHeight(240)
-            self._toc_tree.setStyleSheet(
-                "QTreeWidget { background-color: #FAFAFA; border: 1px solid #E0E0E0;"
-                "border-radius: 6px; font-size: 12.5px; }"
-                "QTreeWidget::item { padding: 3px; }"
-            )
-            asset = self.get_asset()
-            by_ch = {}
-            if asset:
-                for c in asset.concepts:
-                    by_ch.setdefault(c.chapter or "", []).append(c)
-            # order: asset.chapters first (if any), then remaining groups
-            ordered = []
-            seen = set()
-            if asset:
-                for ch in asset.chapters:
-                    if ch.title in by_ch and ch.title not in seen:
-                        ordered.append(ch.title)
-                        seen.add(ch.title)
-            for k in by_ch:
-                if k and k not in seen:
-                    ordered.append(k)
-                    seen.add(k)
-            for ch_title in ordered:
-                top = QTreeWidgetItem([ch_title])
-                top.setData(0, Qt.ItemDataRole.UserRole, ("chapter", ch_title))
-                for c in by_ch[ch_title][:25]:
-                    child = QTreeWidgetItem([f"  {c.name}"])
-                    child.setData(0, Qt.ItemDataRole.UserRole, ("concept", c.id))
-                    top.addChild(child)
-                self._toc_tree.addTopLevelItem(top)
-            # unassigned concepts
-            unassigned = [c for k, lst in by_ch.items() if not k for c in lst]
-            if unassigned:
-                top = QTreeWidgetItem([_t("toc_other")])
-                top.setData(0, Qt.ItemDataRole.UserRole, ("chapter", ""))
-                for c in unassigned[:20]:
-                    child = QTreeWidgetItem([f"  {c.name}"])
-                    child.setData(0, Qt.ItemDataRole.UserRole, ("concept", c.id))
-                    top.addChild(child)
-                self._toc_tree.addTopLevelItem(top)
-            if self._toc_tree.topLevelItemCount() == 0:
-                self._toc_tree.addTopLevelItem(QTreeWidgetItem([_t("chapter_empty")]))
-            self._toc_tree.itemClicked.connect(self._on_toc_clicked)
-            toc_lay.addWidget(self._toc_tree)
-            layout.addWidget(toc_card)
 
         # Tab widget for concepts and history
         tabs = QTabWidget()
@@ -1132,6 +1180,29 @@ class MainWindow(QMainWindow):
             self._source_search_status.setText(_t("search_hits", n=n))
         else:
             self._source_search_status.setText(_t("search_none"))
+
+    def _start_topic(self, hub_cid: str) -> None:
+        """Start learning a topic: pick the first unlearned concept in the
+        cluster (learning-path order) and open the teach view."""
+        asset = self.get_asset()
+        if asset is None:
+            return
+        # find the cluster containing the hub
+        for cl in topic_clusters(asset):
+            if cl["id"] == hub_cid:
+                order = [c for c in asset.learning_path if c in cl["concept_ids"]]
+                order += [c for c in cl["concept_ids"] if c not in order]
+                target = None
+                for cid in order:
+                    if cid not in self.learner.get("assets", {}).get(
+                            self.current_asset_id, {}).get("completed", []):
+                        target = asset.concept_by_id(cid)
+                        break
+                if target is None and order:
+                    target = asset.concept_by_id(order[0])
+                if target is not None:
+                    self._start_teach_by_name(target.name)
+                return
 
     def _on_toc_clicked(self, item) -> None:
         """TOC click: chapter -> locate in source; concept -> open panel."""

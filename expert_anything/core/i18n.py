@@ -524,6 +524,15 @@ _STRINGS: dict[str, dict[str, str]] = {
     "search_in_source": {"zh-CN": "🔍 搜索原文（回车定位）", "en": "🔍 Search the source (Enter)", "ja": "🔍 原文を検索（Enter）"},
     "search_btn": {"zh-CN": "搜索", "en": "Search", "ja": "検索"},
     "search_hits": {"zh-CN": "找到 {n} 处", "en": "{n} matches", "ja": "{n} 件見つかりました"},
+    "topics_title": {"zh-CN": "🧩 主题聚合", "en": "🧩 Topics", "ja": "🧩 トピック"},
+    "topics_hint": {
+        "zh-CN": "概念按知识关系自动聚类——每个主题是一组互相联系的概念，点击「学习主题」从头学起",
+        "en": "Concepts cluster automatically by relation — each topic is a group of linked ideas; click to learn it from the start",
+        "ja": "概念は関係性で自動クラスタリングされます。トピックをクリックして最初から学べます",
+    },
+    "learn_topic": {"zh-CN": "学习主题", "en": "Learn topic", "ja": "トピックを学ぶ"},
+    "topic_size": {"zh-CN": "{n} 个概念", "en": "{n} concepts", "ja": "{n} 概念"},
+
     "search_none": {"zh-CN": "未找到匹配", "en": "No matches", "ja": "一致なし"},
 
     "toc_title": {"zh-CN": "📑 章节目录", "en": "📑 Contents", "ja": "📑 目次"},

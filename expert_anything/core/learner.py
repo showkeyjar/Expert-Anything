@@ -261,6 +261,56 @@ def adaptive_path(asset: KnowledgeAsset, learner_state: dict, anomaly_ids: set |
     return items[:limit]
 
 
+def topic_clusters(asset: KnowledgeAsset, min_size: int = 1) -> list[dict]:
+    """Group a book's concepts into topic clusters.
+
+    Clusters are the connected components of the relation graph (concepts
+    linked by any relation belong to one topic). Each cluster is named after
+    its hub (highest-degree concept). This gives the learner "the book has
+    these themes" — e.g. propositional logic concepts cluster together.
+    """
+    adj: dict[str, set] = {c.id: set() for c in asset.concepts}
+    for r in asset.relations or []:
+        s = getattr(r, "source", None)
+        t = getattr(r, "target", None)
+        if s in adj and t in adj and s != t:
+            adj[s].add(t)
+            adj[t].add(s)
+
+    seen: set[str] = set()
+    clusters: list[list[str]] = []
+    for c in asset.concepts:
+        if c.id in seen:
+            continue
+        comp: list[str] = []
+        stack = [c.id]
+        seen.add(c.id)
+        while stack:
+            n = stack.pop()
+            comp.append(n)
+            for m in adj[n]:
+                if m not in seen:
+                    seen.add(m)
+                    stack.append(m)
+        clusters.append(comp)
+
+    out: list[dict] = []
+    for comp in clusters:
+        if len(comp) < min_size:
+            continue
+        deg = {cid: len(adj[cid]) for cid in comp}
+        hub = max(comp, key=lambda cid: deg[cid])
+        hub_c = asset.concept_by_id(hub)
+        out.append({
+            "id": hub,
+            "name": hub_c.name if hub_c else hub,
+            "concept_ids": comp,
+            "size": len(comp),
+        })
+    out.sort(key=lambda x: -x["size"])
+    return out
+
+
 def due_for_review(state: dict, limit: int = 8) -> list[dict]:
     """Concepts whose mastery needs refreshing (spacing-effect based).
 
