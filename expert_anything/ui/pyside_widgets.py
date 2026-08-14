@@ -658,6 +658,15 @@ class TeachResultView(QWidget):
             root.addWidget(self._card(
                 _t("analogy_title"), analogy, "#E0F2F1", "#80CBC4", "#00695C"))
 
+        # cross-book anchor (personalised link to a previously learned concept)
+        cross = result.get("cross_link")
+        if isinstance(cross, dict) and cross.get("name"):
+            root.addWidget(self._card(
+                _t("crosslink_title").format(name=cross.get("name", ""),
+                                             asset=cross.get("asset", "") or ""),
+                cross.get("relation", ""),
+                "#E3F2FD", "#90CAF9", "#0D47A1"))
+
         # steps (numbered ladder)
         steps = _lst(result.get("steps"))
         if steps:

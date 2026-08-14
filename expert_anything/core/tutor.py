@@ -83,11 +83,15 @@ TEACH_USER = (
     "定义：{definition}\n"
     "原文证据：\n{evidence}\n"
     "本概念的关系网络（来自知识模型）：\n{relations}\n\n"
+    "学习者已掌握的其他书概念（来自学习记录）：\n{learned}\n"
+    "（如果当前概念与其中某个有直接关联——相似/前置/对照/应用关系——在 cross_link 中给出；"
+    "确实无关或列表为空则 cross_link 为 null。这是个性化学习的关键，请认真判断。）\n\n"
     "请输出 JSON：\n"
     "{{\n"
     '  "explanation": "讲解（基于本概念自己的证据与关系；若偏好图示，请重点讲清它在知识网络中的位置）",\n'
     '  "example": "结合学习者目标、且明确用到本概念证据的具体例子（偏好例子时尤其重要，必须因概念而异）",\n'
     '  "analogy": "一个能快速建立直觉的类比：把本概念映射到学习者可能熟悉的领域（编程/系统架构/日常生活/其它学科），一句话讲清对应关系（若概念抽象，此字段尤其重要；若难以类比可填空串）",\n'
+    '  "cross_link": {"name": "已学概念名", "asset": "来源书标题", "relation": "与当前概念的关系说明（30字内）"} 或 null,\n'
     '  "steps": ["步骤1", "步骤2", "步骤3"…（偏好拆解步骤时给出 4-6 个可操作小步骤，每步落到本概念）],\n'
     '  "practice": "请学习者用一两句话回答的练习问题（针对本概念）"\n'
     "}}"
@@ -117,7 +121,8 @@ def _teach_system(style: str) -> str:
     return TEACH_SYSTEM_BASE + _lang_instruction() + "\n" + hint
 
 
-def _teach_user(goal, baseline, style, name, definition, evidence, relations, vary: int = 0) -> str:
+def _teach_user(goal, baseline, style, name, definition, evidence, relations,
+                learned: str = "（无）", vary: int = 0) -> str:
     vary_suffix = ""
     if vary > 0:
         vary_suffix = (
@@ -127,6 +132,7 @@ def _teach_user(goal, baseline, style, name, definition, evidence, relations, va
     return TEACH_USER.format(
         goal=goal, baseline=baseline, style=style, name=name,
         definition=definition, evidence=evidence, relations=relations,
+        learned=learned,
     ) + vary_suffix
 
 EVALUATE_SYSTEM = (
@@ -186,6 +192,7 @@ class Tutor:
         # concepts produce genuinely different lessons (not one shared template).
         relations = _neighbor_context(self.asset, concept)
         goal = profile.get("goal", "理解这份知识资产")
+        learned = self._learned_context()
         if self.llm is not None:
             try:
                 content = self.llm.chat(
@@ -201,6 +208,7 @@ class Tutor:
                                 definition=concept.definition or concept.summary,
                                 evidence=evidence,
                                 relations=relations,
+                                learned=learned,
                                 vary=vary,
                             ),
                         ),
@@ -227,6 +235,7 @@ class Tutor:
                     "explanation": _text(data.get("explanation"), concept.definition or concept.summary),
                     "example": _text(data.get("example")),
                     "analogy": _text(data.get("analogy")),
+                    "cross_link": data.get("cross_link") if isinstance(data.get("cross_link"), dict) else None,
                     "steps": _steps(data.get("steps")),
                     "practice": _text(data.get("practice"), "用自己的话解释这个概念，并指出原文依据。"),
                     "evidence": concept.evidence,
@@ -269,6 +278,7 @@ class Tutor:
             ]
             return {
                 "concept": concept.name, "style": style,
+                "cross_link": None,
                 "explanation": defs,
                 "example": (
                     f"以《{self.asset.title}》为例，「{concept.name}」的原文证据是：「{ev0}」。"
@@ -288,6 +298,7 @@ class Tutor:
             )
             return {
                 "concept": concept.name, "style": style,
+                "cross_link": None,
                 "explanation": (
                     f"{defs}\n"
                     f"（已为你生成结构图：当前概念居中高亮，连线表示它与其它概念的关系。"
@@ -302,6 +313,7 @@ class Tutor:
         # default: 例子
         return {
             "concept": concept.name, "style": style,
+            "cross_link": None,
             "explanation": defs,
             "example": (
                 f"在《{self.asset.title}》里，「{concept.name}」是这样体现的：{ev0}。"
@@ -398,6 +410,29 @@ class Tutor:
             return {
                 "score": 0.5, "feedback": "（评估失败，请重试）", "reference": "",
             }
+
+    def _learned_context(self) -> str:
+        """Concepts the learner already mastered in OTHER assets (cross-book
+        anchors for personalised teaching)."""
+        try:
+            state = load_learner()
+        except Exception:
+            return "（无）"
+        concepts = state.get("concepts", {})
+        assets = state.get("assets", {})
+        lines = []
+        for key, rec in concepts.items():
+            try:
+                if float(rec.get("mastery", 0.0)) < 0.6:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            for s in rec.get("sources", []) or []:
+                if s != self.asset.asset_id:
+                    title = assets.get(s, {}).get("title", s)
+                    lines.append(f"- {rec.get('name', key)}（来自《{title}》）")
+                    break
+        return "\n".join(lines) if lines else "（无）"
 
     # --- quick self-test -------------------------------------------------------
     def generate_quiz(self, concept: Concept, qtype: str = "") -> dict | None:

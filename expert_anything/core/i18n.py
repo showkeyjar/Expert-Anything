@@ -550,6 +550,12 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "\u201c{name}\u201d is an external concept (from the model's knowledge, not in this book). Configure an LLM to see its explanation.",
         "ja": "「{name}」は外部概念です（本にはなく、モデルの知識に由来）。LLMを設定すると説明を表示できます。",
     },
+    "crosslink_title": {
+        "zh-CN": "📎 与你已学的「{name}」相关（{asset}）",
+        "en": "📎 Related to \u201c{name}\u201d you already learned ({asset})",
+        "ja": "📎 既に学んだ「{name}」と関連（{asset}）",
+    },
+
     "external_tag": {"zh-CN": "外部", "en": "EXT", "ja": "外部"},
 
     "analogy_title": {
