@@ -1,6 +1,6 @@
-=== 2026-08-14T14:30:58.357846 ===
+=== 2026-08-14T15:14:44.283855 ===
 Traceback (most recent call last):
-  File "D:\codes\Expert-Anything\main.py", line 2140, in _on_teacher_recheck_finished
-    self.content_stack.replaceWidget(old_view, new_view)
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'PySide6.QtWidgets.QStackedWidget' object has no attribute 'replaceWidget'. Did you mean: 'removeWidget'?
+  File "D:\data\AutoClaw\.openclaw\tmp\verify_round11.py", line 56, in <module>
+    labels1 = [l.text() for l in detail.findChildren(type(detail))[0].findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel)]
+                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+IndexError: list index out of range

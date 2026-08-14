@@ -52,6 +52,7 @@ from expert_anything.ui.pyside_widgets import (
     TeachResultView,
     TrendChartView,
     MasteryDistributionBar,
+    NodeDetailCard,
 )
 
 def _install_excepthook():
@@ -1773,7 +1774,7 @@ class MainWindow(QMainWindow):
             # Interactive graph view (uses core.graph_viz layout math)
             self._graph_view = KnowledgeGraphView()
             self._graph_view.concept_clicked.connect(self.on_card_click)
-            self._graph_view.node_single_clicked.connect(self._open_concept_panel)
+            self._graph_view.node_single_clicked.connect(self._on_map_node_clicked)
             self._graph_view.setStyleSheet("""
                 QGraphicsView {
                     background-color: white;
@@ -1782,7 +1783,18 @@ class MainWindow(QMainWindow):
                 }
             """)
             self._graph_view.setMinimumHeight(420)
-            content_layout.addWidget(self._graph_view)
+
+            # graph + per-node detail sidebar
+            map_splitter = QSplitter(Qt.Orientation.Horizontal)
+            self._map_detail = NodeDetailCard()
+            self._map_detail.teach_requested.connect(self._start_teach_by_name)
+            self._map_detail.full_detail_requested.connect(self._open_concept_panel)
+            self._map_detail.neighbor_clicked.connect(self._on_map_neighbor)
+            map_splitter.addWidget(self._graph_view)
+            map_splitter.addWidget(self._map_detail)
+            map_splitter.setStretchFactor(0, 1)
+            map_splitter.setStretchFactor(1, 0)
+            content_layout.addWidget(map_splitter, 1)
 
             self._refresh_map_view()
 
@@ -1813,6 +1825,7 @@ class MainWindow(QMainWindow):
         else:
             asset = self.get_asset()
             grey_ids = set()
+        self._map_global_asset = asset
 
         mastery_map = {}
         for c in asset.concepts:
@@ -1857,6 +1870,35 @@ class MainWindow(QMainWindow):
 
     def _on_map_scope(self, _idx: int) -> None:
         self._refresh_map_view()
+
+    def _on_map_node_clicked(self, concept_id: str) -> None:
+        """Graph single-click: focus the node + fill the per-node detail card."""
+        gv = getattr(self, "_graph_view", None)
+        if gv is not None and gv._focus_id != concept_id:
+            gv.focus_concept(concept_id)
+        self._refresh_map_detail(concept_id)
+
+    def _refresh_map_detail(self, concept_id: str) -> None:
+        """Update the in-graph detail sidebar for a concept."""
+        detail = getattr(self, "_map_detail", None)
+        asset = getattr(self, "_map_global_asset", None)
+        if detail is None or asset is None:
+            return
+        teacher = None
+        td = self.teacher_models.get(self.current_asset_id)
+        if td:
+            try:
+                teacher = TeacherModel.from_dict(td)
+            except Exception:
+                teacher = None
+        detail.set_concept(asset, concept_id, self.learner, teacher)
+
+    def _on_map_neighbor(self, concept_id: str) -> None:
+        """Roam: focus the neighbour in the graph and refresh the sidebar."""
+        gv = getattr(self, "_graph_view", None)
+        if gv is not None:
+            gv.focus_concept(concept_id)
+        self._refresh_map_detail(concept_id)
 
     def _build_source_view(self):
         """Build the source text view for reading the original material."""

@@ -79,15 +79,15 @@ def _mastery_fill(m: float) -> QColor:
 
 # physics tuning --------------------------------------------------------------
 _PHYS = {
-    "repulsion": 9000.0,   # k_rep
-    "spring": 0.02,        # k_spring
-    "rest": 175.0,         # rest length
-    "gravity": 0.0012,     # pull to centre
-    "damp": 0.86,
-    "energy_stop": 0.04,   # settle threshold
-    "settle_frames": 40,   # consecutive calm frames before sleeping
+    "repulsion": 6000.0,   # k_rep (gentler so nodes do not scatter far)
+    "spring": 0.015,       # k_spring
+    "rest": 165.0,         # rest length
+    "gravity": 0.0015,     # pull to centre
+    "damp": 0.90,          # heavier damping -> quick settle
+    "energy_stop": 0.06,   # settle threshold
+    "settle_frames": 25,   # consecutive calm frames before sleeping
 }
-_FLOAT_AMP = 1.2           # drifting amplitude after settling
+_FLOAT_AMP = 0.4           # subtle drifting after settling (never disturbs clicks)
 
 
 class KnowledgeGraphView(QGraphicsView):

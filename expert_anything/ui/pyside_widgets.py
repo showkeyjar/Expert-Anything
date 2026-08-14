@@ -955,3 +955,177 @@ class MasteryDistributionBar(QWidget):
                 painter.drawRect(int(x), 0, max(1, int(width)), h)
             x += width
         painter.end()
+
+# --------------------------------------------------------------------------- #
+# NodeDetailCard — in-graph detail sidebar (changes per clicked node)
+# --------------------------------------------------------------------------- #
+class NodeDetailCard(QFrame):
+    """Right-hand detail card that follows the clicked node.
+
+    Clicking a node in the living graph updates this card: definition,
+    mastery, relation neighbours (clickable to roam), first evidence and
+    teacher-note highlights. '开始教学' starts a lesson, '完整详情' opens
+    the full ConceptDetailPanel.
+    """
+
+    teach_requested = Signal(str)           # concept name
+    full_detail_requested = Signal(str)     # concept id
+    neighbor_clicked = Signal(str)          # concept id (roam)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(270)
+        self.setMaximumWidth(320)
+        self.setStyleSheet(
+            "NodeDetailCard { background-color: white; border: 1px solid #E0E0E0;"
+            "border-radius: 10px; }"
+        )
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(14, 12, 14, 12)
+        self._layout.setSpacing(8)
+        self._empty()
+
+    # -- state ---------------------------------------------------------------
+    def _empty(self) -> None:
+        self._clear()
+        t = QLabel("点击左侧节点 - 查看它的定义、关系与教师理解")
+        t.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        t.setStyleSheet("color: #9E9E9E; font-size: 12.5px; padding: 30px 0;")
+        self._layout.addWidget(t)
+        self._layout.addStretch()
+
+    def _clear(self) -> None:
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+            elif item.layout() is not None:
+                self._clear_layout(item.layout())
+
+    @staticmethod
+    def _clear_layout(lay) -> None:
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+            elif item.layout() is not None:
+                NodeDetailCard._clear_layout(item.layout())
+
+    # -- content --------------------------------------------------------------
+    def set_concept(self, asset, concept_id: str,
+                    learner_state: dict, teacher=None) -> None:
+        """Fill the card for one concept (asset is the global map asset)."""
+        self._clear()
+        concept = asset.concept_by_id(concept_id)
+        if concept is None:
+            self._empty()
+            return
+
+        # header: name + mastery
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        name = QLabel(concept.name)
+        name.setWordWrap(True)
+        name.setStyleSheet("font-size: 15px; font-weight: bold; color: #0c3d5f;")
+        head.addWidget(name, 1)
+        key = next(
+            (k for k, v in learner_state.get("concepts", {}).items()
+             if v.get("name") == concept.name), None)
+        rec = learner_state.get("concepts", {}).get(key or "", {})
+        mastery = float(rec.get("mastery", 0.0))
+        m_lbl = QLabel(f"{mastery:.0%}")
+        m_lbl.setStyleSheet(
+            f"background-color: {mastery_color(mastery)}; color: white;"
+            "padding: 2px 10px; border-radius: 9px; font-size: 11px; font-weight: bold;"
+        )
+        head.addWidget(m_lbl, 0)
+        self._layout.addLayout(head)
+
+        # definition
+        if concept.definition or concept.summary:
+            d = QLabel((concept.definition or concept.summary)[:140])
+            d.setWordWrap(True)
+            d.setStyleSheet("font-size: 12.5px; color: #37474F;")
+            self._layout.addWidget(d)
+
+        # relations (roam)
+        rels = []
+        for r in asset.relations:
+            if r.source == concept.id:
+                other = asset.concept_by_id(r.target)
+                if other:
+                    rels.append((r.label or "关联", other.name, other.id))
+            elif r.target == concept.id:
+                other = asset.concept_by_id(r.source)
+                if other:
+                    rels.append((r.label or "关联", other.name, other.id))
+        if rels:
+            self._layout.addWidget(_sec_title("关系 · 点击继续游走", "#0284C7"))
+            for label, other_name, other_id in rels[:6]:
+                btn = QPushButton(f"{label} → {other_name}")
+                btn.setStyleSheet(
+                    "QPushButton { background-color: #E1F0FA; color: #0369A1;"
+                    "border: 1px solid #BAE6FD; border-radius: 6px; padding: 4px 10px;"
+                    "font-size: 11.5px; text-align: left; }"
+                    "QPushButton:hover { background-color: #BAE6FD; }"
+                )
+                btn.clicked.connect(
+                    lambda checked, cid=other_id: self.neighbor_clicked.emit(cid)
+                )
+                self._layout.addWidget(btn)
+
+        # first evidence
+        if concept.evidence:
+            self._layout.addWidget(_sec_title("原文依据", "#2E7D32"))
+            ev = QLabel(concept.evidence[0][:160] + ("…" if len(concept.evidence[0]) > 160 else ""))
+            ev.setWordWrap(True)
+            ev.setStyleSheet(
+                "font-size: 11.5px; color: #546E7A; background-color: #F0F8F0;"
+                "border-radius: 6px; padding: 8px;"
+            )
+            self._layout.addWidget(ev)
+
+        # teacher notes
+        if teacher is not None:
+            note = teacher.concept_note_by_id(concept_id)
+            if note is not None:
+                bits = []
+                if note.significance:
+                    bits.append(f"为什么重要：{note.significance[:80]}")
+                if note.misconceptions:
+                    bits.append(f"常见误解：{note.misconceptions[0][:60]}")
+                if bits:
+                    self._layout.addWidget(_sec_title("教师理解", "#7C3AED"))
+                    for b in bits:
+                        lbl = QLabel(b)
+                        lbl.setWordWrap(True)
+                        lbl.setStyleSheet("font-size: 11.5px; color: #5E35B1;")
+                        self._layout.addWidget(lbl)
+
+        # actions
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
+        teach_btn = QPushButton("开始教学")
+        teach_btn.setStyleSheet(
+            "QPushButton { background-color: #1565C0; color: white; border: none;"
+            "border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #0D47A1; }"
+        )
+        teach_btn.clicked.connect(
+            lambda: self.teach_requested.emit(concept.name))
+        btn_row.addWidget(teach_btn)
+        full_btn = QPushButton("完整详情")
+        full_btn.setStyleSheet(
+            "QPushButton { background-color: white; color: #0284C7;"
+            "border: 1px solid #BAE6FD; border-radius: 6px; padding: 6px 12px;"
+            "font-size: 12px; }"
+            "QPushButton:hover { background-color: #E1F0FA; }"
+        )
+        full_btn.clicked.connect(
+            lambda: self.full_detail_requested.emit(concept_id))
+        btn_row.addWidget(full_btn)
+        btn_row.addStretch()
+        self._layout.addLayout(btn_row)
+        self._layout.addStretch()
