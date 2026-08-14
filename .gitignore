@@ -1,0 +1,16 @@
+data/
+__pycache__/
+*.pyc
+
+# 本地密钥配置（含真实 API Key，切勿提交）
+.env
+legacy_bak/
+*.legacy_bak
+
+# caches and backups
+.pytest_cache/
+pytest-cache-files-*/
+*.bak
+__pycache__/
+.workbuddy/
+
