@@ -652,6 +652,12 @@ class TeachResultView(QWidget):
             root.addWidget(self._card(
                 _t("example"), example, "#FFF8E1", "#FFE082", "#B45309"))
 
+        # analogy bridge (LLM compressed-knowledge layer)
+        analogy = _txt(result.get("analogy"))
+        if analogy:
+            root.addWidget(self._card(
+                _t("analogy_title"), analogy, "#E0F2F1", "#80CBC4", "#00695C"))
+
         # steps (numbered ladder)
         steps = _lst(result.get("steps"))
         if steps:

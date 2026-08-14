@@ -87,6 +87,7 @@ TEACH_USER = (
     "{{\n"
     '  "explanation": "讲解（基于本概念自己的证据与关系；若偏好图示，请重点讲清它在知识网络中的位置）",\n'
     '  "example": "结合学习者目标、且明确用到本概念证据的具体例子（偏好例子时尤其重要，必须因概念而异）",\n'
+    '  "analogy": "一个能快速建立直觉的类比：把本概念映射到学习者可能熟悉的领域（编程/系统架构/日常生活/其它学科），一句话讲清对应关系（若概念抽象，此字段尤其重要；若难以类比可填空串）",\n'
     '  "steps": ["步骤1", "步骤2", "步骤3"…（偏好拆解步骤时给出 4-6 个可操作小步骤，每步落到本概念）],\n'
     '  "practice": "请学习者用一两句话回答的练习问题（针对本概念）"\n'
     "}}"
@@ -225,6 +226,7 @@ class Tutor:
                     "style": style,
                     "explanation": _text(data.get("explanation"), concept.definition or concept.summary),
                     "example": _text(data.get("example")),
+                    "analogy": _text(data.get("analogy")),
                     "steps": _steps(data.get("steps")),
                     "practice": _text(data.get("practice"), "用自己的话解释这个概念，并指出原文依据。"),
                     "evidence": concept.evidence,

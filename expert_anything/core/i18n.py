@@ -543,6 +543,12 @@ _STRINGS: dict[str, dict[str, str]] = {
     "practice_hint_label": {"zh-CN": "提示：", "en": "Hint: ", "ja": "ヒント: "},
     "practice_answer_ph": {"zh-CN": "在这里写下你的解答（证明/构造/伪代码/步骤）...", "en": "Write your solution here (proof / construction / pseudo-code / steps)…", "ja": "ここに解答を書いてください（証明・構築・擬似コード・手順）…"},
     "practice_submit": {"zh-CN": "提交实践", "en": "Submit", "ja": "提出"},
+    "analogy_title": {
+        "zh-CN": "🧠 类比桥（用你熟悉的领域理解它）",
+        "en": "🧠 Analogy Bridge (understand it via a domain you know)",
+        "ja": "🧠 類比ブリッジ（知っている領域で理解）",
+    },
+
     "practice_evaluating": {"zh-CN": "正在评估你的实践...", "en": "Evaluating your work…", "ja": "実践を評価中…"},
 
     "topic_size": {"zh-CN": "{n} 个概念", "en": "{n} concepts", "ja": "{n} 概念"},
