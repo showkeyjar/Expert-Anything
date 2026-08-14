@@ -426,15 +426,24 @@ class MainWindow(QMainWindow):
     def setup_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
-        main_layout = QHBoxLayout(central)
+        main_layout = QVBoxLayout(central)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        # Sidebar
-        sidebar = self._build_sidebar()
-        main_layout.addWidget(sidebar)
+        # Top function bar (always visible): asset + progress + quick actions
+        self.topbar = self._build_topbar()
+        main_layout.addWidget(self.topbar)
 
-        # Content area with stacked widgets for different views
+        # Body: navigation sidebar + content stack
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+
+        # Sidebar (navigation area)
+        sidebar = self._build_sidebar()
+        body.addWidget(sidebar)
+
+        # Content area (display area) with stacked views
         self.content_stack = QStackedWidget()
         
         # Build all views
@@ -456,8 +465,10 @@ class MainWindow(QMainWindow):
             self.teacher_view,
         ]:
             self.content_stack.addWidget(view)
-        
-        main_layout.addWidget(self.content_stack)
+
+        body.addWidget(self.content_stack, 1)
+        main_layout.addLayout(body, 1)
+        self._update_topbar()
 
     def _build_knowledge_view(self):
         """Build the knowledge model view with adaptive learning path."""
@@ -467,19 +478,10 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         # Header
-        header = QFrame()
-        header.setStyleSheet("background-color: #E3F2FD;")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(20, 16, 20, 16)
-        
-        title = QLabel("知识模型")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #1A237E;")
-        header_layout.addWidget(title)
-        
-        subtitle = QLabel(self._get_asset_subtitle())
-        subtitle.setStyleSheet("color: #757575; font-size: 12px;")
-        header_layout.addWidget(subtitle)
-        
+        header = self._view_header(
+            "知识模型",
+            self._get_asset_subtitle(),
+        )
         layout.addWidget(header)
 
         # Scrollable content
@@ -593,19 +595,10 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         # Header
-        header = QFrame()
-        header.setStyleSheet("background-color: #E8F5E9;")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(20, 16, 20, 16)
-
-        title = QLabel("学习者模型")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #2E7D32;")
-        header_layout.addWidget(title)
-
-        subtitle = QLabel(f"跨资产累积掌握度 | {len(self.learner.get('concepts', {}))} 个概念")
-        subtitle.setStyleSheet("color: #757575; font-size: 12px;")
-        header_layout.addWidget(subtitle)
-
+        header = self._view_header(
+            "学习者模型",
+            f"跨资产累积掌握度 | {len(self.learner.get('concepts', {}))} 个概念",
+        )
         layout.addWidget(header)
 
         # Learning-gain stat cards
@@ -830,6 +823,77 @@ class MainWindow(QMainWindow):
             'anomalies': 0
         }
 
+    def _view_header(self, title, subtitle="") -> QFrame:
+        """Unified view header for every view (white, brand accent bar)."""
+        header = QFrame()
+        header.setStyleSheet(
+            "background-color: white; border-bottom: 2px solid #1565C0;"
+        )
+        lay = QVBoxLayout(header)
+        lay.setContentsMargins(24, 14, 24, 12)
+        lay.setSpacing(2)
+        t = QLabel(str(title))
+        t.setStyleSheet("font-size: 19px; font-weight: bold; color: #1F2933;")
+        lay.addWidget(t)
+        if subtitle:
+            s = QLabel(str(subtitle))
+            s.setStyleSheet("color: #6B7A90; font-size: 12px;")
+            lay.addWidget(s)
+        return header
+
+    def _build_topbar(self) -> QFrame:
+        """Always-visible function bar: current asset, progress, quick actions."""
+        bar = QFrame()
+        bar.setStyleSheet(
+            "background-color: white; border-bottom: 1px solid #E0E0E0;"
+        )
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(16, 8, 16, 8)
+        lay.setSpacing(12)
+
+        self._topbar_asset = QLabel("未选择资产")
+        self._topbar_asset.setStyleSheet(
+            "font-size: 13.5px; font-weight: bold; color: #1F2933;"
+        )
+        lay.addWidget(self._topbar_asset)
+
+        self._topbar_progress = QLabel("")
+        self._topbar_progress.setStyleSheet("font-size: 12px; color: #6B7A90;")
+        lay.addWidget(self._topbar_progress)
+        lay.addStretch()
+
+        for text, view_name in [
+            ("🎓 开始学习", "teach"),
+            ("🕸 概念网络", "concept_map"),
+            ("📖 阅读原文", "source"),
+        ]:
+            btn = QPushButton(text)
+            btn.setStyleSheet(
+                "QPushButton { background-color: white; color: #1565C0;"
+                "border: 1px solid #BBDEFB; border-radius: 6px; padding: 6px 14px;"
+                "font-size: 12.5px; }"
+                "QPushButton:hover { background-color: #E3F2FD; }"
+            )
+            btn.clicked.connect(lambda checked, v=view_name: self.on_nav_click(v))
+            lay.addWidget(btn)
+        return bar
+
+    def _update_topbar(self) -> None:
+        """Refresh the top bar after asset/learner changes."""
+        if not self.current_asset_id or self.current_asset_id not in self.assets:
+            self._topbar_asset.setText("未选择资产")
+            self._topbar_progress.setText("")
+            return
+        data = self.assets[self.current_asset_id]
+        title = data.get("title", self.current_asset_id)
+        self._topbar_asset.setText(f"📚 {title}")
+        stats = self._compute_stats()
+        due = due_for_review(self.learner)
+        self._topbar_progress.setText(
+            f"已掌握 {stats['mastered']}/{stats['total']} · "
+            f"学习中 {stats['learning']} · 待复习 {len(due)}"
+        )
+
     def _build_sidebar(self):
         sidebar = QFrame()
         sidebar.setFixedWidth(220)
@@ -927,6 +991,7 @@ class MainWindow(QMainWindow):
 
     def _rebuild_all_views(self):
         """Rebuild every view (after asset switch) without leaking widgets."""
+        self._update_topbar()
         self.import_view = self._build_import_view()
         self.knowledge_view = self._build_knowledge_view()
         self.concept_map_view = self._build_concept_map_view()
@@ -1326,19 +1391,10 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         # Header
-        header = QFrame()
-        header.setStyleSheet("background-color: #FFF3E0;")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(20, 16, 20, 16)
-        
-        title = QLabel("导入知识资产")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #E65100;")
-        header_layout.addWidget(title)
-        
-        subtitle = QLabel("支持 PDF / EPUB / Word (.docx) / Markdown / TXT / HTML，自动提取概念并构建知识图谱")
-        subtitle.setStyleSheet("color: #757575; font-size: 12px;")
-        header_layout.addWidget(subtitle)
-        
+        header = self._view_header(
+            "导入知识资产",
+            "支持 PDF / EPUB / Word (.docx) / Markdown / TXT / HTML，自动提取概念并构建知识图谱",
+        )
         layout.addWidget(header)
 
         # Content
@@ -1451,19 +1507,10 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         # Header
-        header = QFrame()
-        header.setStyleSheet("background-color: #E8F5E9;")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(20, 16, 20, 16)
-
-        title = QLabel("概念网络图")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #2E7D32;")
-        header_layout.addWidget(title)
-
-        subtitle = QLabel("可视化概念之间的关系和层次结构")
-        subtitle.setStyleSheet("color: #757575; font-size: 12px;")
-        header_layout.addWidget(subtitle)
-
+        header = self._view_header(
+            "概念网络图",
+            "可视化概念之间的关系和层次结构",
+        )
         layout.addWidget(header)
 
         # Content with interactive graph
@@ -1553,19 +1600,10 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         # Header
-        header = QFrame()
-        header.setStyleSheet("background-color: #F3E5F5;")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(20, 16, 20, 16)
-        
-        title = QLabel("阅读原文")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #7B1FA2;")
-        header_layout.addWidget(title)
-        
-        subtitle = QLabel("查看原始学习材料")
-        subtitle.setStyleSheet("color: #757575; font-size: 12px;")
-        header_layout.addWidget(subtitle)
-        
+        header = self._view_header(
+            "阅读原文",
+            "查看原始学习材料",
+        )
         layout.addWidget(header)
 
         # Source text display with concept highlighting
@@ -1619,19 +1657,10 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         # Header
-        header = QFrame()
-        header.setStyleSheet("background-color: #E3F2FD;")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(20, 16, 20, 16)
-        
-        title = QLabel("教学会话")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #1565C0;")
-        header_layout.addWidget(title)
-        
-        subtitle = QLabel("与 Tutor Agent 进行个性化学习")
-        subtitle.setStyleSheet("color: #757575; font-size: 12px;")
-        header_layout.addWidget(subtitle)
-        
+        header = self._view_header(
+            "教学会话",
+            "与 Tutor Agent 进行个性化学习",
+        )
         layout.addWidget(header)
 
         # Splitter for concept list and content
@@ -1741,19 +1770,10 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         # Header
-        header = QFrame()
-        header.setStyleSheet("background-color: #FFF8E1;")
-        header_layout = QVBoxLayout(header)
-        header_layout.setContentsMargins(20, 16, 20, 16)
-        
-        title = QLabel("教师模型")
-        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #F57C00;")
-        header_layout.addWidget(title)
-        
-        subtitle = QLabel("系统自己的理解和学习反馈")
-        subtitle.setStyleSheet("color: #757575; font-size: 12px;")
-        header_layout.addWidget(subtitle)
-        
+        header = self._view_header(
+            "教师模型",
+            "系统自己的理解和学习反馈",
+        )
         layout.addWidget(header)
 
         # Content
