@@ -50,6 +50,7 @@ from expert_anything.ui.pyside_widgets import (
     SourceTextView,
     PathLadderView,
     TeachResultView,
+    TrendChartView,
 )
 
 # Thread-safe progress signal
@@ -590,6 +591,18 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(header)
 
+        # Learning-gain stat cards
+        stats = self._compute_stats()
+        due = due_for_review(self.learner)
+        stat_row = QHBoxLayout()
+        stat_row.setSpacing(12)
+        stat_row.addWidget(StatCard("✓", "已掌握 (≥60%)", stats["mastered"], "#2E7D32"))
+        stat_row.addWidget(StatCard("◐", "学习中", stats["learning"], "#B45309"))
+        stat_row.addWidget(StatCard("⏰", "待复习", len(due), "#C62828"))
+        stat_row.addWidget(StatCard("🧠", "跨资产概念", len(self.learner.get('concepts', {})), "#0284C7"))
+        stat_row.addStretch()
+        layout.addLayout(stat_row)
+
         # Tab widget for concepts and history
         tabs = QTabWidget()
         tabs.setStyleSheet("""
@@ -666,6 +679,17 @@ class MainWindow(QMainWindow):
         history_title = QLabel("学习历史记录")
         history_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32; padding: 4px 0;")
         history_layout.addWidget(history_title)
+
+        # Learning-gain trend (recent evaluation scores, time order)
+        trend = TrendChartView()
+        hist_series = self.learner.get('history', [])
+        trend_items = [
+            {"label": h.get('concept', '?'), "score": float(h.get('score', 0))}
+            for h in reversed(hist_series[-12:])
+        ]
+        trend.set_data(trend_items)
+        trend.setStyleSheet("background-color: white; border: 1px solid #E0E0E0; border-radius: 8px;")
+        history_layout.addWidget(trend)
 
         history_table = QTableWidget()
         history_table.setColumnCount(4)
