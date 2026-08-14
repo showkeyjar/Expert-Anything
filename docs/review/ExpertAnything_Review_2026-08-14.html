@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ExpertAnything 项目分析报告</title>
+<style>
+  :root {
+    --bg: #f6f8fa; --card: #ffffff; --ink: #1f2933; --muted: #6b7a90;
+    --line: #e3e8ee; --blue: #0284c7; --green: #2e7d32; --amber: #f59e0b;
+    --red: #d64541; --violet: #7c3aed;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--ink); font: 15px/1.75 "Segoe UI", "Microsoft YaHei", sans-serif; padding: 32px 16px; }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  header.hero { background: linear-gradient(135deg, #0c3d5f 0%, #0e7490 100%); color: #fff; border-radius: 16px; padding: 36px 40px; margin-bottom: 24px; }
+  header.hero h1 { font-size: 28px; margin-bottom: 8px; }
+  header.hero p { opacity: .92; font-size: 15px; }
+  .badges { margin-top: 14px; display: flex; gap: 8px; flex-wrap: wrap; }
+  .badge { background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.28); padding: 3px 12px; border-radius: 999px; font-size: 12px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 24px 28px; margin-bottom: 20px; }
+  .card h2 { font-size: 19px; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .card h3 { font-size: 15px; margin: 18px 0 8px; color: #0c3d5f; }
+  .muted { color: var(--muted); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 14px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: #f0f4f8; font-weight: 600; white-space: nowrap; }
+  .tag { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .t-ok { background: #e3f2e5; color: var(--green); }
+  .t-warn { background: #fdf3dc; color: #b45309; }
+  .t-bad { background: #fde8e8; color: var(--red); }
+  .t-info { background: #e3effa; color: var(--blue); }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 14px 0; }
+  .metric { background: #f0f4f8; border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .metric .num { font-size: 24px; font-weight: 700; color: var(--blue); }
+  .metric .lbl { font-size: 12px; color: var(--muted); }
+  .flow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+  .step { background: #eef6fb; border: 1px solid #bcd9ea; color: #0c4a6e; border-radius: 8px; padding: 6px 12px; font-size: 13px; font-weight: 600; }
+  .arrow { color: var(--muted); font-weight: 700; }
+  figure { margin: 16px 0; }
+  figure img { max-width: 100%; border: 1px solid var(--line); border-radius: 10px; }
+  figcaption { font-size: 12.5px; color: var(--muted); margin-top: 6px; text-align: center; }
+  ul.tight { padding-left: 20px; }
+  ul.tight li { margin-bottom: 6px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 760px) { .grid2 { grid-template-columns: 1fr; } }
+  .done-list li::marker { color: var(--green); }
+  code { background: #eef1f4; border-radius: 4px; padding: 1px 6px; font-size: 13px; }
+  footer { text-align: center; color: var(--muted); font-size: 12.5px; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="hero">
+  <h1>ExpertAnything · 项目分析报告</h1>
+  <p>Personal Learning OS —— 把任何知识资产转化为专家能力。本报告基于源码通读、运行验证与测试执行。</p>
+  <div class="badges">
+    <span class="badge">PySide6 桌面端</span>
+    <span class="badge">核心引擎：确定性 + LLM 可插拔</span>
+    <span class="badge">来源约束硬规则</span>
+    <span class="badge">git 首次提交 3b8a9dd</span>
+  </div>
+</header>
+
+<div class="card">
+  <h2>🎯 一、项目定位</h2>
+  <p>ExpertAnything 不是 AI 阅读器，也不是 RAG 聊天机器人。它的核心链路是：<b>知识资产 → 知识模型 → 学习闭环 → 能力成长</b>。与普通 AI 产品的区别在于：普通 AI 回答「知识是什么」，ExpertAnything 回答「<b>用户缺什么、下一步学什么、是否真正掌握</b>」。</p>
+  <div class="flow">
+    <span class="step">上传书 / 论文 / 笔记</span><span class="arrow">→</span>
+    <span class="step">LLM 抽取（来源约束）</span><span class="arrow">→</span>
+    <span class="step">自我学习 + 异常检测</span><span class="arrow">→</span>
+    <span class="step">三风格教学</span><span class="arrow">→</span>
+    <span class="step">语义评估</span><span class="arrow">→</span>
+    <span class="step">掌握度 + 自适应路径</span>
+  </div>
+  <p class="muted">五个 ADR（docs/）确立了：KnowledgeAsset 为核心对象、Hybrid Knowledge（向量+图+结构化）、多 Agent 分工、学习闭环、Learner Model 为核心资产。</p>
+</div>
+
+<div class="card">
+  <h2>📊 二、代码规模与健康度</h2>
+  <div class="metrics">
+    <div class="metric"><div class="num">13</div><div class="lbl">core 核心模块（约 100KB）</div></div>
+    <div class="metric"><div class="num">3</div><div class="lbl">UI 组件（图谱/卡片/主界面）</div></div>
+    <div class="metric"><div class="num">2/2</div><div class="lbl">无头验证脚本全部通过</div></div>
+    <div class="metric"><div class="num">0</div><div class="lbl">外部框架依赖（LLM 客户端纯标准库）</div></div>
+  </div>
+  <table>
+    <tr><th>模块</th><th>职责</th><th>质量评价</th></tr>
+    <tr><td><code>extraction.py</code></td><td>LLM 多分块并行抽取 + 确定性回退</td><td><span class="tag t-ok">扎实</span> 幻觉防护（概念名必须出自原文）、证据逐字校验、并发去重、进度回调</td></tr>
+    <tr><td><code>teacher.py</code></td><td>系统自我理解层：概念深加工 + 异常检测</td><td><span class="tag t-ok">亮点</span> 学习者答题反哺系统认知（闭环收敛），异常驱动教学优先级</td></tr>
+    <tr><td><code>tutor.py</code></td><td>三风格教学 + 语义评估</td><td><span class="tag t-ok">扎实</span> 每种风格强制绑定概念自身证据与关系，防模板化</td></tr>
+    <tr><td><code>learner.py</code></td><td>跨资产掌握度 + 自适应路径</td><td><span class="tag t-ok">亮点</span> 四信号排序（掌握度缺口/异常/基础杠杆/路径位置）+ 前置关系阻塞检测</td></tr>
+    <tr><td><code>llm.py</code></td><td>OpenAI 兼容客户端</td><td><span class="tag t-ok">扎实</span> 重试/退避/并发信号量，兼容任意端点</td></tr>
+    <tr><td><code>graph_viz.py</code></td><td>图谱布局 + PNG 渲染</td><td><span class="tag t-ok">良好</span> ego-network 聚焦、分层/径向布局，被 UI 复用</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>🔍 三、发现的问题（本轮已处理）</h2>
+  <table>
+    <tr><th>严重度</th><th>问题</th><th>处理</th></tr>
+    <tr><td><span class="tag t-bad">高</span></td><td><code>get_asset()</code> 被 6 处调用但从未定义 —— 教学会话/答题评估一经点击即崩溃</td><td>已补全方法（构建 KnowledgeAsset），冒烟测试确认教学链路可用</td></tr>
+    <tr><td><span class="tag t-bad">高</span></td><td>入口失效：<code>python app.py</code> 启动 Flet 版，而 flet 未安装；实际主线是单文件 <code>pyside6_demo.py</code></td><td><code>main.py</code> 正式化，<code>app.py</code> 改为 PySide6 启动器，旧文件归档 <code>legacy/</code></td></tr>
+    <tr><td><span class="tag t-warn">中</span></td><td>PySide6 概念图是简陋圆形散布（所有节点一圈），未复用 core 布局算法，无聚焦/异常/推荐高亮</td><td>新增 <code>ui/pyside_graph.py</code>：分层/径向布局、单击聚焦 ego-network、双击教学、滚轮缩放、四档掌握度配色、异常橙色描边、推荐蓝色描边</td></tr>
+    <tr><td><span class="tag t-warn">中</span></td><td>git 仓库零提交，全部文件未跟踪</td><td>首次提交完成（3b8a9dd），.gitignore 完善（.env / data / 缓存排除）</td></tr>
+    <tr><td><span class="tag t-warn">中</span></td><td>README 描述的是已废弃的 Flet/Web 架构与运行方式</td><td>已重写：PySide6 运行方式、目录结构、7 视图说明、验证方法</td></tr>
+    <tr><td><span class="tag t-info">低</span></td><td>无依赖清单；verify 脚本在 Windows 控制台输出中文乱码；遗留 .bak / 缓存目录</td><td>补 <code>requirements.txt</code>；脚本加 UTF-8 输出兜底；清理归档</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>✅ 四、本轮完善成果</h2>
+  <div class="grid2">
+    <div>
+      <h3>修复（让应用真正可跑）</h3>
+      <ul class="tight done-list">
+        <li>补全缺失的 <code>get_asset()</code>，教学/评估链路恢复</li>
+        <li>统一入口：<code>python app.py</code> 即启动 PySide6 桌面端</li>
+      </ul>
+      <h3>升级（核心体验）</h3>
+      <ul class="tight done-list">
+        <li>交互式知识图谱：聚焦重排 / 双击教学 / 缩放平移 / 状态配色</li>
+        <li>教师模型异常 → 图谱橙色描边，推荐概念蓝色描边</li>
+      </ul>
+    </div>
+    <div>
+      <h3>工程化</h3>
+      <ul class="tight done-list">
+        <li>requirements.txt + README 重写 + 目录归档清理</li>
+        <li>git 首次提交，版本基线建立</li>
+      </ul>
+      <h3>验证（全部通过）</h3>
+      <ul class="tight done-list">
+        <li><code>verify_core.py</code>：核心闭环 6 项检查 ✓</li>
+        <li><code>verify_teacher.py</code>：教师模型 8 项 + 真实 LLM 3 风格 ✓</li>
+        <li>offscreen 冒烟：7 视图构建、图谱渲染/聚焦/复位 ✓</li>
+      </ul>
+    </div>
+  </div>
+  <figure>
+    <img src="assets/graph_full.png" alt="概念网络全图（分层布局）">
+    <figcaption>资产《An Infinite Descent into Pure Mathematics》概念网络全图 —— 节点颜色 = 学习者掌握度</figcaption>
+  </figure>
+  <figure>
+    <img src="assets/graph_focus.png" alt="概念网络聚焦图（径向布局）">
+    <figcaption>聚焦模式：单击节点后以其为中心径向重排（ego-network），邻接概念 + 学习路径上下文</figcaption>
+  </figure>
+</div>
+
+<div class="card">
+  <h2>🧭 五、后续建议（按优先级）</h2>
+  <table>
+    <tr><th>优先级</th><th>事项</th><th>理由</th></tr>
+    <tr><td><span class="tag t-bad">P0</span></td><td>真实用户路径走查：导入一本书 → 教学 → 评估 → 导出报告</td><td>本轮仅无头验证，需人工确认交互细节与 LLM 质量</td></tr>
+    <tr><td><span class="tag t-warn">P1</span></td><td><code>main.py</code>（约 1900 行）按视图拆分为 <code>ui/views/</code> 包</td><td>可维护性；建议配合 pytest 迁移 verify 脚本</td></tr>
+    <tr><td><span class="tag t-warn">P1</span></td><td>引入 <code>SourceLocation</code>（页码/章节/段落）</td><td>docs 中已规划的抽取升级第一步，回答可引用定位</td></tr>
+    <tr><td><span class="tag t-info">P2</span></td><td>学习报告升级为 HTML 可视化导出（当前为纯文本）</td><td>与「能力成长」叙事匹配，便于分享</td></tr>
+    <tr><td><span class="tag t-info">P2</span></td><td>会话内连续对话教学（当前为单次生成）</td><td>8/14 日志已列为待办</td></tr>
+    <tr><td><span class="tag t-info">P2</span></td><td>i18n 接入 PySide6 界面（core 层已有双语，UI 层为硬编码中文）</td><td>core 已就绪，UI 接入成本低</td></tr>
+  </table>
+  <h3>架构判断</h3>
+  <p>核心引擎的「来源约束 + 自我学习层 + 学习者模型」组合是真正的差异化资产，远强于一般 RAG 套壳。当前最该投入的是 <b>把教学闭环体验打磨到「一本书真的能教懂一个人」</b>，而不是继续堆功能。ADR-010 的 Learning Gain 指标应当成为所有功能取舍的标尺。</p>
+</div>
+
+<footer>ExpertAnything 分析报告 · 2026-08-14 · 由 AutoClaw 生成</footer>
+</div>
+</body>
+</html>
