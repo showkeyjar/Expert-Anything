@@ -518,6 +518,36 @@ def incorporate_learner_signal(
 # --------------------------------------------------------------------------- #
 # Anomaly-prioritized teaching path ("walk ahead of the student")
 # --------------------------------------------------------------------------- #
+def record_learner_question(
+    asset: KnowledgeAsset,
+    teacher: TeacherModel | None,
+    concept_id: str,
+    question: str,
+) -> TeacherModel:
+    """Record a learner's follow-up question as a signal in the Teacher Model.
+
+    Follow-up questions expose where the learner is confused, so they land in
+    the concept's ``learner_signals`` (visible in the Teacher Model view) and
+    the Teacher Model keeps learning about the learner even outside graded
+    answers. Deterministic, no LLM needed; caller persists.
+    """
+    if teacher is None:
+        teacher = TeacherModel(
+            asset_id=asset.asset_id, status="fallback", method="lazy_init"
+        )
+    c = asset.concept_by_id(concept_id)
+    cname = c.name if c is not None else "(未知概念)"
+    note = teacher.concept_note_by_id(concept_id)
+    if note is None:
+        note = ConceptNote(concept_id=concept_id, name=cname)
+        teacher.concept_notes.append(note)
+    snippet = question.strip().replace("\n", " ")[:140]
+    note.learner_signals.append(f"学习者追问：{snippet}")
+    note.learner_signals = note.learner_signals[-8:]
+    teacher.synthesized_at = datetime.now(timezone.utc).isoformat()
+    return teacher
+
+
 def anomaly_concept_ids(asset: KnowledgeAsset, teacher: TeacherModel | None) -> set[str]:
     """Concept ids that are touched by at least one open/investigating anomaly."""
     ids: set[str] = set()

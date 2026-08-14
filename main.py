@@ -38,7 +38,12 @@ from expert_anything.core.tutor import Tutor
 from expert_anything.core.llm import LLMClient, LLMNotConfigured
 from expert_anything.core.models import KnowledgeAsset, Concept, Relation, Chapter
 from expert_anything.core import config
-from expert_anything.core.teacher import TeacherModel, anomaly_concept_ids
+from expert_anything.core.teacher import (
+    TeacherModel,
+    anomaly_concept_ids,
+    record_learner_question,
+)
+from expert_anything.core.storage import save_teacher
 from expert_anything.ui.pyside_graph import KnowledgeGraphView
 from expert_anything.ui.pyside_widgets import (
     ConceptDetailPanel,
@@ -1106,12 +1111,34 @@ class MainWindow(QMainWindow):
         view = TeachResultView(result)
         view.submit_requested.connect(self._on_submit_answer)
         view.followup_requested.connect(self._on_followup)
+        view.neighbor_clicked.connect(self._start_teach_by_name)
         self._teach_lesson = result
         if view.answer_input is not None:
             self._teach_answer_input = view.answer_input
         self._teach_view = view
         self._teach_concept_now = result.get("concept", "")
         self._teach_result_area.setWidget(view)
+
+        # related-concepts navigation (follow the knowledge network)
+        asset = self.get_asset()
+        if asset is not None:
+            concept = asset.concept_by_name(result.get("concept", ""))
+            if concept is not None:
+                seen, neighbors = set(), []
+                for r in asset.relations:
+                    if r.source == concept.id:
+                        other = asset.concept_by_id(r.target)
+                        if other and other.id not in seen:
+                            seen.add(other.id)
+                            neighbors.append((r.label or "关联", other.name, other.id))
+                    elif r.target == concept.id:
+                        other = asset.concept_by_id(r.source)
+                        if other and other.id not in seen:
+                            seen.add(other.id)
+                            neighbors.append((r.label or "关联", other.name, other.id))
+                    if len(neighbors) >= 6:
+                        break
+                view.set_neighbors(neighbors)
 
         self._teach_progress.setVisible(False)
         self._teach_result_label.setText("")
@@ -1147,6 +1174,24 @@ class MainWindow(QMainWindow):
         self._followup_history = getattr(self, "_followup_history", [])
         self._followup_history.append((question, answer))
         self._followup_history = self._followup_history[-4:]
+
+        # sink the question into the teacher model (learner signals)
+        try:
+            asset = self.get_asset()
+            if asset is not None:
+                concept = asset.concept_by_name(self._teach_concept_now or "")
+                if concept is not None:
+                    teacher = None
+                    td = self.teacher_models.get(self.current_asset_id)
+                    if td:
+                        teacher = TeacherModel.from_dict(td)
+                    teacher = record_learner_question(
+                        asset, teacher, concept.id, question
+                    )
+                    save_teacher(self.current_asset_id, teacher)
+                    self.teacher_models[self.current_asset_id] = teacher.to_dict()
+        except Exception:
+            pass
 
     def _on_submit_answer(self):
         """Handle answer submission."""
@@ -1814,6 +1859,13 @@ class MainWindow(QMainWindow):
                         mc_label = QLabel(f"常见误解: {'; '.join(miscon[:3])}")
                         mc_label.setStyleSheet("font-size: 11px; color: #D32F2F;")
                         note_inner.addWidget(mc_label)
+
+                    signals = note.get('learner_signals', [])
+                    if signals:
+                        sig_label = QLabel(f"学习者信号: {signals[-1][:60]}")
+                        sig_label.setWordWrap(True)
+                        sig_label.setStyleSheet("font-size: 11px; color: #6A1B9A;")
+                        note_inner.addWidget(sig_label)
                     
                     note_inner.addStretch()
                     notes_layout.addWidget(note_widget)

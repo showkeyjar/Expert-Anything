@@ -524,6 +524,7 @@ class TeachResultView(QWidget):
 
     submit_requested = Signal()
     followup_requested = Signal(str)
+    neighbor_clicked = Signal(str)  # concept name
 
     def __init__(self, result: dict, parent=None):
         super().__init__(parent)
@@ -708,6 +709,40 @@ class TeachResultView(QWidget):
             lay.addWidget(gp)
 
         root.insertWidget(root.count() - 1, card)
+
+    # -- related concepts --------------------------------------------------------
+    def set_neighbors(self, neighbors: list[tuple[str, str, str]]) -> None:
+        """Show related concepts as chips (label, name, concept_id).
+
+        Clicking a chip emits ``neighbor_clicked(name)`` so the learner can
+        follow the knowledge network concept by concept.
+        """
+        if not neighbors:
+            return
+        root = self.layout()
+        t = QLabel("关联概念（顺藤摸瓜）")
+        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #0c4a6e;")
+        root.insertWidget(root.count() - 1, t)
+
+        chips = QWidget()
+        chips_lay = QHBoxLayout(chips)
+        chips_lay.setContentsMargins(0, 0, 0, 0)
+        chips_lay.setSpacing(6)
+        for label, name, _cid in neighbors:
+            chip = QPushButton(name)
+            chip.setToolTip(label or "关联概念")
+            chip.setStyleSheet(
+                "QPushButton { background-color: #E1F0FA; color: #0369A1;"
+                "border: 1px solid #BAE6FD; border-radius: 12px; padding: 4px 12px;"
+                "font-size: 11.5px; }"
+                "QPushButton:hover { background-color: #BAE6FD; }"
+            )
+            chip.clicked.connect(
+                lambda checked, n=name: self.neighbor_clicked.emit(n)
+            )
+            chips_lay.addWidget(chip)
+        chips_lay.addStretch()
+        root.insertWidget(root.count() - 1, chips)
 
     # -- follow-up conversation -------------------------------------------------
     def _build_followup(self) -> None:
