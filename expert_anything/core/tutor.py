@@ -315,6 +315,88 @@ class Tutor:
             "evidence": concept.evidence,
         }
 
+    # --- hands-on practice task ------------------------------------------------
+    def generate_practice(self, concept: Concept) -> dict | None:
+        """Generate a hands-on practice task for a concept.
+
+        Technical-book style: prove / construct / write pseudo-code / design,
+        grounded in the concept's evidence. Returns None without an LLM.
+        """
+        if self.llm is None:
+            return None
+        evidence = "\n".join(f"- {e}" for e in (concept.evidence or ["（无原文证据）"]))
+        relations = _neighbor_context(self.asset, concept)
+        sys_prompt = (
+            "你是严格的导师。根据【概念】和【原文证据】，设计一个『动手实践任务』，"
+            "让学习者通过动手真正掌握这个概念。任务类型优先：证明/构造/设计/伪代码/复现，"
+            "取决于概念性质（例如命题→证明或构造反例，算法→写伪代码，架构→画流程并解释）。"
+            + _lang_instruction() +
+            "只输出 JSON：{task:'任务描述（具体、可操作，60-120字）', "
+            "hint:'提示（30字内，不给答案）', reference:'参考解答要点（3-5条，基于证据）'}。"
+        )
+        user = (
+            "概念：{name}\n定义：{defn}\n原文证据：\n{evidence}\n\n请设计实践任务。"
+        ).format(
+            name=concept.name,
+            defn=concept.definition or concept.summary or "（无定义）",
+            evidence=evidence,
+        )
+        try:
+            content = self.llm.chat(
+                [Message("system", sys_prompt), Message("user", user)],
+                temperature=0.3,
+                max_tokens=700,
+            )
+            data = _tolerant_json(content)
+            if not isinstance(data, dict) or not data.get("task"):
+                return None
+            data["concept"] = concept.name
+            return data
+        except Exception:
+            return None
+
+    def evaluate_practice(self, concept: Concept, task: str, answer: str) -> dict:
+        """Evaluate a practice submission (score + feedback + reference)."""
+        if self.llm is None:
+            return {
+                "score": 0.5, "feedback": "（未接入 LLM，无法真实评估实践任务）",
+                "reference": "",
+            }
+        evidence = "\n".join(f"- {e}" for e in (concept.evidence or ["（无原文证据）"]))
+        sys_prompt = (
+            "你是严格的导师，评估学习者完成的实践任务。对照任务要求与原文证据判断，"
+            "不因为回答长就给高分。"
+            + _lang_instruction() +
+            "输出 JSON：{score: 0-1, feedback: 中文点评（指出对错与缺漏，60字内）, "
+            "reference: 参考解答要点（3-5条）}。"
+        )
+        user = (
+            "概念：{name}\n原文证据：\n{evidence}\n\n实践任务：{task}\n\n"
+            "学习者作答：{answer}\n\n请评估。"
+        ).format(
+            name=concept.name,
+            evidence=evidence,
+            task=task,
+            answer=(answer or "（未作答）")[:1200],
+        )
+        try:
+            content = self.llm.chat(
+                [Message("system", sys_prompt), Message("user", user)],
+                temperature=0.2,
+                max_tokens=700,
+            )
+            data = _tolerant_json(content)
+            score = max(0.0, min(1.0, float(data.get("score", 0.0))))
+            return {
+                "score": round(score, 2),
+                "feedback": str(data.get("feedback", "")),
+                "reference": str(data.get("reference", "")),
+            }
+        except Exception:
+            return {
+                "score": 0.5, "feedback": "（评估失败，请重试）", "reference": "",
+            }
+
     # --- quick self-test -------------------------------------------------------
     def generate_quiz(self, concept: Concept, qtype: str = "") -> dict | None:
         """Generate a quick self-test for a concept.

@@ -1635,6 +1635,8 @@ class MainWindow(QMainWindow):
         view.neighbor_clicked.connect(self._start_teach_by_name)
         view.quiz_requested.connect(self._on_quiz_requested)
         view.quiz_result.connect(self._on_quiz_result)
+        view.practice_requested.connect(self._on_practice_requested)
+        view.practice_submit.connect(self._on_practice_submit)
         self._teach_lesson = result
         if view.answer_input is not None:
             self._teach_answer_input = view.answer_input
@@ -1665,6 +1667,59 @@ class MainWindow(QMainWindow):
 
         self._teach_progress.setVisible(False)
         self._teach_result_label.setText("")
+
+    def _on_practice_requested(self) -> None:
+        """Generate a hands-on task for the current concept."""
+        if self.current_tutor is None:
+            asset = self.get_asset()
+            if asset is None:
+                return
+            self.current_tutor = Tutor(asset, llm=self.llm_client)
+        concept = None
+        asset = self.get_asset()
+        if asset is not None:
+            concept = asset.concept_by_name(getattr(self, "_teach_concept_now", "") or "")
+        view = getattr(self, "_teach_view", None)
+        if concept is None or view is None:
+            return
+        view.show_practice(self.current_tutor.generate_practice(concept))
+
+    def _on_practice_submit(self, answer: str) -> None:
+        """Evaluate the practice submission and record the score."""
+        if self.current_tutor is None:
+            asset = self.get_asset()
+            if asset is None:
+                return
+            self.current_tutor = Tutor(asset, llm=self.llm_client)
+        concept = None
+        asset = self.get_asset()
+        if asset is not None:
+            concept = asset.concept_by_name(getattr(self, "_teach_concept_now", "") or "")
+        view = getattr(self, "_teach_view", None)
+        if concept is None or view is None:
+            return
+        task = getattr(view, "_practice_data", None) or {}
+        view.show_practice_result({
+            "score": 0.5, "feedback": _t("practice_evaluating"), "reference": "",
+        })
+        result = self.current_tutor.evaluate_practice(
+            concept, task.get("task", ""), answer)
+        # replace the provisional card: simple approach — show the real one
+        view.show_practice_result(result)
+        try:
+            from expert_anything.core.learner import record_evaluation
+            record_evaluation(
+                self.learner,
+                concept.name,
+                asset.asset_id,
+                result.get("score", 0.0),
+                f"[实践] {answer[:60]}",
+                result.get("feedback", ""),
+            )
+            self.save_learner_state()
+            self._update_topbar()
+        except Exception:
+            pass
 
     def _on_quiz_requested(self) -> None:
         """Generate a quick self-test for the current concept (sync, quick)."""

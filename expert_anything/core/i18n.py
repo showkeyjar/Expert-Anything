@@ -531,6 +531,20 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "概念は関係性で自動クラスタリングされます。トピックをクリックして最初から学べます",
     },
     "learn_topic": {"zh-CN": "学习主题", "en": "Learn topic", "ja": "トピックを学ぶ"},
+    "practice_title": {"zh-CN": "🛠 动手实践", "en": "🛠 Hands-On", "ja": "🛠 実践演習"},
+    "practice_hint": {
+        "zh-CN": "技术学习的最终检验是动手：让导师针对本概念出证明/构造/伪代码/复现任务",
+        "en": "The real test is doing it — the tutor designs a prove/construct/pseudo-code/reproduce task for this concept",
+        "ja": "学びの最終確認は実践。概念に合わせて証明・構築・擬似コード・再現タスクを出します",
+    },
+    "practice_start": {"zh-CN": "生成实践任务", "en": "Generate task", "ja": "タスクを生成"},
+    "practice_failed": {"zh-CN": "（实践任务生成失败，请重试）", "en": "(task generation failed — try again)", "ja": "（タスク生成に失敗しました。再試行してください）"},
+    "practice_badge": {"zh-CN": "实践任务", "en": "Practice Task", "ja": "実践タスク"},
+    "practice_hint_label": {"zh-CN": "提示：", "en": "Hint: ", "ja": "ヒント: "},
+    "practice_answer_ph": {"zh-CN": "在这里写下你的解答（证明/构造/伪代码/步骤）...", "en": "Write your solution here (proof / construction / pseudo-code / steps)…", "ja": "ここに解答を書いてください（証明・構築・擬似コード・手順）…"},
+    "practice_submit": {"zh-CN": "提交实践", "en": "Submit", "ja": "提出"},
+    "practice_evaluating": {"zh-CN": "正在评估你的实践...", "en": "Evaluating your work…", "ja": "実践を評価中…"},
+
     "topic_size": {"zh-CN": "{n} 个概念", "en": "{n} concepts", "ja": "{n} 概念"},
 
     "search_none": {"zh-CN": "未找到匹配", "en": "No matches", "ja": "一致なし"},

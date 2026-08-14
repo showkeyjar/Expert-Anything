@@ -587,6 +587,8 @@ class TeachResultView(QWidget):
     neighbor_clicked = Signal(str)  # concept name
     quiz_requested = Signal()       # user asked for a quick self-test
     quiz_result = Signal(float)     # scored quiz (record into mastery)
+    practice_requested = Signal()   # user asked for a hands-on task
+    practice_submit = Signal(str)   # answer submitted (score via quiz_result)
 
     def __init__(self, result: dict, parent=None):
         super().__init__(parent)
@@ -723,6 +725,7 @@ class TeachResultView(QWidget):
         root.addStretch()
         self._build_followup()
         self._build_quiz_area()
+        self._build_practice_area()
 
     # -- evaluation feedback ---------------------------------------------------
     def append_evaluation(self, score: float, feedback: str,
@@ -974,6 +977,129 @@ class TeachResultView(QWidget):
             rl.addWidget(e)
         self.layout().insertWidget(self.layout().count() - 1, result)
         self.quiz_result.emit(float(score))
+
+    # -- hands-on practice -------------------------------------------------------
+    def _build_practice_area(self) -> None:
+        """Button that asks the tutor to generate a hands-on task."""
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #E8F5E9; border: 1px solid #A5D6A7;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        t = QLabel(_t("practice_title"))
+        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #2E7D32;")
+        lay.addWidget(t)
+        hint = QLabel(_t("practice_hint"))
+        hint.setWordWrap(True)
+        hint.setStyleSheet("font-size: 11.5px; color: #558B2F;")
+        lay.addWidget(hint)
+        self._practice_btn = QPushButton(_t("practice_start"))
+        self._practice_btn.setStyleSheet(
+            "QPushButton { background-color: #2E7D32; color: white; border: none;"
+            "border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #1B5E20; }"
+        )
+        self._practice_btn.clicked.connect(self.practice_requested)
+        lay.addWidget(self._practice_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self.layout().insertWidget(self.layout().count() - 1, card)
+
+    def show_practice(self, task: dict | None) -> None:
+        """Render the hands-on task with an answer box."""
+        if task is None:
+            t = QLabel(_t("practice_failed"))
+            t.setStyleSheet("font-size: 12px; color: #9E9E9E; padding: 6px;")
+            self.layout().insertWidget(self.layout().count() - 1, t)
+            return
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #E8F5E9; border: 2px solid #66BB6A;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        badge = QLabel(_t("practice_badge"))
+        badge.setStyleSheet(
+            "background-color: #2E7D32; color: white; padding: 2px 10px;"
+            "border-radius: 8px; font-size: 10px; font-weight: bold;"
+        )
+        lay.addWidget(badge)
+
+        tk = QLabel(task.get("task", ""))
+        tk.setWordWrap(True)
+        tk.setStyleSheet("font-size: 13px; color: #1B5E20; font-weight: bold;")
+        lay.addWidget(tk)
+
+        hint = task.get("hint", "")
+        if hint:
+            h = QLabel(f"{_t('practice_hint_label')} {hint}")
+            h.setWordWrap(True)
+            h.setStyleSheet("font-size: 11.5px; color: #558B2F; font-style: italic;")
+            lay.addWidget(h)
+
+        self._practice_answer = QTextEdit()
+        self._practice_answer.setPlaceholderText(_t("practice_answer_ph"))
+        self._practice_answer.setMinimumHeight(90)
+        self._practice_answer.setStyleSheet(
+            "QTextEdit { border: 1px solid #A5D6A7; border-radius: 6px;"
+            "padding: 8px; font-size: 12.5px; background-color: white; }"
+        )
+        lay.addWidget(self._practice_answer)
+
+        submit = QPushButton(_t("practice_submit"))
+        submit.setStyleSheet(
+            "QPushButton { background-color: #2E7D32; color: white; border: none;"
+            "border-radius: 6px; padding: 6px 16px; font-size: 12.5px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #1B5E20; }"
+        )
+        submit.clicked.connect(
+            lambda: self.practice_submit.emit(self._practice_answer.toPlainText()))
+        lay.addWidget(submit, 0, Qt.AlignmentFlag.AlignRight)
+
+        self._practice_data = task
+        self.layout().insertWidget(self.layout().count() - 1, card)
+
+    def show_practice_result(self, result: dict) -> None:
+        """Verdict card for a practice submission (score/feedback/reference)."""
+        score = float(result.get("score", 0.0))
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #E8F5E9; border-left: 4px solid #2E7D32;"
+            "border-radius: 6px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(4)
+        verdict = _t("quiz_correct") if score >= 0.6 else _t("quiz_wrong")
+        v = QLabel(f"{verdict}  ({score:.0%})")
+        v.setStyleSheet(
+            f"color: {'#2E7D32' if score >= 0.6 else '#C62828'};"
+            "font-size: 12.5px; font-weight: bold;"
+        )
+        lay.addWidget(v)
+        fb = result.get("feedback", "")
+        if fb:
+            f = QLabel(fb)
+            f.setWordWrap(True)
+            f.setStyleSheet("font-size: 12px; color: #37474F;")
+            lay.addWidget(f)
+        ref = result.get("reference", "")
+        if ref:
+            rt = QLabel(_t("eval_reference"))
+            rt.setStyleSheet("font-size: 11px; font-weight: bold; color: #2E7D32; margin-top: 2px;")
+            lay.addWidget(rt)
+            r = QLabel(ref)
+            r.setWordWrap(True)
+            r.setStyleSheet(
+                "font-size: 12px; color: #37474F; background-color: #F1F8E9;"
+                "border-radius: 6px; padding: 8px;"
+            )
+            lay.addWidget(r)
+        self.layout().insertWidget(self.layout().count() - 1, card)
 
     # -- follow-up conversation -------------------------------------------------
     def _build_followup(self) -> None:
