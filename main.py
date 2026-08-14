@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QScrollArea, QFrame, QStackedWidget,
     QTextEdit, QFileDialog, QMessageBox, QListWidget, QListWidgetItem,
     QProgressBar, QLineEdit, QTabWidget, QComboBox, QSplitter,
+    QTableWidget, QTableWidgetItem,
     QGroupBox, QFormLayout, QCheckBox, QTextBrowser,
     QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, QGraphicsLineItem,
     QGraphicsTextItem,
@@ -43,6 +44,7 @@ from expert_anything.ui.pyside_widgets import (
     ConceptDetailPanel,
     SourceTextView,
     PathLadderView,
+    TeachResultView,
 )
 
 # Thread-safe progress signal
@@ -611,38 +613,61 @@ class MainWindow(QMainWindow):
         history_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32; padding: 4px 0;")
         history_layout.addWidget(history_title)
 
-        history_text = QTextEdit()
-        history_text.setReadOnly(True)
-        history_text.setMinimumHeight(300)
-        history_text.setStyleSheet("""
-            QTextEdit {
+        history_table = QTableWidget()
+        history_table.setColumnCount(4)
+        history_table.setHorizontalHeaderLabels(["时间", "概念", "得分", "反馈"])
+        history_table.horizontalHeader().setStretchLastSection(True)
+        history_table.verticalHeader().setVisible(False)
+        history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        history_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        history_table.setStyleSheet("""
+            QTableWidget {
                 background-color: white;
                 border: 1px solid #E0E0E0;
                 border-radius: 8px;
-                padding: 12px;
                 font-size: 12px;
+            }
+            QTableWidget::item { padding: 6px; border-bottom: 1px solid #F0F0F0; }
+            QHeaderView::section {
+                background-color: #E8F5E9; color: #2E7D32;
+                border: none; padding: 6px; font-weight: bold;
             }
         """)
 
         history = self.learner.get('history', [])
-        if history:
-            lines = []
-            lines.append("=" * 70)
-            lines.append(f"最近 {len(history)} 次评估记录:")
-            lines.append("=" * 70)
-            for h in history:
-                at = h.get('at', '')[:19]
-                score = h.get('score', 0)
-                concept = h.get('concept', '?')
-                feedback = h.get('feedback', '')[:50]
-                lines.append(f"[{at}] {concept}")
-                lines.append(f"  得分: {score:.2f} | 反馈: {feedback}...")
-                lines.append("")
-            history_text.setPlainText("\n".join(lines))
-        else:
-            history_text.setPlainText("暂无学习历史记录。开始学习并答题后将显示记录。")
+        history_table.setRowCount(len(history))
+        for row, h in enumerate(history):
+            at = h.get('at', '')[:19]
+            score = float(h.get('score', 0))
+            concept = h.get('concept', '?')
+            feedback = h.get('feedback', '')[:80]
 
-        history_layout.addWidget(history_text)
+            at_item = QTableWidgetItem(at)
+            con_item = QTableWidgetItem(concept)
+            score_item = QTableWidgetItem(f"{score:.2f}")
+            if score >= 0.6:
+                score_item.setForeground(QColor("#2E7D32"))
+            elif score >= 0.3:
+                score_item.setForeground(QColor("#B45309"))
+            else:
+                score_item.setForeground(QColor("#C62828"))
+            fb_item = QTableWidgetItem(feedback)
+
+            history_table.setItem(row, 0, at_item)
+            history_table.setItem(row, 1, con_item)
+            history_table.setItem(row, 2, score_item)
+            history_table.setItem(row, 3, fb_item)
+
+        history_table.setColumnWidth(0, 170)
+        history_table.setColumnWidth(1, 190)
+        history_table.setColumnWidth(2, 60)
+        if not history:
+            history_table.setRowCount(1)
+            empty = QTableWidgetItem("暂无学习历史记录。开始学习并答题后将显示记录。")
+            history_table.setSpan(0, 0, 1, 4)
+            history_table.setItem(0, 0, empty)
+
+        history_layout.addWidget(history_table)
 
         # Export button
         export_btn = QPushButton("导出学习报告")
@@ -988,128 +1013,17 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(self, "错误", f"教学失败: {error_msg}")
 
     def _display_teach_result(self, result):
-        """Display teaching result in the UI."""
-        # Clear previous content
+        """Display teaching result in the UI (structured cards)."""
         old = self._teach_result_area.takeWidget()
         if old is not None:
             old.deleteLater()
 
-        container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(12)
-        
-        # Concept title
-        title = QLabel(f"📖 {result.get('concept', '概念')}")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1565C0;")
-        layout.addWidget(title)
-        
-        # Explanation
-        explanation = result.get('explanation', '')
-        if explanation:
-            exp_label = QLabel("讲解:")
-            exp_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #333;")
-            layout.addWidget(exp_label)
-            exp_text = QTextEdit()
-            exp_text.setPlainText(explanation)
-            exp_text.setReadOnly(True)
-            exp_text.setMaximumHeight(150)
-            exp_text.setStyleSheet("""
-                QTextEdit {
-                    background-color: #F5F5F5;
-                    border: 1px solid #E0E0E0;
-                    border-radius: 6px;
-                    padding: 8px;
-                    font-size: 12px;
-                }
-            """)
-            layout.addWidget(exp_text)
-        
-        # Example
-        example = result.get('example', '')
-        if example:
-            ex_label = QLabel("示例:")
-            ex_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #333;")
-            layout.addWidget(ex_label)
-            ex_text = QTextEdit()
-            ex_text.setPlainText(example)
-            ex_text.setReadOnly(True)
-            ex_text.setMaximumHeight(100)
-            ex_text.setStyleSheet("""
-                QTextEdit {
-                    background-color: #FFF8E1;
-                    border: 1px solid #FFE082;
-                    border-radius: 6px;
-                    padding: 8px;
-                    font-size: 12px;
-                }
-            """)
-            layout.addWidget(ex_text)
-        
-        # Steps
-        steps = result.get('steps', [])
-        if steps:
-            step_label = QLabel("学习步骤:")
-            step_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #333;")
-            layout.addWidget(step_label)
-            steps_text = "\n".join(f"{i+1}. {s}" for i, s in enumerate(steps))
-            steps_label = QLabel(steps_text)
-            steps_label.setWordWrap(True)
-            steps_label.setStyleSheet("font-size: 12px; color: #555;")
-            layout.addWidget(steps_label)
-        
-        # Practice question
-        practice = result.get('practice', '')
-        if practice:
-            prac_label = QLabel("练习:")
-            prac_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #333;")
-            layout.addWidget(prac_label)
-            
-            self._teach_answer_input = QTextEdit()
-            self._teach_answer_input.setPlaceholderText("请用自己的话回答这个问题...")
-            self._teach_answer_input.setMinimumHeight(80)
-            self._teach_answer_input.setStyleSheet("""
-                QTextEdit {
-                    border: 1px solid #E0E0E0;
-                    border-radius: 6px;
-                    padding: 8px;
-                    font-size: 12px;
-                }
-            """)
-            layout.addWidget(self._teach_answer_input)
-            
-            submit_btn = QPushButton("提交答案")
-            submit_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #4CAF50;
-                    color: white;
-                    border: none;
-                    border-radius: 6px;
-                    padding: 8px 16px;
-                    font-size: 13px;
-                }
-                QPushButton:hover {
-                    background-color: #388E3C;
-                }
-            """)
-            submit_btn.clicked.connect(self._on_submit_answer)
-            layout.addWidget(submit_btn)
-        
-        # Evidence
-        evidence = result.get('evidence', [])
-        if evidence:
-            ev_label = QLabel("原文证据:")
-            ev_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #333;")
-            layout.addWidget(ev_label)
-            ev_text = "\n".join(f"- {e}" for e in evidence[:3])
-            ev_label_widget = QLabel(ev_text)
-            ev_label_widget.setWordWrap(True)
-            ev_label_widget.setStyleSheet("font-size: 11px; color: #666; background-color: #E3F2FD; padding: 8px; border-radius: 4px;")
-            layout.addWidget(ev_label_widget)
-        
-        layout.addStretch()
+        view = TeachResultView(result)
+        view.submit_requested.connect(self._on_submit_answer)
+        if view.answer_input is not None:
+            self._teach_answer_input = view.answer_input
+        self._teach_result_area.setWidget(view)
 
-        self._teach_result_area.setWidget(container)
         self._teach_progress.setVisible(False)
         self._teach_result_label.setText("")
 

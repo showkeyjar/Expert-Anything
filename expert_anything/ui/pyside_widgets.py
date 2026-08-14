@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QTextBrowser,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -508,3 +509,141 @@ class PathLadderView(QWidget):
 
         rung.mousePressEvent = lambda e, c=cid: self.concept_clicked.emit(c)
         return rung
+
+# --------------------------------------------------------------------------- #
+# TeachResultView
+# --------------------------------------------------------------------------- #
+class TeachResultView(QWidget):
+    """Structured lesson view: explanation / example / steps / practice / evidence.
+
+    Replaces the plain QTextEdit dump with colour-coded cards, a numbered
+    step ladder and a dedicated practice area. ``submit_requested`` fires
+    when the learner submits an answer (the answer box is exposed as
+    ``answer_input``).
+    """
+
+    submit_requested = Signal()
+
+    def __init__(self, result: dict, parent=None):
+        super().__init__(parent)
+        self.answer_input: QWidget | None = None
+        self._build(result)
+
+    def _card(self, title: str, body: str, bg: str, border: str, title_color: str) -> QFrame:
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame {{ background-color: {bg}; border: 1px solid {border};"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(4)
+        t = QLabel(title)
+        t.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {title_color};")
+        lay.addWidget(t)
+        b = QLabel(body)
+        b.setWordWrap(True)
+        b.setStyleSheet("font-size: 13px; color: #37474F; line-height: 1.6;")
+        lay.addWidget(b)
+        return card
+
+    def _build(self, result: dict) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(12)
+
+        # header: concept + style badge
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        title = QLabel(result.get("concept", "概念"))
+        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1565C0;")
+        head.addWidget(title)
+        style = result.get("style", "")
+        if style:
+            head.addWidget(tag_chip(f"风格 · {style}", "#0284C7"))
+        head.addStretch()
+        root.addLayout(head)
+
+        # explanation
+        explanation = result.get("explanation", "")
+        if explanation:
+            root.addWidget(self._card(
+                "讲解", explanation, "#E3F2FD", "#90CAF9", "#1565C0"))
+
+        # example
+        example = result.get("example", "")
+        if example:
+            root.addWidget(self._card(
+                "示例", example, "#FFF8E1", "#FFE082", "#B45309"))
+
+        # steps (numbered ladder)
+        steps = result.get("steps", [])
+        if steps:
+            steps_title = QLabel("学习步骤")
+            steps_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #37474F;")
+            root.addWidget(steps_title)
+            for i, s in enumerate(steps, 1):
+                row = QHBoxLayout()
+                row.setSpacing(8)
+                num = QLabel(str(i))
+                num.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                num.setFixedSize(22, 22)
+                num.setStyleSheet(
+                    "background-color: #1565C0; color: white; border-radius: 11px;"
+                    "font-size: 11px; font-weight: bold;"
+                )
+                row.addWidget(num, 0)
+                txt = QLabel(str(s))
+                txt.setWordWrap(True)
+                txt.setStyleSheet("font-size: 13px; color: #37474F;")
+                row.addWidget(txt, 1)
+                root.addLayout(row)
+
+        # practice
+        practice = result.get("practice", "")
+        if practice:
+            prac_card = QFrame()
+            prac_card.setStyleSheet(
+                "QFrame { background-color: #F1F8E9; border: 1px solid #AED581;"
+                "border-radius: 8px; }"
+            )
+            prac_lay = QVBoxLayout(prac_card)
+            prac_lay.setContentsMargins(12, 10, 12, 10)
+            prac_lay.setSpacing(6)
+            p_t = QLabel("练习")
+            p_t.setStyleSheet("font-size: 12px; font-weight: bold; color: #2E7D32;")
+            prac_lay.addWidget(p_t)
+            p_q = QLabel(practice)
+            p_q.setWordWrap(True)
+            p_q.setStyleSheet("font-size: 13px; color: #37474F;")
+            prac_lay.addWidget(p_q)
+
+            self.answer_input = QTextEdit()
+            self.answer_input.setPlaceholderText("请用自己的话回答这个问题...")
+            self.answer_input.setMinimumHeight(80)
+            self.answer_input.setStyleSheet(
+                "QTextEdit { border: 1px solid #C5E1A5; border-radius: 6px;"
+                "padding: 8px; font-size: 13px; background-color: white; }"
+            )
+            prac_lay.addWidget(self.answer_input)
+
+            submit_btn = QPushButton("提交答案")
+            submit_btn.setStyleSheet(
+                "QPushButton { background-color: #4CAF50; color: white; border: none;"
+                "border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #388E3C; }"
+            )
+            submit_btn.clicked.connect(self.submit_requested)
+            prac_lay.addWidget(submit_btn, 0, Qt.AlignmentFlag.AlignRight)
+            root.addWidget(prac_card)
+
+        # evidence
+        evidence = result.get("evidence", [])
+        if evidence:
+            root.addWidget(self._card(
+                "原文证据（来源约束）",
+                "\n".join(f"• {e}" for e in evidence[:3]),
+                "#E8EAF6", "#C5CAE9", "#3F51B5",
+            ))
+
+        root.addStretch()
