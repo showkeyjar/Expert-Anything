@@ -940,21 +940,22 @@ class MainWindow(QMainWindow):
         }
 
     def _view_header(self, title, subtitle="") -> QFrame:
-        """Unified view header for every view (white, brand accent bar)."""
+        """Compact unified view header: one row (title + subtitle inline)."""
         header = QFrame()
         header.setStyleSheet(
             "background-color: white; border-bottom: 2px solid #1565C0;"
         )
-        lay = QVBoxLayout(header)
-        lay.setContentsMargins(24, 14, 24, 12)
-        lay.setSpacing(2)
+        lay = QHBoxLayout(header)
+        lay.setContentsMargins(20, 7, 20, 7)
+        lay.setSpacing(10)
         t = QLabel(str(title))
-        t.setStyleSheet("font-size: 19px; font-weight: bold; color: #1F2933;")
+        t.setStyleSheet("font-size: 16px; font-weight: bold; color: #1F2933;")
         lay.addWidget(t)
         if subtitle:
             s = QLabel(str(subtitle))
-            s.setStyleSheet("color: #6B7A90; font-size: 12px;")
+            s.setStyleSheet("color: #6B7A90; font-size: 11.5px;")
             lay.addWidget(s)
+        lay.addStretch()
         return header
 
     def _build_topbar(self) -> QFrame:
@@ -1222,6 +1223,36 @@ class MainWindow(QMainWindow):
                         relations.append(Relation(
                             id=str(_uuid4()), source=a, target=b,
                             label="共享概念", type="related"))
+
+        # supplement edges from teacher notes: prerequisites -> '前置' edges,
+        # connections mentioning another concept -> '关联' edges. This makes
+        # the map richer even when the raw relation list is sparse.
+        for aid, data in self.assets.items():
+            tp = self.teacher_models.get(aid)
+            if not tp:
+                continue
+            name_to_id_asset = {
+                _norm(c.get("name", "")): id_map.get((aid, c["id"]))
+                for c in data.get("concepts", [])
+            }
+            for n in tp.get("concept_notes", []):
+                src_id = id_map.get((aid, n.get("concept_id")))
+                if not src_id:
+                    continue
+                for pre in n.get("prerequisites", []) or []:
+                    tgt = name_to_id_asset.get(_norm(pre))
+                    if tgt and tgt != src_id:
+                        relations.append(Relation(
+                            id=str(_uuid4()), source=tgt, target=src_id,
+                            label="前置", type="related"))
+                for conn in n.get("connections", []) or []:
+                    for c in data.get("concepts", []):
+                        cname = c.get("name", "")
+                        tgt = id_map.get((aid, c["id"]))
+                        if cname and tgt and tgt != src_id and cname in conn:
+                            relations.append(Relation(
+                                id=str(_uuid4()), source=src_id, target=tgt,
+                                label="关联", type="related"))
         path = []
         if cur is not None:
             path = [id_map.get((self.current_asset_id, cid), cid)
@@ -1703,21 +1734,46 @@ class MainWindow(QMainWindow):
         content_layout.setSpacing(12)
 
         if self.current_asset_id and self.current_asset_id in self.assets:
-            data = self.assets[self.current_asset_id]
-            asset, grey_ids = self._build_global_asset()
-            concepts = data.get('concepts', [])
-            relations = data.get('relations', [])
+            # Toolbar: search / reset / scope
+            toolbar = QHBoxLayout()
+            toolbar.setSpacing(8)
 
-            info_label = QLabel(
-                f"当前书 {len(concepts)} 个概念（彩色）+ 其它资产 {len(grey_ids)} 个概念（灰色）。"
-                "单击节点查看概念详情，双击开始学习；滚轮缩放，拖拽平移。"
+            self._map_search = QLineEdit()
+            self._map_search.setPlaceholderText("🔍 搜索概念并定位（回车）")
+            self._map_search.setStyleSheet(
+                "QLineEdit { border: 1px solid #BDBDBD; border-radius: 6px;"
+                "padding: 5px 10px; font-size: 12.5px; background-color: white; }"
             )
-            info_label.setStyleSheet("font-size: 12px; color: #666;")
-            content_layout.addWidget(info_label)
+            self._map_search.returnPressed.connect(self._on_map_search)
+            toolbar.addWidget(self._map_search, 1)
+
+            reset_btn = QPushButton("复位全图")
+            reset_btn.setStyleSheet(
+                "QPushButton { background-color: white; color: #1565C0;"
+                "border: 1px solid #BBDEFB; border-radius: 6px; padding: 5px 14px;"
+                "font-size: 12.5px; }"
+                "QPushButton:hover { background-color: #E3F2FD; }"
+            )
+            reset_btn.clicked.connect(
+                lambda: self._graph_view.reset_focus() if hasattr(self, "_graph_view") else None
+            )
+            toolbar.addWidget(reset_btn)
+
+            self._map_scope = QComboBox()
+            self._map_scope.addItems(["全部资产", "仅当前资产"])
+            self._map_scope.setStyleSheet(
+                "QComboBox { border: 1px solid #BDBDBD; border-radius: 6px;"
+                "padding: 4px 8px; font-size: 12.5px; background-color: white; }"
+            )
+            self._map_scope.currentIndexChanged.connect(self._on_map_scope)
+            toolbar.addWidget(self._map_scope)
+
+            content_layout.addLayout(toolbar)
 
             # Interactive graph view (uses core.graph_viz layout math)
             self._graph_view = KnowledgeGraphView()
             self._graph_view.concept_clicked.connect(self.on_card_click)
+            self._graph_view.node_single_clicked.connect(self._open_concept_panel)
             self._graph_view.setStyleSheet("""
                 QGraphicsView {
                     background-color: white;
@@ -1728,43 +1784,12 @@ class MainWindow(QMainWindow):
             self._graph_view.setMinimumHeight(420)
             content_layout.addWidget(self._graph_view)
 
-            # Mastery map by concept id (cross-asset learner model)
-            mastery_map = {}
-            for c in concepts:
-                norm_name = normalize(c.get('name', ''))
-                mastery_map[c.get('id')] = (
-                    self.learner.get('concepts', {}).get(norm_name, {}).get('mastery', 0.0)
-                )
-
-            # Anomaly-touched concept ids from the teacher model
-            anomaly_ids = set()
-            teacher_data = self.teacher_models.get(self.current_asset_id)
-            if teacher_data:
-                try:
-                    tm = TeacherModel.from_dict(teacher_data)
-                    anomaly_ids = anomaly_concept_ids(asset, tm)
-                except Exception:
-                    anomaly_ids = set()
-
-            # Recommended-next concept (cyan border)
-            current_id = None
-            items = self.get_adaptive_path(self.current_asset_id)
-            if items:
-                current_id = items[0].get('cid')
-
-            self._graph_view.set_asset(
-                asset,
-                mastery_map=mastery_map,
-                anomaly_ids=anomaly_ids,
-                current_id=current_id,
-                grey_ids=grey_ids,
-            )
-            self._graph_view.node_single_clicked.connect(self._open_concept_panel)
+            self._refresh_map_view()
 
             # Legend
             legend_label = QLabel(
                 "图例：绿色 已掌握 · 琥珀 学习中 · 橙色 薄弱 · 深灰 未学 · 浅灰 其它资产概念 ·"
-                "蓝框 聚焦/推荐 · 橙框 系统存疑"
+                "蓝框 聚焦/推荐 · 橙框 系统存疑 · 悬停节点高亮邻居"
             )
             legend_label.setStyleSheet("font-size: 11px; color: #666; margin-top: 8px;")
             content_layout.addWidget(legend_label)
@@ -1777,6 +1802,61 @@ class MainWindow(QMainWindow):
         layout.addWidget(content)
 
         return widget
+
+    def _refresh_map_view(self) -> None:
+        """(Re)load the concept map per the current scope selection."""
+        if not hasattr(self, "_graph_view") or not self.current_asset_id:
+            return
+        scope_all = getattr(self, "_map_scope", None) is None or self._map_scope.currentIndex() == 0
+        if scope_all:
+            asset, grey_ids = self._build_global_asset()
+        else:
+            asset = self.get_asset()
+            grey_ids = set()
+
+        mastery_map = {}
+        for c in asset.concepts:
+            norm_name = normalize(c.name)
+            mastery_map[c.id] = (
+                self.learner.get('concepts', {}).get(norm_name, {}).get('mastery', 0.0)
+            )
+
+        anomaly_ids = set()
+        teacher_data = self.teacher_models.get(self.current_asset_id)
+        if teacher_data:
+            try:
+                tm = TeacherModel.from_dict(teacher_data)
+                anomaly_ids = anomaly_concept_ids(asset, tm)
+            except Exception:
+                anomaly_ids = set()
+
+        current_id = None
+        items = self.get_adaptive_path(self.current_asset_id)
+        if items:
+            current_id = items[0].get('cid')
+
+        self._graph_view.set_asset(
+            asset,
+            mastery_map=mastery_map,
+            anomaly_ids=anomaly_ids,
+            current_id=current_id,
+            grey_ids=grey_ids,
+        )
+
+    def _on_map_search(self) -> None:
+        """Locate a concept by keyword and focus it in the graph."""
+        kw = self._map_search.text().strip().lower()
+        if not kw or not hasattr(self, "_graph_view"):
+            return
+        gv = self._graph_view
+        for cid, name, _role in gv._nodes:
+            if kw in name.lower():
+                gv.focus_concept(cid)
+                return
+        QMessageBox.information(self, "未找到", f"图谱中没有名为「{self._map_search.text().strip()}」的概念")
+
+    def _on_map_scope(self, _idx: int) -> None:
+        self._refresh_map_view()
 
     def _build_source_view(self):
         """Build the source text view for reading the original material."""
@@ -2111,70 +2191,43 @@ class MainWindow(QMainWindow):
                 notes_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #666; margin-top: 12px;")
                 content_layout.addWidget(notes_label)
                 
-                notes_scroll = QScrollArea()
-                notes_scroll.setWidgetResizable(True)
-                notes_scroll.setMaximumHeight(200)
-                notes_scroll.setStyleSheet("""
-                    QScrollArea {
+                notes_hint = QLabel(
+                    f"{len(notes)} 个概念的理解笔记——点击任意一条，查看该概念的证据、关系与教师理解。"
+                )
+                notes_hint.setStyleSheet("font-size: 11.5px; color: #8D6E63;")
+                content_layout.addWidget(notes_hint)
+
+                notes_list = QListWidget()
+                notes_list.setStyleSheet("""
+                    QListWidget {
+                        background-color: white;
                         border: 1px solid #E0E0E0;
                         border-radius: 6px;
-                        background-color: white;
+                        font-size: 12.5px;
                     }
+                    QListWidget::item {
+                        padding: 7px 10px;
+                        border-bottom: 1px solid #F0F0F0;
+                    }
+                    QListWidget::item:hover { background-color: #FFF8E1; }
                 """)
-                
-                notes_content = QWidget()
-                notes_layout = QVBoxLayout(notes_content)
-                notes_layout.setContentsMargins(8, 8, 8, 8)
-                notes_layout.setSpacing(8)
-                
-                for note in notes[:5]:  # Show first 5
-                    note_widget = QFrame()
-                    note_widget.setStyleSheet("""
-                        QFrame {
-                            background-color: #F5F5F5;
-                            border-radius: 4px;
-                            padding: 8px;
-                        }
-                    """)
-                    note_inner = QVBoxLayout(note_widget)
-                    
+                for note in notes:
                     name = note.get('name', '?')
                     sign = note.get('significance', '')
-                    
-                    name_label = QLabel(f"📌 {name}")
-                    name_label.setStyleSheet("font-weight: bold; font-size: 12px;")
-                    note_inner.addWidget(name_label)
-
-                    cid = note.get('concept_id', '')
-                    if cid:
-                        def _open_note(e, cid=cid):
-                            self._open_concept_panel(cid)
-                        note_widget.mousePressEvent = _open_note
-                    
-                    if sign:
-                        sign_label = QLabel(f"重要性: {sign}")
-                        sign_label.setStyleSheet("font-size: 11px; color: #555;")
-                        note_inner.addWidget(sign_label)
-                    
                     miscon = note.get('misconceptions', [])
+                    parts = [name]
+                    if sign:
+                        parts.append(sign[:46] + ("…" if len(sign) > 46 else ""))
                     if miscon:
-                        mc_label = QLabel(f"常见误解: {'; '.join(miscon[:3])}")
-                        mc_label.setStyleSheet("font-size: 11px; color: #D32F2F;")
-                        note_inner.addWidget(mc_label)
-
-                    signals = note.get('learner_signals', [])
-                    if signals:
-                        sig_label = QLabel(f"学习者信号: {signals[-1][:60]}")
-                        sig_label.setWordWrap(True)
-                        sig_label.setStyleSheet("font-size: 11px; color: #6A1B9A;")
-                        note_inner.addWidget(sig_label)
-                    
-                    note_inner.addStretch()
-                    notes_layout.addWidget(note_widget)
-                
-                notes_layout.addStretch()
-                notes_scroll.setWidget(notes_content)
-                content_layout.addWidget(notes_scroll)
+                        parts.append(f"误区：{miscon[0][:24]}")
+                    item = QListWidgetItem("　".join(parts))
+                    item.setData(Qt.ItemDataRole.UserRole, note.get('concept_id', ''))
+                    notes_list.addItem(item)
+                notes_list.itemClicked.connect(
+                    lambda it: self._open_concept_panel(it.data(Qt.ItemDataRole.UserRole))
+                    if it.data(Qt.ItemDataRole.UserRole) else None
+                )
+                content_layout.addWidget(notes_list)
         else:
             placeholder = QLabel("教师模型数据尚未生成\n请先完成知识资产导入和自学习过程")
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)

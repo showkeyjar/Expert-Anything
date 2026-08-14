@@ -104,6 +104,7 @@ class KnowledgeGraphView(QGraphicsView):
         self._box: dict[str, tuple[float, float]] = {}  # cid -> (w, h)
         self._node_items: dict[str, QGraphicsPathItem] = {}
         self._edges: list[tuple[str, str, str]] = []
+        self._hover_cid: str | None = None
 
     # ------------------------------------------------------------------ #
     # public API
@@ -255,6 +256,7 @@ class KnowledgeGraphView(QGraphicsView):
         scene.setSceneRect(0, 0, max(w, 400), max(h, 300))
         self.resetTransform()
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._hover_cid = None
         self.view_changed.emit()
 
     def focus_concept(self, concept_id: str) -> None:
@@ -277,6 +279,52 @@ class KnowledgeGraphView(QGraphicsView):
         if 0.3 <= new_zoom <= 4.0:
             self.scale(factor, factor)
         event.accept()
+
+    def mouseMoveEvent(self, event):
+        hit = self._item_concept(event.pos())
+        cid = hit[0] if hit else None
+        if cid != self._hover_cid:
+            self._hover_cid = cid
+            self._apply_hover()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event):
+        if self._hover_cid is not None:
+            self._hover_cid = None
+            self._apply_hover()
+        super().leaveEvent(event)
+
+    def _apply_hover(self) -> None:
+        """Emphasise the hovered node and its direct neighbours."""
+        if self._asset is None:
+            return
+        cid = self._hover_cid
+        neighbours: set[str] = set()
+        if cid is not None:
+            for s, t, _label in self._edges:
+                if s == cid:
+                    neighbours.add(t)
+                elif t == cid:
+                    neighbours.add(s)
+        for nid, item in self._node_items.items():
+            if nid == self._focus_id or nid == self._current_id:
+                continue  # keep focus/current styling
+            if cid is not None and nid in neighbours:
+                item.setPen(QPen(_hex("#0284C7"), 2.5))
+            elif nid == cid:
+                item.setPen(QPen(_hex("#0EA5E9"), 3))
+            else:
+                # restore default pen by re-rendering is expensive; reset to
+                # a neutral 1px border matching the normal style
+                role = next((r for cc, _n, r in self._nodes if cc == nid), "normal")
+                if nid in self._grey_ids:
+                    item.setPen(QPen(_hex(_BORDER_CONTEXT), 1))
+                elif nid in self._anomaly_ids:
+                    item.setPen(QPen(_hex(_BORDER_ANOMALY), 3))
+                elif role == "context":
+                    item.setPen(QPen(_hex(_BORDER_CONTEXT), 1))
+                else:
+                    item.setPen(QPen(_hex(_BORDER_NORMAL), 1))
 
     def _item_concept(self, pos) -> tuple[str, str] | None:
         item = self.itemAt(pos)
