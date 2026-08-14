@@ -1428,6 +1428,33 @@ class MainWindow(QMainWindow):
                             id=str(_uuid4()), source=a, target=b,
                             label=_t("share_concept"), type="related"))
 
+        # fuse LLM compressed-layer concepts (external_concepts) as grey nodes
+        # with '外部' edges — the compressed knowledge layer made navigable.
+        ext_id = 0
+        for aid, data in self.assets.items():
+            tp = self.teacher_models.get(aid)
+            if not tp:
+                continue
+            for n in tp.get("concept_notes", []):
+                src_id = id_map.get((aid, n.get("concept_id")))
+                if not src_id:
+                    continue
+                for ec in n.get("external_concepts", []) or []:
+                    ename = str(ec).strip()
+                    if not ename:
+                        continue
+                    eid = f"ext:{aid}:{ext_id}"
+                    ext_id += 1
+                    concepts.append(Concept(
+                        id=eid, name=ename, definition="",
+                        summary="（外部概念：来自大模型压缩知识层，不在本书中）",
+                        evidence=[],
+                    ))
+                    grey_ids.add(eid)
+                    relations.append(Relation(
+                        id=str(_uuid4()), source=src_id, target=eid,
+                        label=_t("edge_external"), type="related"))
+
         # supplement edges from teacher notes: prerequisites -> '前置' edges,
         # connections mentioning another concept -> '关联' edges. This makes
         # the map richer even when the raw relation list is sparse.
@@ -2195,11 +2222,56 @@ class MainWindow(QMainWindow):
         self._refresh_map_view()
 
     def _on_map_node_clicked(self, concept_id: str) -> None:
-        """Graph single-click: focus the node + fill the per-node detail card."""
+        """Graph single-click: focus + detail card; external nodes get an
+        on-demand LLM explanation (decompress the compressed layer)."""
         gv = getattr(self, "_graph_view", None)
         if gv is not None and gv._focus_id != concept_id:
             gv.focus_concept(concept_id)
+        if str(concept_id).startswith("ext:"):
+            self._explain_external(concept_id)
+            return
         self._refresh_map_detail(concept_id)
+
+    def _explain_external(self, concept_id: str) -> None:
+        """Explain an external (compressed-layer) concept via the LLM."""
+        asset = getattr(self, "_map_global_asset", None)
+        if asset is None:
+            return
+        c = asset.concept_by_id(concept_id)
+        if c is None:
+            return
+        # find the anchor (in-book) concept connected to it
+        anchor_name = ""
+        for r in asset.relations:
+            if r.target == concept_id:
+                a = asset.concept_by_id(r.source)
+                if a:
+                    anchor_name = a.name
+                    break
+        if self.llm_client is None:
+            QMessageBox.information(
+                self, _t("hint"),
+                _t("external_no_llm", name=c.name))
+            return
+        try:
+            prompt = (
+                "概念「{ext}」来自外部知识（不在本书中），它与书中的「{anchor}」相关。"
+                "请用 3-5 句话解释这个概念是什么、为什么与「{anchor}」相关，"
+                "并用一个技术人员容易理解的类比帮助建立直觉。"
+                + ("Answer in English. " if _get_lang() == "en" else
+                   "日本語で回答してください。" if _get_lang() == "ja" else "")
+            ).format(ext=c.name, anchor=anchor_name or "当前概念")
+            ans = self.llm_client.chat(
+                [__import__("expert_anything.core.llm", fromlist=["Message"]).Message("user", prompt)],
+                temperature=0.3, max_tokens=400,
+            )
+            QMessageBox.information(
+                self,
+                f"{_t('external_title')}「{c.name}」",
+                ans,
+            )
+        except Exception as e:
+            QMessageBox.information(self, _t("hint"), str(e))
 
     def _refresh_map_detail(self, concept_id: str) -> None:
         """Update the in-graph detail sidebar for a concept."""

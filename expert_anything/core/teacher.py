@@ -49,6 +49,7 @@ class ConceptNote:
     misconceptions: list[str] = field(default_factory=list)
     connections: list[str] = field(default_factory=list)
     external_notes: list[str] = field(default_factory=list)  # 引入的外部补充，标注来源
+    external_concepts: list[str] = field(default_factory=list)  # LLM 压缩层的相关外部概念
     learner_signals: list[str] = field(default_factory=list)  # 学生真实作答中暴露的困惑/错点
     note: str = ""                  # 系统综合理解
 
@@ -61,6 +62,7 @@ class ConceptNote:
             "misconceptions": self.misconceptions,
             "connections": self.connections,
             "external_notes": self.external_notes,
+            "external_concepts": self.external_concepts,
             "learner_signals": self.learner_signals,
             "note": self.note,
         }
@@ -75,6 +77,7 @@ class ConceptNote:
             misconceptions=d.get("misconceptions", []),
             connections=d.get("connections", []),
             external_notes=d.get("external_notes", []),
+            external_concepts=d.get("external_concepts", []),
             learner_signals=d.get("learner_signals", []),
             note=d.get("note", ""),
         )
@@ -210,6 +213,8 @@ _USER = (
     "以下关于《{title}》的知识模型与原文片段。请：\n"
     "(A) 对每个概念做深加工：significance(为什么重要)、prerequisites(前提)、"
     "misconceptions(常见误解)、connections(与别的概念/外部领域的连接)、"
+    "external_concepts(1-2 个不在本书中、但与该概念密切相关的常见外部概念名，"
+    "用于知识图谱中的灰色锚点；若无则空数组)、"
     "note(系统综合理解，1-2 句)；若材料单薄，把可靠的外部背景放进 external_notes。\n"
     "(B) 扫描矛盾/未定义术语/逻辑断点/反常主张，逐条列出 anomaly："
     "kind 取 contradiction|undefined_term|logical_gap|surprising_claim，"
@@ -219,7 +224,8 @@ _USER = (
     "输出 JSON：\n"
     "{{\n"
     '  "concept_notes": [{{"name":"概念名","significance":"","prerequisites":[],'
-    '"misconceptions":[],"connections":[],"external_notes":[],"note":""}}],\n'
+    '"misconceptions":[],"connections":[],"external_notes":[],'
+    '"external_concepts":["外部概念1","外部概念2"],"note":""}}],\n'
     '  "anomalies": [{{"kind":"","description":"","location":"","severity":""}}]\n'
     "}}\n"
     "要求 concept_notes 覆盖全部概念；anomalies 无则空数组。"
@@ -265,6 +271,7 @@ def _assemble(asset: KnowledgeAsset, data: dict, method: str) -> TeacherModel:
                 misconceptions=[x for x in (c.get("misconceptions") or []) if str(x).strip()],
                 connections=[x for x in (c.get("connections") or []) if str(x).strip()],
                 external_notes=[x for x in (c.get("external_notes") or []) if str(x).strip()],
+                external_concepts=[x for x in (c.get("external_concepts") or []) if str(x).strip()],
                 note=(c.get("note") or "").strip(),
             )
         )

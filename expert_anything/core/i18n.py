@@ -543,6 +543,15 @@ _STRINGS: dict[str, dict[str, str]] = {
     "practice_hint_label": {"zh-CN": "提示：", "en": "Hint: ", "ja": "ヒント: "},
     "practice_answer_ph": {"zh-CN": "在这里写下你的解答（证明/构造/伪代码/步骤）...", "en": "Write your solution here (proof / construction / pseudo-code / steps)…", "ja": "ここに解答を書いてください（証明・構築・擬似コード・手順）…"},
     "practice_submit": {"zh-CN": "提交实践", "en": "Submit", "ja": "提出"},
+    "edge_external": {"zh-CN": "外部", "en": "external", "ja": "外部"},
+    "external_title": {"zh-CN": "外部概念 · ", "en": "External concept · ", "ja": "外部概念 · "},
+    "external_no_llm": {
+        "zh-CN": "「{name}」是外部概念（来自大模型知识，不在本书中）。配置 LLM 后可点击查看解释。",
+        "en": "\u201c{name}\u201d is an external concept (from the model's knowledge, not in this book). Configure an LLM to see its explanation.",
+        "ja": "「{name}」は外部概念です（本にはなく、モデルの知識に由来）。LLMを設定すると説明を表示できます。",
+    },
+    "external_tag": {"zh-CN": "外部", "en": "EXT", "ja": "外部"},
+
     "analogy_title": {
         "zh-CN": "🧠 类比桥（用你熟悉的领域理解它）",
         "en": "🧠 Analogy Bridge (understand it via a domain you know)",
