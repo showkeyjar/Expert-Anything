@@ -72,17 +72,17 @@ tests/ + run_tests.py       layered test suite (quick ~9s / full incl. LLM)
 ## The 7 Desktop Views
 
 1. **Import** — files (EPUB/PDF/DOCX/MD/TXT/HTML) or pasted text; threaded extraction + self-learning with live progress
-2. **Knowledge Model** — dashboard + adaptive path (mastery/anomaly/leverage/position four-signal ranking)
+2. **Knowledge Model** — dashboard + **chapter TOC tree** (chapters → concepts, click to locate in source) + **topic clusters** (concepts auto-grouped by relations, one-click topic learning) + adaptive path
 3. **Concept Map** — a *living* force-directed network: nodes drift gently, drag them, hover highlights neighbours, single-click opens a per-node detail sidebar, double-click teaches; search, zoom, scope switching, grey = other assets
-4. **Source** — read the original material with concept highlighting & jump chips
-5. **Tutor Session** — align goals → teach in your preferred style (example/diagram/steps) → answer → semantic evaluation with a source-grounded reference answer → follow-up Q&A grounded in the source
+4. **Source** — full-text search (highlight + jump) + concept highlighting chips
+5. **Tutor Session** — teach in your preferred style (example/diagram/steps) with a position mini-map → answer with a source-grounded reference → follow-up Q&A → **quick self-test** (true/false, ordering) → **hands-on practice tasks** (prove/construct/pseudo-code)
 6. **Learner Model** — cross-asset mastery, overview + distribution bar, growth trend chart, spaced-review queue, export report
 7. **Teacher Model** — the system's own understanding: concept notes (why it matters/prerequisites/misconceptions/connections) + colour-coded anomaly cards
 
 ## Testing
 
 ```powershell
-# quick (no LLM, ~9s, 71 cases)
+# quick (no LLM, ~9s, 75 cases)
 python run_tests.py --quick
 
 # full (incl. real-LLM end-to-end, ~90s)
@@ -96,7 +96,7 @@ python run_tests.py --layer core|ui|llm|data
 |---|---|---|
 | core | 30 | parsers (txt/md/docx/epub/pdf), extraction grounding, model round-trip, learner (mastery/path/review/weak), teaching styles, teacher |
 | data | 7 | demo-data integrity (assets/relations/paths/teacher/learner consistency) |
-| ui | 27 | window build, living graph, source highlight, panels, learner/teacher views, dirty payloads, i18n switching |
+| ui | 31 | window build, living graph, source highlight/search, panels, topic clusters, quiz/practice cards, learner/teacher views, i18n |
 | llm | 7 | real extraction (hallucination guard), style variance, reference answers, follow-up, teacher model |
 
 Run `python run_tests.py --quick` after every change; run the full suite (incl. LLM)

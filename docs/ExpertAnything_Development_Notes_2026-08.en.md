@@ -22,6 +22,10 @@
 | R12 | Content-fit zoom (≥0.85), bigger node labels, definition tooltips, zoom buttons |
 | R13 | Teach-layout fix (graph sizeHint squeezing the lesson area → maxHeight; splitter stretch) |
 | R14 | **Multilingual**: zh/en/ja via `t()`, live language switching, 166 hard-coded Chinese literals swept to zero |
+| P0 | gap-analysis rollout: chapter TOC tree + extraction upgrade (concepts 12→40, chapter attribution) + concept↔chapter location; teacher batched self-learning (json_mode off + per-batch resilience, 33/33 notes + 9 real anomalies) |
+| P1 | quick self-tests (true/false, ordering), source full-text search, topic clusters (connected components), LLM output follows UI language (call-time language instruction) |
+| P2 | hands-on practice loop (prove/construct/pseudo-code: generate → answer → strict evaluation → mastery) |
+| tests | suite grown to 75 cases (quick ~9s, incl. topic/quiz/practice regressions) |
 | tests | Unified suite `run_tests.py`: 71 cases (core 30 / data 7 / ui 27 / llm 7), quick ~9s |
 
 ## 2. Current architecture (stable baseline)

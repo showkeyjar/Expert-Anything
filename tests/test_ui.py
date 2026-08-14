@@ -336,5 +336,63 @@ class TestI18n(unittest.TestCase):
         self.win._lang_combo.setCurrentIndex(self.win._lang_combo.findData("zh-CN"))
 
 
+class TestLearningFeatures(unittest.TestCase):
+    """Quiz, practice and topic-cluster UI features."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+        cls.win.show()
+
+    def test_topic_cards_in_knowledge_view(self):
+        from PySide6.QtWidgets import QPushButton
+        self.win.content_stack.setCurrentIndex(1)
+        btns = [b.text() for b in self.win.content_stack.widget(1).findChildren(QPushButton)]
+        self.assertTrue(any("学习主题" in t or "Learn topic" in t for t in btns))
+
+    def test_start_topic_opens_teach(self):
+        from expert_anything.core.learner import topic_clusters
+        asset = self.win.get_asset()
+        clusters = topic_clusters(asset)
+        big = [c for c in clusters if c["size"] >= 2]
+        self.assertTrue(big)
+        self.win._start_topic(big[0]["id"])
+        self.assertEqual(self.win.content_stack.currentIndex(), 4)
+
+    def test_quiz_card_and_recording(self):
+        from expert_anything.core.tutor import Tutor
+        asset = self.win.get_asset()
+        tutor = Tutor(asset, llm=None)
+        # deterministic path: quiz generation requires LLM -> skip generation,
+        # but scoring logic and UI card must work
+        quiz = {"type": "true_false", "question": "1+1=2?", "correct": True,
+                "explanation": "arithmetic"}
+        self.win._teach_concept_now = asset.concepts[0].name
+        self.win.on_nav_click("teach")
+        self.win._display_teach_result({
+            "concept": asset.concepts[0].name, "style": "例子",
+            "explanation": "x", "example": "", "steps": [], "practice": "",
+            "evidence": [],
+        })
+        tv = self.win._teach_view
+        tv.show_quiz(quiz)
+        before = len(self.win.learner.get("history", []))
+        tv.quiz_result.emit(1.0)
+        self.assertEqual(len(self.win.learner.get("history", [])), before + 1)
+
+    def test_practice_card_renders(self):
+        task = {"task": "证明 1+1=2", "hint": "用皮亚诺公理", "reference": ["定义后继"]}
+        self.win.on_nav_click("teach")
+        self.win._display_teach_result({
+            "concept": "x", "style": "例子",
+            "explanation": "x", "example": "", "steps": [], "practice": "",
+            "evidence": [],
+        })
+        tv = self.win._teach_view
+        tv.show_practice(task)
+        tv.show_practice_result({"score": 0.8, "feedback": "好", "reference": "要点"})
+        self.assertIsNotNone(tv.grab())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
