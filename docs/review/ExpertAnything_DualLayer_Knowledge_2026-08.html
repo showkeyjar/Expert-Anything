@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>双层知识架构 — LLM 压缩知识 × 证据知识模型</title>
+<style>
+  :root { --bg:#f6f8fa; --card:#fff; --ink:#1f2933; --muted:#6b7a90; --line:#e3e8ee;
+          --blue:#0284c7; --teal:#00695c; --purple:#6a1b9a; --green:#2e7d32; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--ink); font:15px/1.75 "Segoe UI","Microsoft YaHei",sans-serif; padding:32px 16px; }
+  .wrap { max-width:960px; margin:0 auto; }
+  header { background:linear-gradient(135deg,#0c3d5f,#00695c); color:#fff; border-radius:16px; padding:32px 36px; margin-bottom:22px; }
+  header h1 { font-size:25px; margin-bottom:8px; }
+  header p { opacity:.92; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:22px 26px; margin-bottom:18px; }
+  .card h2 { font-size:18px; margin-bottom:12px; }
+  .card h3 { font-size:14.5px; margin:16px 0 8px; }
+  table { width:100%; border-collapse:collapse; font-size:13.5px; margin:10px 0; }
+  th,td { border:1px solid var(--line); padding:8px 10px; text-align:left; vertical-align:top; }
+  th { background:#f0f4f8; }
+  .compare { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:12px 0; }
+  @media (max-width:760px){ .compare{grid-template-columns:1fr;} }
+  .box { border-radius:10px; padding:14px 16px; border:1px solid var(--line); }
+  .box-ev { background:#e8f5e9; border-color:#a5d6a7; }
+  .box-llm { background:#e0f2f1; border-color:#80cbc4; }
+  .box h4 { font-size:14px; margin-bottom:6px; }
+  ul.tight { padding-left:20px; } ul.tight li { margin-bottom:5px; }
+  .tag { display:inline-block; padding:1px 9px; border-radius:999px; font-size:12px; font-weight:600; }
+  .t-ok { background:#e3f2e5; color:var(--green); }
+  .t-next { background:#e0f2f1; color:var(--teal); }
+  .t-later { background:#f3e5f5; color:var(--purple); }
+  .quote { background:#fff8e1; border-left:4px solid #f59e0b; border-radius:6px; padding:10px 14px; margin:10px 0; font-size:13.5px; }
+  footer { text-align:center; color:var(--muted); font-size:12.5px; margin-top:20px; }
+  code { background:#eef1f4; border-radius:4px; padding:1px 5px; font-size:12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>双层知识架构：LLM 压缩知识 × 证据知识模型</h1>
+  <p>理念分析 + 已落地验证 + 演进路线 · 2026-08-14</p>
+</header>
+
+<div class="card">
+  <h2>一、核心理念：训练即压缩，推理即解压</h2>
+  <p>大模型在训练中把海量文本压缩进参数——这是<strong>有损的、可检索的语义压缩表示</strong>。
+  ExpertAnything 当前构建的是<strong>显式的证据知识层</strong>（概念/关系/证据/路径，可溯源可导航）。
+  两者不是替代关系，而是互补的双层知识：证据层负责「这本书说了什么」（可信），
+  压缩层负责「这个概念在更大的世界里是什么」（广博）。</p>
+  <div class="compare">
+    <div class="box box-ev">
+      <h4>📚 证据知识层（当前系统）</h4>
+      <ul class="tight">
+        <li>概念/关系/证据逐字出自原文，可溯源</li>
+        <li>图谱可导航、学习路径可执行</li>
+        <li>局限：覆盖只一本书，抽取是二次有损压缩</li>
+      </ul>
+    </div>
+    <div class="box box-llm">
+      <h4>🧠 LLM 压缩知识层（参数内）</h4>
+      <ul class="tight">
+        <li>覆盖广、能类比、能桥接不同领域</li>
+        <li>局限：不可溯源、无结构、可能幻觉</li>
+        <li>定位：作为「背景知识层」服务教学与理解</li>
+      </ul>
+    </div>
+  </div>
+  <div class="quote"><strong>结论</strong>：证据层给信任，压缩层给直觉。技术学习 = 新概念 × 已有心智模型的桥接——这正是压缩层不可替代的价值。</div>
+</div>
+
+<div class="card">
+  <h2>二、结合点清单（已落地 / 待落地）</h2>
+  <table>
+    <tr><th>结合点</th><th>机制</th><th>状态</th></tr>
+    <tr><td><b>类比桥（Analogy Bridge）</b></td><td>教学时 LLM 把概念映射到熟悉领域（编程/系统/日常），一句话建立直觉</td>
+        <td><span class="tag t-ok">✅ 已落地</span> 实测：「命题就像电路中的开关状态，被逻辑门（证明过程）处理，输出结论（定理）」</td></tr>
+    <tr><td><b>外部知识补齐</b></td><td>TeacherModel 的 external_notes 已允许 LLM 引入外部背景并标注来源</td>
+        <td><span class="tag t-ok">✅ 已存在</span> 概念详情面板展示「外部补充（非原文）」</td></tr>
+    <tr><td><b>外部概念扩充</b></td><td>教师模型输出每个概念 1-3 个关键外部关联概念 → 图谱灰色节点（grey_ids 架构已支持）+「外部」边，点击弹 LLM 解释</td>
+        <td><span class="tag t-next">➡ 下一步</span> 数据流已就绪，需补一次 LLM 调用 + 图谱融合</td></tr>
+    <tr><td><b>跨书锚点</b></td><td>教学 prompt 注入学习者已掌握的跨书概念：「你已在《X》学过 Y，本概念与 Y 的关系是…」</td>
+        <td><span class="tag t-next">➡ 下一步</span> learner model 已有数据，prompt 增强即可</td></tr>
+    <tr><td><b>知识密度标记</b></td><td>LLM 评估概念的「重要性 × 新颖性」（相对学习者画像），标记在路径阶梯上</td>
+        <td><span class="tag t-later">○ 规划</span> 依赖学习者画像完善</td></tr>
+    <tr><td><b>概念雷达视图</b></td><td>对每个概念问「它和哪些常见领域相关」，渲染外部知识云（压缩层可视化）</td>
+        <td><span class="tag t-later">○ 规划</span> 外部概念扩充的可视化升级</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>三、演进原则</h2>
+  <ul class="tight">
+    <li><b>标注优先</b>：压缩层输出必须标记（external/analogy），绝不混入证据层——来源约束承诺不被破坏</li>
+    <li><b>服务理解，不服务事实</b>：类比/外部关联用于建立直觉；考试、证据引用仍以原文为准</li>
+    <li><b>按需解压</b>：压缩层知识不在导入时全量落地（贵且噪音大），在教学/追问/自测时按概念即时生成</li>
+    <li><b>灰色即外部</b>：图谱灰色节点 = 压缩层概念的天然视觉语言（已有），点击即「解压」</li>
+  </ul>
+</div>
+
+<footer>ExpertAnything 双层知识架构分析 · 2026-08-14 · 由 AutoClaw 生成</footer>
+</div>
+</body>
+</html>
