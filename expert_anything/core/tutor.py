@@ -96,12 +96,16 @@ def _teach_user(goal, baseline, style, name, definition, evidence, relations, va
 
 EVALUATE_SYSTEM = (
     "你是严格的导师，评估学习者对概念的掌握。只依据【原文证据】和【概念定义】判断，"
-    "不因为回答长就给高分。输出 JSON：{score: 0-1, understood: bool, feedback: 中文点评}。"
+    "不因为回答长就给高分。输出 JSON："
+    "{score: 0-1, understood: bool, feedback: 中文点评, "
+    "reference: 基于原文证据的参考回答（120 字内，要点式），"
+    "gap: 学习者的回答与参考回答的主要差距（40 字内；若已掌握则空串）}。"
 )
 
 EVALUATE_USER = (
     "概念：{name}\n定义：{definition}\n原文证据：{evidence}\n\n"
-    "学习者回答：{answer}\n\n请评估。"
+    "学习者回答：{answer}\n\n"
+    "请评估，并给出参考回答与差距分析。"
 )
 
 
@@ -286,6 +290,8 @@ class Tutor:
                     "score": round(score, 2),
                     "understood": bool(data.get("understood", score >= 0.6)),
                     "feedback": data.get("feedback", "已记录你的回答。"),
+                    "reference": (data.get("reference") or "").strip(),
+                    "gap": (data.get("gap") or "").strip(),
                 }
             except (LLMNotConfigured, LLMError, ValueError, KeyError):
                 # Network/JSON/parse failure → fall back to the length heuristic.
@@ -297,4 +303,6 @@ class Tutor:
             "score": score,
             "understood": score >= 0.6,
             "feedback": "（未接入 LLM，这是基于回答长度的粗略估计，不是真实评估。）",
+            "reference": "",
+            "gap": "",
         }

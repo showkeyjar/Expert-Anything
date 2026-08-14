@@ -647,3 +647,62 @@ class TeachResultView(QWidget):
             ))
 
         root.addStretch()
+
+    # -- evaluation feedback ---------------------------------------------------
+    def append_evaluation(self, score: float, feedback: str,
+                          reference: str = "", gap: str = "") -> None:
+        """Append an evaluation card (score + feedback + reference answer)."""
+        root = self.layout()
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #F3E5F5; border: 1px solid #CE93D8;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        # score row
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        head.addWidget(_sec_title("评估结果", "#6A1B9A"))
+        score_lbl = QLabel(f"{score:.0%}")
+        score_lbl.setStyleSheet(
+            f"background-color: {mastery_color(score)}; color: white;"
+            "padding: 3px 12px; border-radius: 9px; font-size: 13px; font-weight: bold;"
+        )
+        head.addWidget(score_lbl)
+        head.addStretch()
+        lay.addLayout(head)
+
+        if feedback:
+            fb = QLabel(feedback)
+            fb.setWordWrap(True)
+            fb.setStyleSheet("font-size: 13px; color: #37474F;")
+            lay.addWidget(fb)
+
+        if reference:
+            ref_title = QLabel("参考回答（基于原文证据）")
+            ref_title.setStyleSheet("font-size: 11.5px; font-weight: bold; color: #6A1B9A; margin-top: 2px;")
+            lay.addWidget(ref_title)
+            ref = QLabel(reference)
+            ref.setWordWrap(True)
+            ref.setStyleSheet(
+                "font-size: 12.5px; color: #37474F; background-color: #EDE7F6;"
+                "border-radius: 6px; padding: 8px;"
+            )
+            lay.addWidget(ref)
+
+        if gap:
+            gap_title = QLabel("与参考的差距")
+            gap_title.setStyleSheet("font-size: 11.5px; font-weight: bold; color: #C62828; margin-top: 2px;")
+            lay.addWidget(gap_title)
+            gp = QLabel(gap)
+            gp.setWordWrap(True)
+            gp.setStyleSheet(
+                "font-size: 12.5px; color: #B71C1C; background-color: #FFEBEE;"
+                "border-radius: 6px; padding: 8px;"
+            )
+            lay.addWidget(gp)
+
+        root.insertWidget(root.count() - 1, card)

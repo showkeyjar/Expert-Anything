@@ -261,6 +261,43 @@ def adaptive_path(asset: KnowledgeAsset, learner_state: dict, anomaly_ids: set |
     return items[:limit]
 
 
+def due_for_review(state: dict, limit: int = 8) -> list[dict]:
+    """Concepts whose mastery needs refreshing (spacing-effect based).
+
+    A concept becomes *due* when the days since its last evaluation exceed a
+    review interval that grows with mastery: weak concepts (mastery < 0.6) are
+    due after 1 day, stronger ones after ~3-6 days (3 * (1 + mastery)). This
+    turns the Learner Model into an active review scheduler instead of a
+    passive scoreboard, so learned material is revisited right before it would
+    fade (Ebbinghaus-style spacing).
+    """
+    from datetime import datetime, timezone
+
+    out: list[dict] = []
+    now = datetime.now(timezone.utc)
+    for key, rec in state.get("concepts", {}).items():
+        mastery = float(rec.get("mastery", 0.0))
+        updated = rec.get("updated_at", "")
+        if not updated or mastery <= 0:
+            continue  # never evaluated -> nothing to refresh yet
+        try:
+            last = datetime.fromisoformat(updated)
+        except ValueError:
+            continue
+        days = (now - last).total_seconds() / 86400
+        interval = 1.0 if mastery < 0.6 else 3.0 * (1.0 + mastery)
+        if days >= interval:
+            out.append({
+                "key": key,
+                "name": rec.get("name", key),
+                "mastery": mastery,
+                "days_since": round(days, 1),
+                "interval": round(interval, 1),
+            })
+    out.sort(key=lambda x: x["days_since"], reverse=True)
+    return out[:limit]
+
+
 def weaknesses(state: dict, limit: int = 8) -> list[dict]:
     out = []
     for key, rec in state.get("concepts", {}).items():

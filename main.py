@@ -30,7 +30,7 @@ if sys_path not in sys.path:
 
 from expert_anything.core.learner import (
     adaptive_path, normalize, register_asset, record_evaluation,
-    mark_completed, load as load_learner, save as save_learner,
+    mark_completed, due_for_review, load as load_learner, save as save_learner,
 )
 from expert_anything.core.extraction import extract_knowledge
 from expert_anything.core.teacher import build_teacher_model, TeacherModel
@@ -573,6 +573,27 @@ class MainWindow(QMainWindow):
         concepts_layout.setContentsMargins(20, 16, 20, 20)
         concepts_layout.setSpacing(8)
 
+        # Review queue (spacing-effect based)
+        due = due_for_review(self.learner)
+        if due:
+            due_title = QLabel(f"待复习（{len(due)} 个概念 · 基于遗忘曲线）")
+            due_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #C62828; padding: 4px 0;")
+            concepts_layout.addWidget(due_title)
+            for d in due:
+                card = KnowledgeCard(
+                    concept_name=d['name'],
+                    mastery=d['mastery'],
+                    tags=[f"距上次 {d['days_since']:.0f} 天"],
+                    is_top=False,
+                )
+                card.clicked.connect(self._open_concept_panel_by_name)
+                concepts_layout.addWidget(card)
+            due_hint = QLabel(
+                "间隔复习：薄弱概念 1 天、掌握概念 3-6 天到期——在遗忘前重温效果最好。"
+            )
+            due_hint.setStyleSheet("font-size: 11px; color: #9E9E9E;")
+            concepts_layout.addWidget(due_hint)
+
         section_title = QLabel("所有概念掌握度")
         section_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32; padding: 4px 0;")
         concepts_layout.addWidget(section_title)
@@ -993,6 +1014,36 @@ class MainWindow(QMainWindow):
         self._teach_progress.setValue(30)
         self._teach_result_label.setText("正在生成教学内容...")
         self._teach_result_label.repaint()
+
+        # focus the position graph on the concept being taught
+        try:
+            asset = self.get_asset()
+            if asset is not None:
+                mastery_map = {}
+                for c in asset.concepts:
+                    norm_name = normalize(c.name)
+                    mastery_map[c.id] = (
+                        self.learner.get('concepts', {}).get(norm_name, {}).get('mastery', 0.0)
+                    )
+                anomaly_ids = set()
+                td = self.teacher_models.get(self.current_asset_id)
+                if td:
+                    try:
+                        anomaly_ids = anomaly_concept_ids(
+                            asset, TeacherModel.from_dict(td)
+                        )
+                    except Exception:
+                        anomaly_ids = set()
+                self._teach_graph.set_asset(
+                    asset,
+                    mastery_map=mastery_map,
+                    anomaly_ids=anomaly_ids,
+                    current_id=concept.id,
+                )
+                self._teach_graph.focus_concept(concept.id)
+                self._teach_graph.setVisible(True)
+        except Exception:
+            self._teach_graph.setVisible(False)
         
         # Run teaching in background
         self._teach_worker = TeachWorker(self.current_tutor, concept)
@@ -1022,6 +1073,7 @@ class MainWindow(QMainWindow):
         view.submit_requested.connect(self._on_submit_answer)
         if view.answer_input is not None:
             self._teach_answer_input = view.answer_input
+        self._teach_view = view
         self._teach_result_area.setWidget(view)
 
         self._teach_progress.setVisible(False)
@@ -1072,15 +1124,18 @@ class MainWindow(QMainWindow):
             )
             self.save_learner_state()
             
-            # Show result
-            msg = f"得分: {score:.2f}\n"
-            if understood:
-                msg += "✓ 已掌握"
+            # Show result as an evaluation card (reference + gap)
+            reference = result.get('reference', '')
+            gap = result.get('gap', '')
+            if getattr(self, "_teach_view", None) is not None:
+                self._teach_view.append_evaluation(
+                    score, feedback, reference, gap
+                )
             else:
-                msg += "✗ 需继续努力"
-            msg += f"\n\n反馈: {feedback}"
-            
-            QMessageBox.information(self, "评估结果", msg)
+                msg = f"得分: {score:.2f}\n"
+                msg += "已掌握" if understood else "需继续努力"
+                msg += f"\n\n反馈: {feedback}"
+                QMessageBox.information(self, "评估结果", msg)
             
             # Refresh learner view if needed
             self._refresh_all_views()
@@ -1488,6 +1543,16 @@ class MainWindow(QMainWindow):
         self._teach_result_label = QLabel("选择一个概念开始学习")
         self._teach_result_label.setStyleSheet("color: #757575; font-size: 13px;")
         right_layout.addWidget(self._teach_result_label)
+
+        # concept-position mini graph: shows where the current concept sits
+        self._teach_graph = KnowledgeGraphView()
+        self._teach_graph.setMinimumHeight(190)
+        self._teach_graph.setStyleSheet(
+            "QGraphicsView { background-color: white; border: 1px solid #E0E0E0;"
+            "border-radius: 8px; }"
+        )
+        self._teach_graph.setVisible(False)
+        right_layout.addWidget(self._teach_graph)
         
         self._teach_progress = QProgressBar()
         self._teach_progress.setVisible(False)
