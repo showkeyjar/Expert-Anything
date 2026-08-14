@@ -188,7 +188,17 @@ def _extract_with_llm(
                 )
     if not merged["concepts"]:
         raise ValueError("所有分块都未能解析为 JSON")
-    # Cap the merged concept set so very long docs still yield a focused model.
+    # Drop TOC-like noise concepts (chapter/section headings) so the focused
+    # model keeps real concepts, then cap the merged set.
+    _NOISE = {
+        "part i", "part ii", "part iii", "part iv", "introduction",
+        "conclusion", "definitions", "results", "contents",
+        "table of contents", "preface", "acknowledgments", "index",
+        "bibliography", "appendix",
+    }
+    merged["concepts"] = [
+        c for c in merged["concepts"] if _norm(c.get("name", "")) not in _NOISE
+    ]
     merged["concepts"] = merged["concepts"][:12]
     asset = _assemble(merged, text, filename, method="llm_extraction_chunked_v1")
     if on_progress:

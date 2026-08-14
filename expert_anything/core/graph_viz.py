@@ -154,10 +154,14 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
         for r in asset.relations:
             if r.source in keep_set and r.target in keep_set and r.source != r.target:
                 edges.append((r.source, r.target, r.label or ""))
-        if not edges:
+        if len(edges) < 4:
+            # sparse relations -> backfill the learning-path skeleton so the
+            # graph always shows a visible "how to study this" structure.
             seq = [cid for cid in asset.learning_path if cid in keep_set]
+            have = {(s, t) for s, t, _ in edges}
             for a, b in zip(seq, seq[1:]):
-                edges.append((a, b, "→"))
+                if (a, b) not in have and (b, a) not in have:
+                    edges.append((a, b, "路径相邻"))
         return nodes, edges
 
     # --- focus mode --------------------------------------------------------
@@ -200,6 +204,21 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
             edges.append((r.source, r.target, r.label or ""))
     for c2 in context:
         edges.append((focus_id, c2, "路径相邻"))
+    # if the ego network has almost no relation edges, add learning-path
+    # neighbours as faint context so the focused view is never a lone node
+    if len(edges) < 2 and asset.learning_path:
+        try:
+            idx = asset.learning_path.index(focus_id)
+        except ValueError:
+            idx = -1
+        if idx >= 0:
+            for j in (idx - 1, idx + 1):
+                if 0 <= j < len(asset.learning_path):
+                    c2 = asset.learning_path[j]
+                    if c2 in id_to_name and c2 not in roles:
+                        context.append(c2)
+                        roles[c2] = "context"
+                        edges.append((focus_id, c2, "路径相邻"))
     return nodes, edges
 
 

@@ -896,3 +896,52 @@ class TrendChartView(QWidget):
                              short)
 
         painter.end()
+
+# --------------------------------------------------------------------------- #
+# MasteryDistributionBar
+# --------------------------------------------------------------------------- #
+class MasteryDistributionBar(QWidget):
+    """Single horizontal bar showing the mastery distribution.
+
+    Segments (left -> right): mastered (green) / learning (amber) /
+    weak (orange) / unstudied (grey), widths proportional to counts.
+    """
+
+    def __init__(self, counts: dict[str, int] | None = None, parent=None):
+        super().__init__(parent)
+        self._counts = counts or {"mastered": 0, "learning": 0, "weak": 0, "unstudied": 0}
+        self.setMinimumHeight(22)
+
+    def set_counts(self, counts: dict[str, int]) -> None:
+        self._counts = counts
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        painter = _QPainter(self)
+        painter.setRenderHint(_QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        segs = [
+            ("mastered", "#4CAF50"),
+            ("learning", "#FF9800"),
+            ("weak", "#F44336"),
+            ("unstudied", "#BDBDBD"),
+        ]
+        total = sum(self._counts.get(k, 0) for k, _ in segs)
+        if total <= 0:
+            painter.setPen(_QColor("#9E9E9E"))
+            small = _QFont()
+            small.setPointSize(9)
+            painter.setFont(small)
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "暂无学习数据")
+            painter.end()
+            return
+        x = 0.0
+        for key, color in segs:
+            frac = self._counts.get(key, 0) / total
+            width = w * frac
+            if width >= 1:
+                painter.setPen(_QColor(color).darker(120))
+                painter.setBrush(_QColor(color))
+                painter.drawRect(int(x), 0, max(1, int(width)), h)
+            x += width
+        painter.end()

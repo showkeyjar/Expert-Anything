@@ -51,6 +51,7 @@ from expert_anything.ui.pyside_widgets import (
     PathLadderView,
     TeachResultView,
     TrendChartView,
+    MasteryDistributionBar,
 )
 
 # Thread-safe progress signal
@@ -613,6 +614,72 @@ class MainWindow(QMainWindow):
         stat_row.addStretch()
         layout.addLayout(stat_row)
 
+        # Learning overview: plain-language narrative + mastery distribution
+        concepts_all = self.learner.get('concepts', {})
+        total_c = len(concepts_all)
+        mastered_c = sum(1 for v in concepts_all.values() if float(v.get('mastery', 0)) >= 0.6)
+        learning_c = sum(1 for v in concepts_all.values() if 0.3 <= float(v.get('mastery', 0)) < 0.6)
+        weak_c = sum(1 for v in concepts_all.values() if 0 < float(v.get('mastery', 0)) < 0.3)
+        unstudied_c = sum(1 for v in concepts_all.values() if float(v.get('mastery', 0)) == 0)
+        avg_c = (sum(float(v.get('mastery', 0)) for v in concepts_all.values()) / total_c) if total_c else 0
+
+        weak_names = sorted(
+            (v.get('name', k) for k, v in concepts_all.items()
+             if 0 < float(v.get('mastery', 0)) < 0.6),
+            key=lambda n: float(next(
+                (v.get('mastery', 0) for k2, v in concepts_all.items() if v.get('name') == n), 0)),
+        )[:3]
+
+        summary = f"你共接触 {total_c} 个概念：已掌握 {mastered_c} 个（{mastered_c / total_c:.0%}），平均掌握度 {avg_c:.0%}。"
+        if due:
+            summary += f"有 {len(due)} 个概念到了复习时间（如「{due[0]['name']}」），现在复习效果最好。"
+        if weak_names:
+            summary += f"较薄弱的是：{'、'.join(weak_names)}。"
+        elif total_c and mastered_c == total_c:
+            summary += "全部掌握，非常棒！"
+
+        overview = QFrame()
+        overview.setStyleSheet(
+            "QFrame { background-color: white; border: 1px solid #E0E0E0;"
+            "border-radius: 10px; }"
+        )
+        ov_lay = QVBoxLayout(overview)
+        ov_lay.setContentsMargins(16, 12, 16, 12)
+        ov_lay.setSpacing(6)
+
+        ov_title = QLabel("学习总览")
+        ov_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
+        ov_lay.addWidget(ov_title)
+
+        sum_lbl = QLabel(summary)
+        sum_lbl.setWordWrap(True)
+        sum_lbl.setStyleSheet("font-size: 13px; color: #37474F;")
+        ov_lay.addWidget(sum_lbl)
+
+        dist = MasteryDistributionBar({
+            "mastered": mastered_c, "learning": learning_c,
+            "weak": weak_c, "unstudied": unstudied_c,
+        })
+        ov_lay.addWidget(dist)
+
+        leg_row = QHBoxLayout()
+        leg_row.setSpacing(6)
+        for color, text in [
+            ("#4CAF50", f"已掌握 {mastered_c}"),
+            ("#FF9800", f"学习中 {learning_c}"),
+            ("#F44336", f"薄弱 {weak_c}"),
+            ("#BDBDBD", f"未学 {unstudied_c}"),
+        ]:
+            dot = QLabel("●")
+            dot.setStyleSheet(f"color: {color}; font-size: 10px;")
+            t = QLabel(text)
+            t.setStyleSheet("color: #757575; font-size: 11px;")
+            leg_row.addWidget(dot)
+            leg_row.addWidget(t)
+        leg_row.addStretch()
+        ov_lay.addLayout(leg_row)
+        layout.addWidget(overview)
+
         # Tab widget for concepts and history
         tabs = QTabWidget()
         tabs.setStyleSheet("""
@@ -654,29 +721,43 @@ class MainWindow(QMainWindow):
         section_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32; padding: 4px 0;")
         concepts_layout.addWidget(section_title)
 
-        concepts = sorted(
-            self.learner.get('concepts', {}).values(),
-            key=lambda x: x.get('mastery', 0)
-        )
+        # group concepts by their first source asset
+        groups = {}
+        for key, rec in self.learner.get('concepts', {}).items():
+            srcs = rec.get('sources', [])
+            gid = srcs[0] if srcs else '?'
+            groups.setdefault(gid, []).append(rec)
 
-        for i, concept in enumerate(concepts):
-            name = concept.get('name', concept.get('key', '?'))
-            mastery = concept.get('mastery', 0)
-            sources = concept.get('sources', [])
-            tags = []
-            if mastery < 0.3:
-                tags.append("薄弱")
-            if len(sources) > 1:
-                tags.append("跨资产")
-
-            card = KnowledgeCard(
-                concept_name=name,
-                mastery=mastery,
-                tags=tags,
-                is_top=(i == 0 and mastery == 0)
+        for gid, items in groups.items():
+            g_title = (
+                self.assets.get(gid, {}).get('title', '未知资产')
+                if gid != '?' else '其他来源'
             )
-            card.clicked.connect(self._open_concept_panel_by_name)
-            concepts_layout.addWidget(card)
+            g_label = QLabel(f"📚 {g_title}（{len(items)} 个概念）")
+            g_label.setStyleSheet(
+                "font-size: 12.5px; font-weight: bold; color: #0c4a6e;"
+                "background-color: #E8F0F8; border-radius: 4px; padding: 4px 8px; margin-top: 6px;"
+            )
+            concepts_layout.addWidget(g_label)
+
+            for i, concept in enumerate(sorted(items, key=lambda x: x.get('mastery', 0))):
+                name = concept.get('name', concept.get('key', '?'))
+                mastery = concept.get('mastery', 0)
+                sources = concept.get('sources', [])
+                tags = []
+                if mastery < 0.3:
+                    tags.append("薄弱")
+                if len(sources) > 1:
+                    tags.append("跨资产")
+
+                card = KnowledgeCard(
+                    concept_name=name,
+                    mastery=mastery,
+                    tags=tags,
+                    is_top=(i == 0 and mastery == 0)
+                )
+                card.clicked.connect(self._open_concept_panel_by_name)
+                concepts_layout.addWidget(card)
 
         concepts_layout.addStretch()
         tabs.addTab(concepts_widget, "概念掌握度")
@@ -1842,27 +1923,56 @@ class MainWindow(QMainWindow):
                 anom_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #E65100; margin-top: 12px;")
                 content_layout.addWidget(anom_label)
                 
-                anom_text = QTextEdit()
-                anom_text.setReadOnly(True)
-                anom_text.setMaximumHeight(150)
-                anom_lines = []
+                kind_labels = {
+                    "contradiction": "矛盾", "undefined_term": "未定义术语",
+                    "logical_gap": "逻辑断点", "surprising_claim": "反常主张",
+                    "learner_gap": "学习者信号", "needs_llm": "需要 LLM",
+                }
+                sev_colors = {
+                    "high": "#C62828", "medium": "#E65100",
+                    "low": "#616161", "info": "#0277BD",
+                }
+                sev_bgs = {
+                    "high": "#FFEBEE", "medium": "#FFF3E0",
+                    "low": "#F5F5F5", "info": "#E1F5FE",
+                }
                 for a in anomalies:
                     kind = a.get('kind', '?')
                     desc = a.get('description', '')
                     sev = a.get('severity', 'medium')
-                    sev_color = "red" if sev == "high" else ("orange" if sev == "medium" else "gray")
-                    anom_lines.append(f"[{sev.upper()}] {kind}: {desc}")
-                anom_text.setPlainText("\n".join(anom_lines))
-                anom_text.setStyleSheet("""
-                    QTextEdit {
-                        background-color: #FFF3E0;
-                        border: 1px solid #FFE0B2;
-                        border-radius: 6px;
-                        padding: 8px;
-                        font-size: 12px;
-                    }
-                """)
-                content_layout.addWidget(anom_text)
+                    loc = a.get('location', '')
+                    sev_color = sev_colors.get(sev, "#616161")
+                    sev_bg = sev_bgs.get(sev, "#F5F5F5")
+
+                    acard = QFrame()
+                    acard.setStyleSheet(
+                        f"QFrame {{ background-color: {sev_bg};"
+                        f"border-left: 4px solid {sev_color}; border-radius: 6px; }}"
+                    )
+                    a_lay = QVBoxLayout(acard)
+                    a_lay.setContentsMargins(12, 8, 12, 8)
+                    a_lay.setSpacing(4)
+
+                    head = QHBoxLayout()
+                    head.setSpacing(8)
+                    badge = QLabel(f"{kind_labels.get(kind, kind)} · {sev}")
+                    badge.setStyleSheet(
+                        f"background-color: {sev_color}; color: white;"
+                        "padding: 2px 10px; border-radius: 8px; font-size: 10px; font-weight: bold;"
+                    )
+                    head.addWidget(badge)
+                    if loc:
+                        loc_lbl = QLabel(f"位置：{loc[:40]}")
+                        loc_lbl.setStyleSheet("color: #757575; font-size: 10.5px;")
+                        head.addWidget(loc_lbl)
+                    head.addStretch()
+                    a_lay.addLayout(head)
+
+                    desc_lbl = QLabel(desc)
+                    desc_lbl.setWordWrap(True)
+                    desc_lbl.setStyleSheet("font-size: 12.5px; color: #37474F;")
+                    a_lay.addWidget(desc_lbl)
+                    content_layout.addWidget(acard)
             
             # Concept notes section
             notes = teacher_data.get('concept_notes', [])
