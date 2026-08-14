@@ -104,19 +104,45 @@ class TeacherWorker(QThread):
 
 class TeachWorker(QThread):
     """Background thread for teaching session."""
-    
+
     finished = Signal(dict)
     error = Signal(str)
-    
-    def __init__(self, tutor, concept):
+
+    def __init__(self, tutor, concept, vary=0):
         super().__init__()
         self.tutor = tutor
         self.concept = concept
-    
+        self.vary = vary
+
     def run(self):
         try:
-            result = self.tutor.teach(self.concept)
+            result = self.tutor.teach(self.concept, vary=self.vary)
             self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class FollowUpWorker(QThread):
+    """Background thread for grounded follow-up answers."""
+
+    finished = Signal(str, str)  # question, answer
+    error = Signal(str)
+
+    def __init__(self, tutor, concept, question, lesson, history):
+        super().__init__()
+        self.tutor = tutor
+        self.concept = concept
+        self.question = question
+        self.lesson = lesson
+        self.history = history
+
+    def run(self):
+        try:
+            answer = self.tutor.follow_up(
+                self.concept, self.question,
+                lesson=self.lesson, history=self.history,
+            )
+            self.finished.emit(self.question, answer)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -586,7 +612,9 @@ class MainWindow(QMainWindow):
                     tags=[f"距上次 {d['days_since']:.0f} 天"],
                     is_top=False,
                 )
-                card.clicked.connect(self._open_concept_panel_by_name)
+                card.clicked.connect(
+                    lambda e, n=d['name']: self._start_teach_by_name(n, review=True)
+                )
                 concepts_layout.addWidget(card)
             due_hint = QLabel(
                 "间隔复习：薄弱概念 1 天、掌握概念 3-6 天到期——在遗忘前重温效果最好。"
@@ -944,13 +972,18 @@ class MainWindow(QMainWindow):
         if c is not None:
             self._open_concept_panel(c.id)
 
-    def _start_teach_by_name(self, concept_name: str) -> None:
-        """Select a concept in the teach view and start the lesson."""
+    def _start_teach_by_name(self, concept_name: str, review: bool = False) -> None:
+        """Select a concept in the teach view and start the lesson.
+
+        ``review=True`` starts a review lesson (vary>0 -> the LLM is told to
+        explain from a different angle so the review adds something new).
+        """
         self.on_nav_click("teach")
         for i in range(self._teach_concept_list.count()):
             if self._teach_concept_list.item(i).text() == concept_name:
                 self._teach_concept_list.setCurrentRow(i)
                 break
+        self._review_mode = review
         self._on_start_teach()
 
     def _focus_in_graph(self, concept_id: str) -> None:
@@ -1000,11 +1033,12 @@ class MainWindow(QMainWindow):
         if self.current_asset_id:
             self.current_tutor = Tutor(asset, llm=self.llm_client)
 
-        # Show teaching content
-        self._show_teaching_content(concept)
+        # Show teaching content (review -> fresh angle)
+        vary = 1 if getattr(self, "_review_mode", False) else 0
+        self._show_teaching_content(concept, vary=vary)
 
-    def _show_teaching_content(self, concept):
-        """Show teaching content for a concept."""
+    def _show_teaching_content(self, concept, vary=0):
+        """Show teaching content for a concept (vary>0 = fresh angle, review)."""
         if not self.current_tutor:
             asset = self.get_asset()
             self.current_tutor = Tutor(asset, llm=self.llm_client)
@@ -1046,7 +1080,7 @@ class MainWindow(QMainWindow):
             self._teach_graph.setVisible(False)
         
         # Run teaching in background
-        self._teach_worker = TeachWorker(self.current_tutor, concept)
+        self._teach_worker = TeachWorker(self.current_tutor, concept, vary=vary)
         self._teach_worker.finished.connect(self._on_teach_finished)
         self._teach_worker.error.connect(self._on_teach_error)
         self._teach_worker.start()
@@ -1071,13 +1105,48 @@ class MainWindow(QMainWindow):
 
         view = TeachResultView(result)
         view.submit_requested.connect(self._on_submit_answer)
+        view.followup_requested.connect(self._on_followup)
+        self._teach_lesson = result
         if view.answer_input is not None:
             self._teach_answer_input = view.answer_input
         self._teach_view = view
+        self._teach_concept_now = result.get("concept", "")
         self._teach_result_area.setWidget(view)
 
         self._teach_progress.setVisible(False)
         self._teach_result_label.setText("")
+
+    def _on_followup(self, question: str) -> None:
+        """Answer a follow-up question in the background (grounded Q&A)."""
+        if self.current_tutor is None:
+            asset = self.get_asset()
+            if asset is None:
+                return
+            self.current_tutor = Tutor(asset, llm=self.llm_client)
+        concept = None
+        asset = self.get_asset()
+        if asset is not None:
+            concept = asset.concept_by_name(self._teach_concept_now or "")
+        if concept is None:
+            return
+
+        self._followup_history = getattr(self, "_followup_history", [])
+        lesson = getattr(self, "_teach_lesson", None)
+        self._followup_worker = FollowUpWorker(
+            self.current_tutor, concept, question, lesson, self._followup_history
+        )
+        self._followup_worker.finished.connect(self._on_followup_done)
+        self._followup_worker.error.connect(
+            lambda msg: self._teach_view.append_exchange(question, f"（追问失败：{msg}）")
+        )
+        self._followup_worker.start()
+
+    def _on_followup_done(self, question: str, answer: str) -> None:
+        if getattr(self, "_teach_view", None) is not None:
+            self._teach_view.append_exchange(question, answer)
+        self._followup_history = getattr(self, "_followup_history", [])
+        self._followup_history.append((question, answer))
+        self._followup_history = self._followup_history[-4:]
 
     def _on_submit_answer(self):
         """Handle answer submission."""

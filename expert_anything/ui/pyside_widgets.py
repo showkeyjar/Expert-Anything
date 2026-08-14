@@ -523,6 +523,7 @@ class TeachResultView(QWidget):
     """
 
     submit_requested = Signal()
+    followup_requested = Signal(str)
 
     def __init__(self, result: dict, parent=None):
         super().__init__(parent)
@@ -647,6 +648,7 @@ class TeachResultView(QWidget):
             ))
 
         root.addStretch()
+        self._build_followup()
 
     # -- evaluation feedback ---------------------------------------------------
     def append_evaluation(self, score: float, feedback: str,
@@ -706,3 +708,74 @@ class TeachResultView(QWidget):
             lay.addWidget(gp)
 
         root.insertWidget(root.count() - 1, card)
+
+    # -- follow-up conversation -------------------------------------------------
+    def _build_followup(self) -> None:
+        """Question box below the practice card -> grounded Q&A."""
+        self._lesson = None
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #F5F5F5; border: 1px solid #E0E0E0;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        t = QLabel("还有疑问？追问导师（基于原文证据回答）")
+        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #37474F;")
+        lay.addWidget(t)
+
+        self._followup_input = QTextEdit()
+        self._followup_input.setPlaceholderText("例如：这个概念和刚才讲的另一个概念有什么区别？")
+        self._followup_input.setMaximumHeight(64)
+        self._followup_input.setStyleSheet(
+            "QTextEdit { border: 1px solid #BDBDBD; border-radius: 6px;"
+            "padding: 6px; font-size: 12.5px; background-color: white; }"
+        )
+        lay.addWidget(self._followup_input)
+
+        ask_btn = QPushButton("追问")
+        ask_btn.setStyleSheet(
+            "QPushButton { background-color: #0284C7; color: white; border: none;"
+            "border-radius: 6px; padding: 7px 18px; font-size: 12.5px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #0369A1; }"
+        )
+        ask_btn.clicked.connect(self._ask)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        btn_row.addWidget(ask_btn)
+        lay.addLayout(btn_row)
+
+        self.layout().insertWidget(self.layout().count() - 1, card)
+
+    def _ask(self) -> None:
+        q = self._followup_input.toPlainText().strip()
+        if not q:
+            return
+        self._followup_input.clear()
+        self.followup_requested.emit(q)
+
+    def append_exchange(self, question: str, answer: str) -> None:
+        """Append a Q&A bubble pair to the conversation."""
+        root = self.layout()
+        q_lbl = QLabel(question)
+        q_lbl.setWordWrap(True)
+        q_lbl.setStyleSheet(
+            "background-color: #E1F5FE; color: #01579B; border-radius: 8px;"
+            "padding: 8px 10px; font-size: 12.5px;"
+        )
+        a_lbl = QLabel(answer)
+        a_lbl.setWordWrap(True)
+        a_lbl.setStyleSheet(
+            "background-color: #F5F5F5; color: #37474F; border-radius: 8px;"
+            "padding: 8px 10px; font-size: 12.5px;"
+        )
+        q_row = QHBoxLayout()
+        q_row.addStretch()
+        q_row.addWidget(q_lbl, 3)
+        root.insertLayout(root.count() - 1, q_row)
+        a_row = QHBoxLayout()
+        a_row.addWidget(a_lbl, 3)
+        a_row.addStretch()
+        root.insertLayout(root.count() - 1, a_row)

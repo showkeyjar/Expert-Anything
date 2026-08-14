@@ -109,6 +109,14 @@ EVALUATE_USER = (
 )
 
 
+FOLLOWUP_SYSTEM = (
+    "你是耐心的私人导师，正在辅导学习者学习《{title}》中的「{name}」概念。"
+    "回答学习者的追问。铁律：只基于【原文证据】和【已有讲解】回答，"
+    "不编造原文没有的内容；回答具体、简洁（150 字内），优先引用原文证据；"
+    "如果追问超出材料范围，明确说明材料里没有相关内容，不要硬答。"
+)
+
+
 class Tutor:
     def __init__(self, asset: KnowledgeAsset, llm: LLMClient | None = None) -> None:
         self.asset = asset
@@ -261,6 +269,61 @@ class Tutor:
             "practice": f"用自己的话解释「{concept.name}」，并指出原文中支持你回答的关键句。",
             "evidence": concept.evidence,
         }
+
+    # --- follow-up questions -------------------------------------------------
+    def follow_up(self, concept: Concept, question: str,
+                  lesson: dict | None = None,
+                  history: list[tuple[str, str]] | None = None) -> str:
+        """Answer a follow-up question grounded in the concept + prior lesson.
+
+        ``lesson`` is the last teach() result (explanation/example/steps);
+        ``history`` carries the last few (question, answer) pairs so the
+        conversation stays coherent. Returns plain text; degrades to a
+        marked message when no LLM is available.
+        """
+        if self.llm is None:
+            return "（未接入 LLM，无法追问。配置 API Key 后可进行对话式追问。）"
+        evidence = "\n".join(f"- {e}" for e in (concept.evidence or ["（无原文证据）"]))
+        relations = _neighbor_context(self.asset, concept)
+        lesson_txt = ""
+        if lesson:
+            parts = []
+            for k in ("explanation", "example", "practice"):
+                if lesson.get(k):
+                    parts.append(f"{k}: {lesson[k]}")
+            lesson_txt = "\n".join(parts)[:1000]
+        hist_txt = ""
+        if history:
+            hist_txt = "\n".join(
+                f"学习者问：{q}\n导师答：{a}" for q, a in history[-2:]
+            )
+        user = (
+            "概念定义：{defn}\n"
+            "原文证据：\n{evidence}\n"
+            "关系网络：\n{relations}\n\n"
+            "已有讲解：\n{lesson}\n\n"
+            "最近对话：\n{hist}\n\n"
+            "学习者追问：{question}\n\n请回答。"
+        ).format(
+            defn=concept.definition or concept.summary or "（无定义）",
+            evidence=evidence,
+            relations=relations,
+            lesson=lesson_txt or "（无）",
+            hist=hist_txt or "（无）",
+            question=question.strip(),
+        )
+        try:
+            return self.llm.chat(
+                [
+                    Message("system", FOLLOWUP_SYSTEM.format(
+                        title=self.asset.title, name=concept.name)),
+                    Message("user", user),
+                ],
+                temperature=0.4,
+                max_tokens=500,
+            )
+        except (LLMNotConfigured, LLMError):
+            return "（LLM 暂时不可用，无法回答追问。）"
 
     # --- evaluation --------------------------------------------------------
     def evaluate(self, concept: Concept, answer: str) -> dict:
