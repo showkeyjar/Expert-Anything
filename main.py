@@ -2103,8 +2103,8 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 4)
         splitter.setSizes([230, 760])
-        
-        layout.addWidget(splitter)
+
+        layout.addWidget(splitter, 1)  # fill the whole window height
 
         return widget
 
