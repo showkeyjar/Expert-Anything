@@ -1922,11 +1922,21 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header
-        header = self._view_header(
-            "教学会话",
-            "与 Tutor Agent 进行个性化学习",
+        # Mini header: one slim line so the teaching area gets max space
+        header = QFrame()
+        header.setStyleSheet(
+            "background-color: white; border-bottom: 1px solid #E0E0E0;"
         )
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(20, 5, 20, 5)
+        h_lay.setSpacing(10)
+        h_t = QLabel("教学会话")
+        h_t.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
+        h_lay.addWidget(h_t)
+        h_s = QLabel("选择概念 · 学习 · 答题 · 追问")
+        h_s.setStyleSheet("color: #9E9E9E; font-size: 11px;")
+        h_lay.addWidget(h_s)
+        h_lay.addStretch()
         layout.addWidget(header)
 
         # Splitter for concept list and content

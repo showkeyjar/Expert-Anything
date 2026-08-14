@@ -1,21 +1,21 @@
 """PySide6 interactive knowledge-graph widget for ExpertAnything.
 
-Reuses the layout math from ``core.graph_viz`` (ego-network selection,
-radial focus layout, layered full-network layout) so the desktop graph stays
-consistent with the offline PNG renderer and with the retired Flet widget:
+A *living* concept network (mind-map style):
 
-- **Full view**: layered/grid layout of the (capped) whole network.
-- **Focus view**: single-click a node to re-layout its ego-network radially
-  (focus + relation neighbours, path neighbours as faint context); click
-  empty space to return to the full view.
-- **Mastery colours**: green >= 0.6, amber >= 0.3, orange > 0, grey unseen.
-- **Anomaly highlight**: orange border on concepts touched by open anomalies.
-- **Recommended-next highlight**: cyan border.
-- **Interaction**: drag to pan, wheel to zoom, double-click to start teaching.
+- **Force-directed layout**: in full-map mode the nodes drift under a
+  repulsion + spring + gravity simulation until they settle, then keep a
+  subtle floating motion — the map feels alive, not static.
+- **Drag nodes**: grab any node and pull it; connected neighbours follow
+  via springs.
+- **Roam**: hover highlights neighbours, single-click opens the concept
+  panel and re-centres the ego network on it, double-click teaches.
+- **Scope**: current book colourful, other assets grey (``grey_ids``).
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QPointF, QRectF
+import math
+
+from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QGraphicsLineItem,
@@ -39,10 +39,9 @@ from expert_anything.core.graph_viz import (
     _select_nodes,
 )
 from expert_anything.core.models import KnowledgeAsset
-from expert_anything.core.teacher import anomaly_concept_ids
 
 # --------------------------------------------------------------------------- #
-# colour palette (consistent with core/graph_viz + the retired Flet widget)
+# colour palette (consistent with core/graph_viz)
 # --------------------------------------------------------------------------- #
 _FILL_GREY = "#E1E4E8"        # unseen
 _FILL_GREEN = "#C5E6C6"       # mastered  >= 0.6
@@ -78,12 +77,25 @@ def _mastery_fill(m: float) -> QColor:
     return _hex(_FILL_GREY)
 
 
-class KnowledgeGraphView(QGraphicsView):
-    """Interactive, pan/zoom knowledge graph for the desktop app."""
+# physics tuning --------------------------------------------------------------
+_PHYS = {
+    "repulsion": 9000.0,   # k_rep
+    "spring": 0.02,        # k_spring
+    "rest": 175.0,         # rest length
+    "gravity": 0.0012,     # pull to centre
+    "damp": 0.86,
+    "energy_stop": 0.04,   # settle threshold
+    "settle_frames": 40,   # consecutive calm frames before sleeping
+}
+_FLOAT_AMP = 1.2           # drifting amplitude after settling
 
-    concept_clicked = Signal(str)   # double-click -> teach (concept name)
-    node_single_clicked = Signal(str)  # single-click on a node (concept id)
-    view_changed = Signal()         # focus/full mode changed (for status label)
+
+class KnowledgeGraphView(QGraphicsView):
+    """Interactive, living knowledge graph."""
+
+    concept_clicked = Signal(str)          # double-click -> teach (concept name)
+    node_single_clicked = Signal(str)      # single-click on a node (concept id)
+    view_changed = Signal()                # focus/full mode changed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -99,12 +111,29 @@ class KnowledgeGraphView(QGraphicsView):
         self._grey_ids: set[str] = set()
         self._current_id: str | None = None
         self._focus_id: str | None = None
-        self._nodes: list[tuple[str, str, str]] = []   # (cid, name, role)
-        self._pos: dict[str, QPointF] = {}
-        self._box: dict[str, tuple[float, float]] = {}  # cid -> (w, h)
-        self._node_items: dict[str, QGraphicsPathItem] = {}
+        self._nodes: list[tuple[str, str, str]] = []
         self._edges: list[tuple[str, str, str]] = []
+        self._node_items: dict[str, QGraphicsPathItem] = {}
+        self._edge_items: dict[tuple[str, str], QGraphicsLineItem] = {}
         self._hover_cid: str | None = None
+
+        # physics state: cid -> [x, y, vx, vy]
+        self._physics: dict[str, list[float]] = {}
+        self._phys_timer = QTimer(self)
+        self._phys_timer.setInterval(16)
+        self._phys_timer.timeout.connect(self._physics_step)
+        self._float_timer = QTimer(self)
+        self._float_timer.setInterval(50)
+        self._float_timer.timeout.connect(self._float_step)
+        self._calm_frames = 0
+        self._tick = 0
+        self._phases: dict[str, float] = {}
+        self._freqs: dict[str, float] = {}
+
+        # dragging
+        self._drag_cid: str | None = None
+        self._drag_start = QPointF()
+        self._dragged = False
 
     # ------------------------------------------------------------------ #
     # public API
@@ -117,12 +146,7 @@ class KnowledgeGraphView(QGraphicsView):
         current_id: str | None = None,
         grey_ids: set[str] | None = None,
     ) -> None:
-        """Bind the asset and render the full network (no focus).
-
-        ``grey_ids``: concept ids rendered grey (e.g. concepts from other
-        assets in the global map) so the map covers a wider scope while the
-        current asset stays colourful.
-        """
+        """Bind the asset and render the full network (living layout)."""
         self._asset = asset
         self._mastery = mastery_map or {}
         self._anomaly_ids = anomaly_ids or set()
@@ -132,15 +156,18 @@ class KnowledgeGraphView(QGraphicsView):
         self.render_graph()
 
     def render_graph(self, focus_id: str | None = None) -> None:
-        """Re-render. ``focus_id=None`` draws the full network."""
+        """(Re)render. focus=None -> full network with force-directed motion."""
         if self._asset is None:
             return
+        self._phys_timer.stop()
+        self._float_timer.stop()
+        self._drag_cid = None
         self._focus_id = focus_id
         nodes, edges = _select_nodes(self._asset, focus_id)
         self._nodes = nodes
         self._edges = edges
 
-        # layout --------------------------------------------------------
+        # layout ----------------------------------------------------------
         if focus_id is None:
             pos = _layered_layout(nodes, edges)
             xs = [p[0] for p in pos.values()]
@@ -150,66 +177,57 @@ class KnowledgeGraphView(QGraphicsView):
         else:
             pos, w, h = _radial_layout(nodes, focus_id)
 
-        self._pos = {cid: QPointF(x, y) for cid, (x, y) in pos.items()}
-        self._box = {
-            cid: (FBOX_W, FBOX_H) if role == "focus"
-            else (CBOX_W, CBOX_H) if role == "context"
-            else (BOX_W, BOX_H)
-            for cid, _n, role in nodes
-        }
+        self._rebuild_scene(pos, w, h)
 
-        # rebuild scene ------------------------------------------------
+        if focus_id is None:
+            self._start_physics()
+
+    def focus_concept(self, concept_id: str) -> None:
+        """Radial ego-network centred on ``concept_id`` (motion sleeps)."""
+        self.render_graph(focus_id=concept_id)
+
+    def reset_focus(self) -> None:
+        """Back to the full living network."""
+        self.render_graph(focus_id=None)
+
+    def is_focused(self) -> bool:
+        return self._focus_id is not None
+
+    # ------------------------------------------------------------------ #
+    # scene building
+    # ------------------------------------------------------------------ #
+    def _rebuild_scene(self, pos: dict[str, tuple[float, float]], w: int, h: int) -> None:
         scene = self.scene()
         scene.clear()
         self._node_items = {}
+        self._edge_items = {}
+        self._physics = {}
+        self._phases = {}
+        self._freqs = {}
 
         def _box_of(cid: str) -> tuple[float, float]:
-            return self._box.get(cid, (BOX_W, BOX_H))
+            role = next((r for cc, _n, r in self._nodes if cc == cid), "normal")
+            if role == "focus":
+                return FBOX_W, FBOX_H
+            if role == "context":
+                return CBOX_W, CBOX_H
+            return BOX_W, BOX_H
 
-        # edges first (behind nodes)
-        for s_id, t_id, label in edges:
-            if s_id not in self._pos or t_id not in self._pos:
+        # edges ------------------------------------------------------------
+        for s_id, t_id, _label in self._edges:
+            if s_id not in pos or t_id not in pos:
                 continue
-            p1 = self._pos[s_id]
-            p2 = self._pos[t_id]
-            hw1, hh1 = _box_of(s_id)[0] / 2, _box_of(s_id)[1] / 2
-            hw2, hh2 = _box_of(t_id)[0] / 2, _box_of(t_id)[1] / 2
-            b1 = _border_point((p1.x(), p1.y()), (hw1, hh1), (p2.x(), p2.y()))
-            b2 = _border_point((p2.x(), p2.y()), (hw2, hh2), (p1.x(), p1.y()))
-
-            is_ctx = label == "路径相邻"
-            is_fe = (s_id == focus_id or t_id == focus_id) and focus_id is not None
-            is_ae = s_id in self._anomaly_ids or t_id in self._anomaly_ids
-            if is_ctx:
-                color, width = _EDGE_CONTEXT, 1.5
-            elif is_fe:
-                color, width = _EDGE_FOCUS, 2.5
-            elif is_ae:
-                color, width = _EDGE_ANOMALY, 2.5
-            else:
-                color, width = _EDGE_NORMAL, 1.5
-
-            line = QGraphicsLineItem(b1[0], b1[1], b2[0], b2[1])
-            pen = QPen(_hex(color), width)
-            line.setPen(pen)
+            key = tuple(sorted((s_id, t_id)))
+            line = QGraphicsLineItem()
+            line.setPen(QPen(_hex(_EDGE_NORMAL), 1.5))
             scene.addItem(line)
+            self._edge_items[key] = line
 
-            if label and not is_ctx:
-                mx, my = (b1[0] + b2[0]) / 2, (b1[1] + b2[1]) / 2
-                lbl = QGraphicsSimpleTextItem(label)
-                lbl.setBrush(QColor("#546E7A"))
-                f = QFont()
-                f.setPointSize(8)
-                lbl.setFont(f)
-                lbl.setPos(mx - lbl.boundingRect().width() / 2,
-                           my - lbl.boundingRect().height() / 2)
-                scene.addItem(lbl)
-
-        # nodes
-        for cid, name, role in nodes:
-            if cid not in self._pos:
+        # nodes -------------------------------------------------------------
+        for cid, name, role in self._nodes:
+            if cid not in pos:
                 continue
-            c = self._pos[cid]
+            c = pos[cid]
             bw, bh = _box_of(cid)
             rect = QRectF(-bw / 2, -bh / 2, bw, bh)
 
@@ -237,7 +255,7 @@ class KnowledgeGraphView(QGraphicsView):
             item = QGraphicsPathItem(path)
             item.setBrush(QBrush(fill))
             item.setPen(QPen(border, bwidth))
-            item.setPos(c)
+            item.setPos(QPointF(*c))
             item.setData(0, cid)
             item.setData(1, name)
             item.setToolTip(name)
@@ -253,22 +271,130 @@ class KnowledgeGraphView(QGraphicsView):
             text.setPos(-text.boundingRect().width() / 2,
                         -text.boundingRect().height() / 2)
 
-        scene.setSceneRect(0, 0, max(w, 400), max(h, 300))
+            self._physics[cid] = [float(c[0]), float(c[1]), 0.0, 0.0]
+            self._phases[cid] = (hash(cid) % 628) / 100.0
+            self._freqs[cid] = 0.8 + (hash(cid) % 40) / 100.0
+
+        # scene geometry: generous canvas for the drifting motion
+        canvas_w = max(w, 1400)
+        canvas_h = max(h, 900)
+        scene.setSceneRect(0, 0, canvas_w, canvas_h)
         self.resetTransform()
         self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         self._hover_cid = None
+        self._update_edges()
         self.view_changed.emit()
 
-    def focus_concept(self, concept_id: str) -> None:
-        """Radial ego-network centred on ``concept_id``."""
-        self.render_graph(focus_id=concept_id)
+    # ------------------------------------------------------------------ #
+    # force-directed physics
+    # ------------------------------------------------------------------ #
+    def _start_physics(self) -> None:
+        self._calm_frames = 0
+        self._tick = 0
+        if self._physics:
+            self._phys_timer.start()
 
-    def reset_focus(self) -> None:
-        """Back to the full-network view."""
-        self.render_graph(focus_id=None)
+    def _physics_step(self) -> None:
+        if self._focus_id is not None or len(self._physics) < 2:
+            self._phys_timer.stop()
+            return
+        P = _PHYS
+        cids = list(self._physics.keys())
+        center = self.scene().sceneRect().center()
 
-    def is_focused(self) -> bool:
-        return self._focus_id is not None
+        energy = 0.0
+        for a in cids:
+            if a == self._drag_cid:
+                continue  # user holds this node
+            x, y, vx, vy = self._physics[a]
+            fx = fy = 0.0
+            for b in cids:
+                if a == b:
+                    continue
+                bx, by, _bvx, _bvy = self._physics[b]
+                dx, dy = x - bx, y - by
+                d2 = dx * dx + dy * dy + 1e-6
+                d = d2 ** 0.5
+                f = P["repulsion"] / d2
+                fx += f * dx / d
+                fy += f * dy / d
+            for s, t, _label in self._edges:
+                if s == a:
+                    b = t
+                elif t == a:
+                    b = s
+                else:
+                    continue
+                if b not in self._physics:
+                    continue
+                bx, by, _bvx, _bvy = self._physics[b]
+                dx, dy = bx - x, by - y
+                d = (dx * dx + dy * dy) ** 0.5 + 1e-6
+                f = P["spring"] * (d - P["rest"])
+                fx += f * dx / d
+                fy += f * dy / d
+            fx += P["gravity"] * (center.x() - x)
+            fy += P["gravity"] * (center.y() - y)
+
+            vx = (vx + fx) * P["damp"]
+            vy = (vy + fy) * P["damp"]
+            x += vx
+            y += vy
+            self._physics[a] = [x, y, vx, vy]
+            energy += abs(vx) + abs(vy)
+            item = self._node_items.get(a)
+            if item is not None:
+                item.setPos(QPointF(x, y))
+
+        self._update_edges()
+        self._tick += 1
+        if energy < P["energy_stop"]:
+            self._calm_frames += 1
+            if self._calm_frames >= P["settle_frames"]:
+                self._phys_timer.stop()
+                self._float_timer.start()  # settled -> gentle floating
+        else:
+            self._calm_frames = 0
+
+    def _float_step(self) -> None:
+        """Subtle drifting after the layout settled (the 'living' feel)."""
+        t = self._tick
+        for cid, state in self._physics.items():
+            if cid == self._drag_cid:
+                continue
+            state[1] += math.sin(t * self._freqs.get(cid, 1.0) + self._phases.get(cid, 0.0)) * _FLOAT_AMP * 0.2
+            item = self._node_items.get(cid)
+            if item is not None:
+                item.setPos(QPointF(state[0], state[1]))
+        self._tick += 1
+        self._update_edges()
+
+    def _update_edges(self) -> None:
+        for (s, t), line in self._edge_items.items():
+            if s not in self._node_items or t not in self._node_items:
+                continue
+            p1 = self._node_items[s].pos()
+            p2 = self._node_items[t].pos()
+            b1 = _border_point((p1.x(), p1.y()), (BOX_W / 2, BOX_H / 2),
+                               (p2.x(), p2.y()))
+            b2 = _border_point((p2.x(), p2.y()), (BOX_W / 2, BOX_H / 2),
+                               (p1.x(), p1.y()))
+            line.setLine(b1[0], b1[1], b2[0], b2[1])
+            # edge colour by roles
+            if s == self._focus_id or t == self._focus_id:
+                line.setPen(QPen(_hex(_EDGE_FOCUS), 2.2))
+            elif s in self._anomaly_ids or t in self._anomaly_ids:
+                line.setPen(QPen(_hex(_EDGE_ANOMALY), 2.0))
+            elif self._is_context_edge(s, t):
+                line.setPen(QPen(_hex(_EDGE_CONTEXT), 1.4))
+            else:
+                line.setPen(QPen(_hex(_EDGE_NORMAL), 1.5))
+
+    def _is_context_edge(self, s: str, t: str) -> bool:
+        for a, b, label in self._edges:
+            if {a, b} == {s, t} and label == "路径相邻":
+                return True
+        return False
 
     # ------------------------------------------------------------------ #
     # interaction
@@ -280,13 +406,84 @@ class KnowledgeGraphView(QGraphicsView):
             self.scale(factor, factor)
         event.accept()
 
+    def _item_concept(self, pos) -> tuple[str, str] | None:
+        item = self.itemAt(pos)
+        if item is None:
+            return None
+        node = item
+        while node is not None and node.data(0) is None:
+            node = node.parentItem()
+        if node is not None and node.data(0) is not None:
+            return node.data(0), node.data(1)
+        return None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            hit = self._item_concept(event.pos())
+            if hit is not None:
+                self._drag_cid = hit[0]
+                self._drag_start = event.pos()
+                self._dragged = False
+                event.accept()
+                return
+            if self._focus_id is not None:
+                self.reset_focus()
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
     def mouseMoveEvent(self, event):
+        if self._drag_cid is not None:
+            if not self._dragged and (event.pos() - self._drag_start).manhattanLength() > 6:
+                self._dragged = True
+            if self._dragged:
+                item = self._node_items.get(self._drag_cid)
+                if item is not None:
+                    sp = self.mapToScene(event.pos())
+                    item.setPos(sp)
+                    state = self._physics.get(self._drag_cid)
+                    if state is not None:
+                        state[0], state[1] = sp.x(), sp.y()
+                    self._update_edges()
+                event.accept()
+                return
         hit = self._item_concept(event.pos())
         cid = hit[0] if hit else None
         if cid != self._hover_cid:
             self._hover_cid = cid
             self._apply_hover()
         super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._drag_cid is not None:
+            if not self._dragged:
+                cid = self._drag_cid
+                if self._focus_id == cid:
+                    self.reset_focus()
+                else:
+                    self.focus_concept(cid)
+                self.node_single_clicked.emit(cid)
+            else:
+                # after a drag, nudge the simulation to re-settle
+                if self._focus_id is None and self._physics:
+                    self._calm_frames = 0
+                    if not self._phys_timer.isActive():
+                        self._phys_timer.start()
+            self._drag_cid = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        hit = self._item_concept(event.pos())
+        if hit is not None:
+            cid, name = hit
+            if self._focus_id != cid:
+                self.focus_concept(cid)
+            self.concept_clicked.emit(name)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def leaveEvent(self, event):
         if self._hover_cid is not None:
@@ -295,7 +492,6 @@ class KnowledgeGraphView(QGraphicsView):
         super().leaveEvent(event)
 
     def _apply_hover(self) -> None:
-        """Emphasise the hovered node and its direct neighbours."""
         if self._asset is None:
             return
         cid = self._hover_cid
@@ -308,63 +504,16 @@ class KnowledgeGraphView(QGraphicsView):
                     neighbours.add(s)
         for nid, item in self._node_items.items():
             if nid == self._focus_id or nid == self._current_id:
-                continue  # keep focus/current styling
+                continue
             if cid is not None and nid in neighbours:
                 item.setPen(QPen(_hex("#0284C7"), 2.5))
             elif nid == cid:
                 item.setPen(QPen(_hex("#0EA5E9"), 3))
             else:
-                # restore default pen by re-rendering is expensive; reset to
-                # a neutral 1px border matching the normal style
                 role = next((r for cc, _n, r in self._nodes if cc == nid), "normal")
-                if nid in self._grey_ids:
+                if nid in self._grey_ids or role == "context":
                     item.setPen(QPen(_hex(_BORDER_CONTEXT), 1))
                 elif nid in self._anomaly_ids:
                     item.setPen(QPen(_hex(_BORDER_ANOMALY), 3))
-                elif role == "context":
-                    item.setPen(QPen(_hex(_BORDER_CONTEXT), 1))
                 else:
                     item.setPen(QPen(_hex(_BORDER_NORMAL), 1))
-
-    def _item_concept(self, pos) -> tuple[str, str] | None:
-        item = self.itemAt(pos)
-        if item is None:
-            return None
-        # text labels are children of the node path item
-        node = item
-        while node is not None and node.data(0) is None:
-            node = node.parentItem()
-        if node is not None and node.data(0) is not None:
-            return node.data(0), node.data(1)
-        return None
-
-    def mousePressEvent(self, event):
-        if event.button() == Qt.MouseButton.LeftButton:
-            hit = self._item_concept(event.pos())
-            if hit is not None:
-                cid, _name = hit
-                if self._focus_id == cid:
-                    self.reset_focus()
-                else:
-                    self.focus_concept(cid)
-                self.node_single_clicked.emit(cid)
-                event.accept()
-                return
-            # clicked empty space -> back to full view
-            if self._focus_id is not None:
-                self.reset_focus()
-                event.accept()
-                return
-        super().mousePressEvent(event)
-
-    def mouseDoubleClickEvent(self, event):
-        hit = self._item_concept(event.pos())
-        if hit is not None:
-            cid, name = hit
-            # make sure the ego view is shown for the concept being taught
-            if self._focus_id != cid:
-                self.focus_concept(cid)
-            self.concept_clicked.emit(name)
-            event.accept()
-            return
-        super().mouseDoubleClickEvent(event)

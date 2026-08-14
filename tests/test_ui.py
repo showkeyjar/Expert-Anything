@@ -262,5 +262,46 @@ class TestRegressionsRound9(unittest.TestCase):
         self.assertTrue(any("教师模型 = 系统对这本书自己的理解" in t for t in labels))
 
 
+class TestLivingGraph(unittest.TestCase):
+    """Force-directed motion + interaction."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+        cls.win.show()
+        cls.win.content_stack.setCurrentIndex(2)
+        cls.win.repaint()
+        cls.gv = cls.win._graph_view
+
+    def test_physics_runs_in_full_mode(self):
+        self.assertTrue(self.gv._phys_timer.isActive())
+
+    def test_nodes_move(self):
+        import time
+        pos0 = {c: self.gv._node_items[c].pos() for c in self.gv._node_items}
+        deadline = time.time() + 1.2
+        while time.time() < deadline:
+            app = self.gv.scene().views()[0]
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()
+            time.sleep(0.02)
+        moved = sum(1 for c in pos0
+                    if (self.gv._node_items[c].pos() - pos0[c]).manhattanLength() > 1)
+        self.assertGreater(moved, 0)
+
+    def test_focus_sleeps_physics(self):
+        cid = next(iter(self.gv._node_items))
+        self.gv.focus_concept(cid)
+        self.assertTrue(self.gv.is_focused())
+        self.assertFalse(self.gv._phys_timer.isActive())
+        self.gv.reset_focus()
+        self.assertTrue(self.gv._phys_timer.isActive())
+
+    def test_teach_mini_header(self):
+        self.win.content_stack.setCurrentIndex(4)
+        labels = [l.text() for l in self.win.content_stack.widget(4).findChildren(QLabel)]
+        self.assertTrue(any("选择概念 · 学习 · 答题 · 追问" in t for t in labels))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
