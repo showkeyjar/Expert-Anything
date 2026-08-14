@@ -54,6 +54,34 @@ from expert_anything.ui.pyside_widgets import (
     MasteryDistributionBar,
 )
 
+def _install_excepthook():
+    """Never die silently: log + show a dialog on uncaught exceptions."""
+    import traceback as _tb
+    from datetime import datetime as _dt
+
+    def _hook(exc_type, exc, tb):
+        msg = "".join(_tb.format_exception(exc_type, exc, tb))
+        try:
+            log = Path(__file__).resolve().parent / "error.log"
+            log.write_text(
+                f"=== {_dt.now().isoformat()} ===\n{msg}", encoding="utf-8"
+            )
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                None, "程序错误",
+                f"发生未处理的错误：\n{exc}\n\n"
+                f"详情已写入 error.log（{log.name}）。您可以继续使用，"
+                f"但建议反馈此问题。",
+            )
+        except Exception:
+            pass
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = _hook
+
+
+_install_excepthook()
+
 # Thread-safe progress signal
 class ProgressSignal(QObject):
     updated = Signal(str, int, int, str)
@@ -1080,6 +1108,14 @@ class MainWindow(QMainWindow):
         self.teach_view = self._build_teach_view()
         self.learner_view = self._build_learner_view()
         self.teacher_view = self._build_teacher_view()
+        # reset stale widget refs so handlers can never touch deleted objects
+        self._teach_view = None
+        self._teach_graph = None
+        self._graph_view = None
+        self._source_view_widget = None
+        self._dash_graph = None
+        self._path_ladder = None
+        self._teach_answer_input = None
         while self.content_stack.count():
             w = self.content_stack.widget(0)
             self.content_stack.removeWidget(w)
@@ -1383,7 +1419,11 @@ class MainWindow(QMainWindow):
 
     def _on_submit_answer(self):
         """Handle answer submission."""
-        answer = self._teach_answer_input.toPlainText().strip()
+        box = getattr(self, "_teach_answer_input", None)
+        if box is None or not hasattr(box, "toPlainText"):
+            QMessageBox.warning(self, "提示", "当前没有可提交的教学内容，请重新开始教学。")
+            return
+        answer = box.toPlainText().strip()
         if not answer:
             QMessageBox.warning(self, "提示", "请先输入你的回答")
             return

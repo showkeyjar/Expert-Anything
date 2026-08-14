@@ -175,13 +175,24 @@ class Tutor:
                     max_tokens=900,
                 )
                 data = json.loads(content)
+
+                def _text(v, default=""):
+                    return str(v).strip() if v is not None else default
+
+                def _steps(v):
+                    if isinstance(v, list):
+                        return [str(s) for s in v if str(s).strip()]
+                    if isinstance(v, str) and v.strip():
+                        return [s.strip() for s in v.splitlines() if s.strip()]
+                    return []
+
                 return {
                     "concept": concept.name,
                     "style": style,
-                    "explanation": data.get("explanation", concept.definition or concept.summary),
-                    "example": data.get("example", ""),
-                    "steps": data.get("steps", []),
-                    "practice": data.get("practice", "用自己的话解释这个概念，并指出原文依据。"),
+                    "explanation": _text(data.get("explanation"), concept.definition or concept.summary),
+                    "example": _text(data.get("example")),
+                    "steps": _steps(data.get("steps")),
+                    "practice": _text(data.get("practice"), "用自己的话解释这个概念，并指出原文依据。"),
                     "evidence": concept.evidence,
                 }
             except (LLMNotConfigured, LLMError, ValueError, KeyError):

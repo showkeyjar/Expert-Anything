@@ -567,20 +567,30 @@ class TeachResultView(QWidget):
         head.addStretch()
         root.addLayout(head)
 
+        def _txt(v):
+            return str(v).strip() if v is not None else ""
+
+        def _lst(v):
+            if isinstance(v, list):
+                return [str(s) for s in v if str(s).strip()]
+            if isinstance(v, str) and v.strip():
+                return [s.strip() for s in v.splitlines() if s.strip()]
+            return []
+
         # explanation
-        explanation = result.get("explanation", "")
+        explanation = _txt(result.get("explanation"))
         if explanation:
             root.addWidget(self._card(
                 "讲解", explanation, "#E3F2FD", "#90CAF9", "#1565C0"))
 
         # example
-        example = result.get("example", "")
+        example = _txt(result.get("example"))
         if example:
             root.addWidget(self._card(
                 "示例", example, "#FFF8E1", "#FFE082", "#B45309"))
 
         # steps (numbered ladder)
-        steps = result.get("steps", [])
+        steps = _lst(result.get("steps"))
         if steps:
             steps_title = QLabel("学习步骤")
             steps_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #37474F;")
@@ -603,7 +613,7 @@ class TeachResultView(QWidget):
                 root.addLayout(row)
 
         # practice
-        practice = result.get("practice", "")
+        practice = _txt(result.get("practice"))
         if practice:
             prac_card = QFrame()
             prac_card.setStyleSheet(
@@ -641,7 +651,7 @@ class TeachResultView(QWidget):
             root.addWidget(prac_card)
 
         # evidence
-        evidence = result.get("evidence", [])
+        evidence = [str(e) for e in (result.get("evidence") or []) if str(e).strip()]
         if evidence:
             root.addWidget(self._card(
                 "原文证据（来源约束）",
