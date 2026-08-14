@@ -2075,7 +2075,8 @@ class MainWindow(QMainWindow):
 
         # concept-position mini graph: shows where the current concept sits
         self._teach_graph = KnowledgeGraphView()
-        self._teach_graph.setMinimumHeight(190)
+        self._teach_graph.setMinimumHeight(140)
+        self._teach_graph.setMaximumHeight(170)  # keep the lesson area dominant
         self._teach_graph.setStyleSheet(
             "QGraphicsView { background-color: white; border: 1px solid #E0E0E0;"
             "border-radius: 8px; }"
@@ -2096,11 +2097,12 @@ class MainWindow(QMainWindow):
                 background-color: white;
             }
         """)
-        right_layout.addWidget(self._teach_result_area)
+        right_layout.addWidget(self._teach_result_area, 1)  # fill the panel
         
         splitter.addWidget(right_panel)
         splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(1, 4)
+        splitter.setSizes([230, 760])
         
         layout.addWidget(splitter)
 

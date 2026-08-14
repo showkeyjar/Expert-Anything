@@ -1,6 +1,6 @@
-=== 2026-08-14T15:19:40.161081 ===
+=== 2026-08-14T15:26:44.893526 ===
 Traceback (most recent call last):
-  File "D:\data\AutoClaw\.openclaw\tmp\verify_round12.py", line 38, in <module>
-    assert m11 >= 0.8, f"nodes too small at init (scale {m11})"
-           ^^^^^^^^^^
-AssertionError: nodes too small at init (scale 0.6482051282051282)
+  File "D:\data\AutoClaw\.openclaw\tmp\debug_right_panel.py", line 49, in <module>
+    print("layout stretch:", [rp.layout().itemAt(i).stretch() for i in range(rp.layout().count())])
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'PySide6.QtWidgets.QWidgetItem' object has no attribute 'stretch'
