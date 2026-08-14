@@ -163,6 +163,27 @@
   <p>核心引擎的「来源约束 + 自我学习层 + 学习者模型」组合是真正的差异化资产，远强于一般 RAG 套壳。当前最该投入的是 <b>把教学闭环体验打磨到「一本书真的能教懂一个人」</b>，而不是继续堆功能。ADR-010 的 Learning Gain 指标应当成为所有功能取舍的标尺。</p>
 </div>
 
+
+<div class="card">
+  <h2>🖥️ 第二轮（同日追加）：可视化增强与迁移收尾</h2>
+  <table>
+    <tr><th>新增/修复</th><th>说明</th><th>验证</th></tr>
+    <tr><td>原文阅读升级</td><td><code>SourceTextView</code>：全部概念词高亮（点击打开概念面板）、概念索引 chips 一键定位、证据跳转滚动</td><td>11/11 概念高亮 ✓</td></tr>
+    <tr><td>概念详情面板</td><td><code>ConceptDetailPanel</code> 概念中心：定义、掌握度、原文证据、关系邻居、教师笔记（重要性/前置/误解/连接）、相关异常；一键「开始教学 / 在图谱聚焦 / 跳转证据」</td><td>面板构建 + 三路信号 ✓</td></tr>
+    <tr><td>学习路径阶梯</td><td><code>PathLadderView</code>：自适应路径渲染为排名阶梯（★ 推荐、序号、掌握度条、薄弱/存疑/基础/可学/阻塞标签、已完成标记）</td><td>8 档渲染 ✓</td></tr>
+    <tr><td>仪表盘真图谱</td><td>知识模型视图的「知识图谱将在这里显示」占位符 → 真实交互图谱（掌握度配色 + 异常描边 + 推荐高亮）</td><td>26 项场景元素 ✓</td></tr>
+    <tr><td>修复：教师模型不可见</td><td><code>teacher_models</code> 键带 <code>.json</code> 后缀与资产 ID 不匹配，教师视图永远显示「未生成」→ 已修</td><td>面板能读到教师笔记 ✓</td></tr>
+    <tr><td>修复：教学结果不显示</td><td><code>_display_teach_result</code> 直接在 QScrollArea 上 setLayout（内容不可见）→ 改为容器 + setWidget</td><td>27 控件渲染 ✓</td></tr>
+    <tr><td>修复：三处缺失/错误 API</td><td>补 <code>save_learner_state()</code>（评估后持久化）；<code>str.contains()</code> → <code>in</code>；资产切换改为重建全部视图（原实现只刷新知识页且泄漏控件）</td><td>教学闭环端到端 ✓</td></tr>
+  </table>
+  <h3>真实教学闭环（UI 层，LLM 在线）</h3>
+  <p>选择概念 → LLM 生成讲解/示例/步骤/练习（27 个控件渲染）→ 提交回答 → 语义评估 → <code>record_evaluation</code> 写入掌握度 + 历史 → <code>save_learner_state</code> 落盘 learner.json。测试用不相关答案得到 0 分——评估器正确地拒绝了答非所问。</p>
+  <div class="metrics">
+    <div class="metric"><div class="num">4</div><div class="lbl">新可视化组件/视图</div></div>
+    <div class="metric"><div class="num">4</div><div class="lbl">本轮修复的 UI bug</div></div>
+    <div class="metric"><div class="num">4/4</div><div class="lbl">冒烟 + 回归全部通过</div></div>
+  </div>
+</div>
 <footer>ExpertAnything 分析报告 · 2026-08-14 · 由 AutoClaw 生成</footer>
 </div>
 </body>

@@ -39,6 +39,11 @@ from expert_anything.core.models import KnowledgeAsset, Concept, Relation, Chapt
 from expert_anything.core import config
 from expert_anything.core.teacher import TeacherModel, anomaly_concept_ids
 from expert_anything.ui.pyside_graph import KnowledgeGraphView
+from expert_anything.ui.pyside_widgets import (
+    ConceptDetailPanel,
+    SourceTextView,
+    PathLadderView,
+)
 
 # Thread-safe progress signal
 class ProgressSignal(QObject):
@@ -311,7 +316,7 @@ class MainWindow(QMainWindow):
         
         # Load teacher models
         for fname in asset_dir.glob("teacher_*.json"):
-            aid = fname.name.replace("teacher_", "", 1)
+            aid = fname.stem.removeprefix("teacher_")
             with open(fname) as f:
                 self.teacher_models[aid] = json.load(f)
         
@@ -461,34 +466,20 @@ class MainWindow(QMainWindow):
         section_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1565C0; padding: 4px 0;")
         cards_layout.addWidget(section_title)
 
-        # Get adaptive path from real data
+        # Adaptive path ladder (ranked, with status chips)
+        self._path_ladder = PathLadderView()
+        self._path_ladder.concept_clicked.connect(self._open_concept_panel)
         if self.current_asset_id:
             path_items = self.get_adaptive_path(self.current_asset_id)
-            for i, item in enumerate(path_items):
-                card = KnowledgeCard(
-                    concept_name=item['name'],
-                    mastery=item['mastery'],
-                    tags=item['tags'],
-                    is_top=(i == 0)
-                )
-                card.clicked.connect(self.on_card_click)
-                cards_layout.addWidget(card)
-        else:
-            # Fallback to sample data
-            sample_concepts = [
-                ("pure mathematics", 0.0, ["weak", "foundation", "path"], True),
-                ("consumer of mathematics", 0.0, ["weak", "unblock:2", "path"], False),
-                ("producer of mathematics", 0.0, ["weak", "unblock:1", "path"], False),
-            ]
-            for name, mastery, tags, is_top in sample_concepts:
-                card = KnowledgeCard(name, mastery, tags, is_top)
-                card.clicked.connect(self.on_card_click)
-                cards_layout.addWidget(card)
+            entry = self.learner.get('assets', {}).get(self.current_asset_id, {})
+            completed = set(entry.get('completed', []))
+            self._path_ladder.set_items(path_items, completed=completed)
+        cards_layout.addWidget(self._path_ladder)
 
         cards_layout.addStretch()
         scroll_layout.addWidget(cards_container)
 
-        # Graph section placeholder
+        # Live concept graph (embedded dashboard view)
         graph_container = QWidget()
         graph_layout = QVBoxLayout(graph_container)
         graph_layout.setContentsMargins(0, 0, 0, 0)
@@ -498,15 +489,42 @@ class MainWindow(QMainWindow):
         graph_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1565C0; padding: 4px 0;")
         graph_layout.addWidget(graph_title)
 
-        graph_placeholder = QFrame()
-        graph_placeholder.setMinimumHeight(300)
-        graph_placeholder.setStyleSheet("background-color: #E3F2FD; border-radius: 8px;")
-        graph_inner = QVBoxLayout(graph_placeholder)
-        graph_label = QLabel("知识图谱将在这里显示\n（需要 QGraphicsView 实现）")
-        graph_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        graph_label.setStyleSheet("color: #757575; font-size: 12px;")
-        graph_inner.addWidget(graph_label)
-        graph_layout.addWidget(graph_placeholder)
+        self._dash_graph = KnowledgeGraphView()
+        self._dash_graph.setMinimumHeight(300)
+        self._dash_graph.setStyleSheet(
+            "QGraphicsView { background-color: white; border: 1px solid #E0E0E0;"
+            "border-radius: 8px; }"
+        )
+        graph_layout.addWidget(self._dash_graph)
+
+        if self.current_asset_id:
+            asset = self.get_asset()
+            if asset is not None:
+                data = self.assets[self.current_asset_id]
+                mastery_map = {}
+                for c in asset.concepts:
+                    norm_name = normalize(c.name)
+                    mastery_map[c.id] = (
+                        self.learner.get('concepts', {}).get(norm_name, {}).get('mastery', 0.0)
+                    )
+                anomaly_ids = set()
+                td = self.teacher_models.get(self.current_asset_id)
+                if td:
+                    try:
+                        anomaly_ids = anomaly_concept_ids(
+                            asset, TeacherModel.from_dict(td)
+                        )
+                    except Exception:
+                        anomaly_ids = set()
+                items = self.get_adaptive_path(self.current_asset_id)
+                current_id = items[0].get('cid') if items else None
+                self._dash_graph.set_asset(
+                    asset,
+                    mastery_map=mastery_map,
+                    anomaly_ids=anomaly_ids,
+                    current_id=current_id,
+                )
+                self._dash_graph.concept_clicked.connect(self.on_card_click)
 
         scroll_layout.addWidget(graph_container)
         scroll_layout.addStretch()
@@ -578,7 +596,7 @@ class MainWindow(QMainWindow):
                 tags=tags,
                 is_top=(i == 0 and mastery == 0)
             )
-            card.clicked.connect(self.on_card_click)
+            card.clicked.connect(self._open_concept_panel_by_name)
             concepts_layout.addWidget(card)
 
         concepts_layout.addStretch()
@@ -785,17 +803,39 @@ class MainWindow(QMainWindow):
         if view_name in view_map:
             self.content_stack.setCurrentIndex(view_map[view_name])
 
+    def _rebuild_all_views(self):
+        """Rebuild every view (after asset switch) without leaking widgets."""
+        self.import_view = self._build_import_view()
+        self.knowledge_view = self._build_knowledge_view()
+        self.concept_map_view = self._build_concept_map_view()
+        self.source_view = self._build_source_view()
+        self.teach_view = self._build_teach_view()
+        self.learner_view = self._build_learner_view()
+        self.teacher_view = self._build_teacher_view()
+        while self.content_stack.count():
+            w = self.content_stack.widget(0)
+            self.content_stack.removeWidget(w)
+            w.deleteLater()
+        for v in [
+            self.import_view,
+            self.knowledge_view,
+            self.concept_map_view,
+            self.source_view,
+            self.teach_view,
+            self.learner_view,
+            self.teacher_view,
+        ]:
+            self.content_stack.addWidget(v)
+
     def on_asset_select(self, asset_id):
-        """Handle asset selection."""
+        """Handle asset selection (rebuild all views)."""
         self.current_asset_id = asset_id
         # Update checked state
         for child in self.findChildren(QPushButton):
-            if child.text().startswith("📚"):
-                child.setChecked(child.text().contains(asset_id))
-        # Refresh knowledge view
-        self.content_stack.widget(0).deleteLater()
-        new_view = self._build_knowledge_view()
-        self.content_stack.insertWidget(0, new_view)
+            if child.text().startswith("\U0001F4E5"):
+                child.setChecked(asset_id in child.text())
+        # Refresh all views
+        self._rebuild_all_views()
         self.content_stack.setCurrentIndex(0)
 
     def _get_stylesheet(self):
@@ -828,6 +868,54 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
             }
         """
+
+    def _open_concept_panel(self, concept_id: str) -> None:
+        """Open the concept hub dialog for a concept id."""
+        asset = self.get_asset()
+        if asset is None or not concept_id:
+            return
+        teacher = None
+        td = self.teacher_models.get(self.current_asset_id)
+        if td:
+            try:
+                teacher = TeacherModel.from_dict(td)
+            except Exception:
+                teacher = None
+        panel = ConceptDetailPanel(
+            asset, concept_id, self.learner, teacher, self
+        )
+        panel.teach_requested.connect(self._start_teach_by_name)
+        panel.focus_requested.connect(self._focus_in_graph)
+        panel.evidence_requested.connect(self._jump_to_evidence)
+        self._concept_panel = panel  # keep a reference (prevent GC)
+        panel.show()
+
+    def _open_concept_panel_by_name(self, concept_name: str) -> None:
+        asset = self.get_asset()
+        if asset is None:
+            return
+        c = asset.concept_by_name(concept_name)
+        if c is not None:
+            self._open_concept_panel(c.id)
+
+    def _start_teach_by_name(self, concept_name: str) -> None:
+        """Select a concept in the teach view and start the lesson."""
+        self.on_nav_click("teach")
+        for i in range(self._teach_concept_list.count()):
+            if self._teach_concept_list.item(i).text() == concept_name:
+                self._teach_concept_list.setCurrentRow(i)
+                break
+        self._on_start_teach()
+
+    def _focus_in_graph(self, concept_id: str) -> None:
+        self.on_nav_click("concept_map")
+        if getattr(self, "_graph_view", None) is not None:
+            self._graph_view.focus_concept(concept_id)
+
+    def _jump_to_evidence(self, concept_id: str, evidence: str) -> None:
+        self.on_nav_click("source")
+        if getattr(self, "_source_view_widget", None) is not None:
+            self._source_view_widget.scroll_to_concept(concept_id, evidence)
 
     def on_card_click(self, concept_name):
         """Handle concept card click - start teaching session."""
@@ -902,11 +990,13 @@ class MainWindow(QMainWindow):
     def _display_teach_result(self, result):
         """Display teaching result in the UI."""
         # Clear previous content
-        for widget in self._teach_result_area.findChildren(QWidget):
-            widget.deleteLater()
-        
-        layout = QVBoxLayout(self._teach_result_area)
-        layout.setContentsMargins(0, 0, 0, 0)
+        old = self._teach_result_area.takeWidget()
+        if old is not None:
+            old.deleteLater()
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         
         # Concept title
@@ -1018,7 +1108,8 @@ class MainWindow(QMainWindow):
             layout.addWidget(ev_label_widget)
         
         layout.addStretch()
-        
+
+        self._teach_result_area.setWidget(container)
         self._teach_progress.setVisible(False)
         self._teach_result_label.setText("")
 
@@ -1081,6 +1172,10 @@ class MainWindow(QMainWindow):
             self._refresh_all_views()
         else:
             QMessageBox.warning(self, "提示", "请先开始教学会话")
+
+    def save_learner_state(self):
+        """Persist the in-memory learner model to disk (learner.json)."""
+        save_learner(self.learner)
 
     def _refresh_all_views(self):
         """Refresh all views after learner state change."""
@@ -1348,31 +1443,41 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(header)
 
-        # Source text display
+        # Source text display with concept highlighting
         if self.current_asset_id and self.current_asset_id in self.assets:
-            data = self.assets[self.current_asset_id]
-            source_text = data.get('source_text', '')
-            
-            scroll = QScrollArea()
-            scroll.setWidgetResizable(True)
-            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-            
-            text_widget = QTextEdit()
-            text_widget.setPlainText(source_text[:10000] + "..." if len(source_text) > 10000 else source_text)
-            text_widget.setReadOnly(True)
-            text_widget.setStyleSheet("""
-                QTextEdit {
-                    background-color: white;
-                    border: 1px solid #E0E0E0;
-                    border-radius: 8px;
-                    padding: 16px;
-                    font-size: 12px;
-                    line-height: 1.6;
-                }
-            """)
-            
-            scroll.setWidget(text_widget)
-            layout.addWidget(scroll)
+            asset = self.get_asset()
+
+            # concept index chips (click -> jump to first occurrence)
+            chips_scroll = QScrollArea()
+            chips_scroll.setWidgetResizable(True)
+            chips_scroll.setFixedHeight(42)
+            chips_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            chips_host = QWidget()
+            chips_layout = QHBoxLayout(chips_host)
+            chips_layout.setContentsMargins(0, 0, 0, 0)
+            chips_layout.setSpacing(6)
+            for c in asset.concepts:
+                chip = QPushButton(c.name)
+                chip.setStyleSheet(
+                    "QPushButton { background-color: #F3E5F5; color: #7B1FA2;"
+                    "border: 1px solid #E1BEE7; border-radius: 12px; padding: 3px 12px;"
+                    "font-size: 11px; }"
+                    "QPushButton:hover { background-color: #E1BEE7; }"
+                )
+                chip.clicked.connect(
+                    lambda checked, cid=c.id: self._source_view_widget.scroll_to_concept(cid)
+                )
+                chips_layout.addWidget(chip)
+            chips_layout.addStretch()
+            chips_scroll.setWidget(chips_host)
+            layout.addWidget(chips_scroll)
+
+            self._source_view_widget = SourceTextView()
+            self._source_view_widget.set_asset(asset)
+            self._source_view_widget.concept_anchor_clicked.connect(
+                self._open_concept_panel
+            )
+            layout.addWidget(self._source_view_widget, 1)
         else:
             placeholder = QLabel("请先导入知识资产")
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1644,6 +1749,12 @@ class MainWindow(QMainWindow):
                     name_label = QLabel(f"📌 {name}")
                     name_label.setStyleSheet("font-weight: bold; font-size: 12px;")
                     note_inner.addWidget(name_label)
+
+                    cid = note.get('concept_id', '')
+                    if cid:
+                        def _open_note(e, cid=cid):
+                            self._open_concept_panel(cid)
+                        note_widget.mousePressEvent = _open_note
                     
                     if sign:
                         sign_label = QLabel(f"重要性: {sign}")
