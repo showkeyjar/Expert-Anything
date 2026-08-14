@@ -34,8 +34,10 @@ SYSTEM_PROMPT = (
     "2. 每个概念的 name（概念名）必须是【原文里真实出现的词或短语】，逐字照搬，不要改写、不要概括、不要自己造词。\n"
     "3. 每个概念的 definition 必须是【一句】基于原文证据的简要定义（不超过 40 字），不得引入原文之外的知识。\n"
     "4. 每个概念的 evidence 必须是【原文中真实存在的连续句子片段】，直接复制原文，不要改写、不要翻译、不要拼接。\n"
-    "5. relations 只描述原文中确实存在的关系（依赖/包含/对比/因果/顺序），label 用中文短句，evidence 同样是原文片段。\n"
-    "6. learning_path 是按‘先修→后修’顺序排列的概念名列表，从基础到进阶。\n"
+    "5. relations 只描述原文中确实存在的关系（依赖/包含/对比/因果/顺序/流程先后），label 用中文短句，evidence 同样是原文片段。"
+    "技术类书籍请特别标注机制/流程上的依赖关系（如 A 是 B 的前置步骤）。\n"
+    "6. 每个概念尽量给出 chapter（它主要出现在哪一章/哪一节，用章节标题原文）。\n"
+    "7. learning_path 是按‘先修→后修’顺序排列的概念名列表，从基础到进阶。\n"
     "只输出 JSON，不要任何解释或前缀。"
 )
 
@@ -45,13 +47,16 @@ USER_TEMPLATE = (
     "{{\n"
     '  "chapters": [{{"title": "章节标题"}}],\n'
     '  "concepts": [{{"name": "原文里真实出现的概念名", "definition": "一句基于证据的定义（≤40字）", '
+    '"chapter": "所属章节标题（原文）", '
     '"evidence": ["原文连续句子片段1", "原文连续句子片段2"]}}],\n'
     '  "relations": [{{"source": "概念名A", "target": "概念名B", '
     '"label": "关系说明", "evidence": "原文片段"}}],\n'
     '  "learning_path": ["概念名1", "概念名2", ...]\n'
     "}}\n"
-    "要求：concepts 不超过 8 个且必须是全文最核心的概念；"
+    "要求：concepts 不超过 15 个且必须是本节最核心的概念（宁多勿漏，可含子概念）；"
     "所有 name 必须逐字出自原文；所有 evidence 必须是原文连续片段；"
+    "每个概念给出 chapter（所属章节标题，取自原文）；"
+    "relations 尽量完整（依赖/包含/对比/因果/流程先后都算），label 用中文短句；"
     "若某概念在原文中找不到支撑句，就不要把它作为概念列出。"
 )
 
@@ -199,7 +204,7 @@ def _extract_with_llm(
     merged["concepts"] = [
         c for c in merged["concepts"] if _norm(c.get("name", "")) not in _NOISE
     ]
-    merged["concepts"] = merged["concepts"][:12]
+    merged["concepts"] = merged["concepts"][:40]
     asset = _assemble(merged, text, filename, method="llm_extraction_chunked_v1")
     if on_progress:
         on_progress(
@@ -231,6 +236,53 @@ def _split_text(text: str, size: int, overlap: int) -> list[str]:
     return out
 
 
+def _assign_chapters(asset: "KnowledgeAsset") -> "KnowledgeAsset":
+    """Deterministically attach each concept to a chapter.
+
+    Uses the first evidence's position in the source: the nearest preceding
+    heading line (``1.2 Some Title`` style) becomes the chapter. If the text
+    has no detectable headings, the source is split into 6 equal parts named
+    Part 1..6. Concepts whose evidence was already grounded keep LLM-provided
+    chapters; this is a source-location light (P0-3), independent of LLM.
+    """
+    text = asset.source_text
+    if not text or not asset.concepts:
+        return asset
+
+    lines = text.splitlines()
+    heads: list[tuple[int, str]] = []
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if re.match(r"^\d+(\.\d+)*\s+[A-Za-z]", s) and len(s) < 80 and not s.startswith("http"):
+            heads.append((i, s[:80]))
+    if len(heads) < 2:
+        n = len(lines) or 1
+        heads = [(int(i * n / 6), f"Part {i + 1}") for i in range(6)]
+
+    def _line_of(needle: str) -> int:
+        pos = text.find(needle)
+        return text[:pos].count("\n") if pos >= 0 else -1
+
+    for c in asset.concepts:
+        if getattr(c, "chapter", ""):
+            continue
+        ln = -1
+        for ev in c.evidence or []:
+            ln = _line_of(ev)
+            if ln >= 0:
+                break
+        if ln < 0:
+            continue
+        best = heads[0][1]
+        for hl, ht in heads:
+            if hl <= ln:
+                best = ht
+            else:
+                break
+        c.chapter = best[:80]
+    return asset
+
+
 def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAsset:
     concepts: list[Concept] = []
     name_to_id: dict[str, str] = {}
@@ -259,6 +311,7 @@ def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAss
                 definition=definition,
                 summary=definition,
                 evidence=evidence,
+                chapter=(c.get("chapter") or "").strip()[:80],
             )
         )
 
@@ -290,7 +343,7 @@ def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAss
         if (ch.get("title") or "").strip()
     ]
 
-    return KnowledgeAsset(
+    asset = KnowledgeAsset(
         asset_id=_new_id("a"),
         type=(filename.split(".")[-1] if "." in filename else "text").lower(),
         title=title_from(text, filename),
@@ -303,6 +356,7 @@ def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAss
         learning_path=learning_path,
         method=method,
     )
+    return _assign_chapters(asset)
 
 
 # --- Deterministic fallback (no LLM) -----------------------------------------

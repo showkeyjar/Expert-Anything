@@ -226,9 +226,9 @@ _USER = (
 )
 
 
-def _build_user_prompt(asset: KnowledgeAsset) -> str:
+def _build_user_prompt(asset: KnowledgeAsset, concepts=None) -> str:
     concept_lines = []
-    for c in asset.concepts:
+    for c in (concepts if concepts is not None else asset.concepts):
         ev = "；".join(c.evidence[:1]) if c.evidence else "（无证据）"
         concept_lines.append(
             f"- {c.name}：{c.definition or c.summary or '（无定义）'} ｜ 证据：{ev}"
@@ -340,24 +340,42 @@ def build_teacher_model(
     if on_progress:
         on_progress("selflearn", 0, 0, "正在自我学习：深加工每个概念、扫描矛盾/未定义/反常…")
     try:
-        # Output is one compact note per concept plus a few anomalies. Cap the
-        # generation budget by concept count so a single huge call doesn't stall
-        # the import for tens of seconds. chat_json retries on transient empty /
-        # rate-limited responses so a burst of parallel extraction calls doesn't
-        # silently kill the self-learning pass.
-        max_out = max(1200, min(2500, 700 + 130 * len(asset.concepts)))
-        data = chat_json(
-            llm,
-            [
-                Message("system", _SYSTEM),
-                Message("user", _build_user_prompt(asset)),
-            ],
-            temperature=0.3,
-            max_tokens=max_out,
-        )
-        if not data:
-            raise ValueError("empty/malformed LLM response")
-        tm = _assemble(asset, data, method="teacher_self_learn_v1")
+        # Batch the pass: ≤ BATCH concepts per LLM call so the output stays
+        # well under the endpoint's limit (a 33-concept single call reliably
+        # overflows agnes-2.0-flash and degrades to 'failed'). Each batch
+        # yields notes + anomalies which are merged into one TeacherModel.
+        BATCH = 12
+        merged_data: dict = {"concept_notes": [], "anomalies": []}
+        total_batches = (len(asset.concepts) + BATCH - 1) // BATCH
+        for b in range(total_batches):
+            chunk = asset.concepts[b * BATCH : (b + 1) * BATCH]
+            try:
+                # NOTE: json_mode is deliberately OFF here — agnes-2.0-flash
+                # returns empty bodies for json_object + long prompts. We parse
+                # the plain text response with the tolerant _parse_json instead.
+                content = llm.chat(
+                    [
+                        Message("system", _SYSTEM),
+                        Message("user", _build_user_prompt(asset, concepts=chunk)),
+                    ],
+                    temperature=0.3,
+                    max_tokens=3500,
+                )
+                data = _parse_json(content)
+                if not data:
+                    raise ValueError("empty/malformed LLM response")
+                merged_data["concept_notes"].extend(data.get("concept_notes", []))
+                merged_data["anomalies"].extend(data.get("anomalies", []))
+            except Exception:
+                # a single failed batch must not discard the successful ones;
+                # missing notes are better than an all-empty teacher model.
+                pass
+            if on_progress:
+                on_progress(
+                    "selflearn", b + 1, total_batches,
+                    f"自我学习批次 {b + 1}/{total_batches}",
+                )
+        tm = _assemble(asset, merged_data, method="teacher_self_learn_v1")
         if on_progress:
             on_progress("selflearn", 0, 0, f"自我学习完成：{len(tm.anomalies)} 条待解项")
         return tm

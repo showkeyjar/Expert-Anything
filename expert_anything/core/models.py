@@ -22,6 +22,7 @@ class Concept:
     definition: str = ""
     summary: str = ""
     evidence: list[str] = field(default_factory=list)
+    chapter: str = ""  # source-location light: the chapter/section that discusses it
 
     def to_dict(self) -> dict:
         return {
@@ -30,6 +31,7 @@ class Concept:
             "definition": self.definition,
             "summary": self.summary,
             "evidence": self.evidence,
+            "chapter": self.chapter,
         }
 
     @classmethod
@@ -40,6 +42,7 @@ class Concept:
             definition=d.get("definition", ""),
             summary=d.get("summary", ""),
             evidence=d.get("evidence", []),
+            chapter=d.get("chapter", ""),
         )
 
 

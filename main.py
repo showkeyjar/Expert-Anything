@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QTextEdit, QFileDialog, QMessageBox, QListWidget, QListWidgetItem,
     QProgressBar, QLineEdit, QTabWidget, QComboBox, QSplitter,
     QTableWidget, QTableWidgetItem,
+    QTreeWidget, QTreeWidgetItem,
     QGroupBox, QFormLayout, QCheckBox, QTextBrowser,
     QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, QGraphicsLineItem,
     QGraphicsTextItem,
@@ -720,6 +721,74 @@ class MainWindow(QMainWindow):
         ov_lay.addLayout(leg_row)
         layout.addWidget(overview)
 
+        # Chapter table of contents (structure map first, per gap analysis P0-1)
+        if self.current_asset_id and self.current_asset_id in self.assets:
+            toc_card = QFrame()
+            toc_card.setStyleSheet(
+                "QFrame { background-color: white; border: 1px solid #E0E0E0;"
+                "border-radius: 10px; }"
+            )
+            toc_lay = QVBoxLayout(toc_card)
+            toc_lay.setContentsMargins(16, 12, 16, 12)
+            toc_lay.setSpacing(6)
+
+            toc_title = QLabel(_t("toc_title"))
+            toc_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
+            toc_lay.addWidget(toc_title)
+
+            toc_hint = QLabel(_t("toc_hint"))
+            toc_hint.setStyleSheet("font-size: 11px; color: #9E9E9E;")
+            toc_lay.addWidget(toc_hint)
+
+            self._toc_tree = QTreeWidget()
+            self._toc_tree.setHeaderHidden(True)
+            self._toc_tree.setMaximumHeight(240)
+            self._toc_tree.setStyleSheet(
+                "QTreeWidget { background-color: #FAFAFA; border: 1px solid #E0E0E0;"
+                "border-radius: 6px; font-size: 12.5px; }"
+                "QTreeWidget::item { padding: 3px; }"
+            )
+            asset = self.get_asset()
+            by_ch = {}
+            if asset:
+                for c in asset.concepts:
+                    by_ch.setdefault(c.chapter or "", []).append(c)
+            # order: asset.chapters first (if any), then remaining groups
+            ordered = []
+            seen = set()
+            if asset:
+                for ch in asset.chapters:
+                    if ch.title in by_ch and ch.title not in seen:
+                        ordered.append(ch.title)
+                        seen.add(ch.title)
+            for k in by_ch:
+                if k and k not in seen:
+                    ordered.append(k)
+                    seen.add(k)
+            for ch_title in ordered:
+                top = QTreeWidgetItem([ch_title])
+                top.setData(0, Qt.ItemDataRole.UserRole, ("chapter", ch_title))
+                for c in by_ch[ch_title][:25]:
+                    child = QTreeWidgetItem([f"  {c.name}"])
+                    child.setData(0, Qt.ItemDataRole.UserRole, ("concept", c.id))
+                    top.addChild(child)
+                self._toc_tree.addTopLevelItem(top)
+            # unassigned concepts
+            unassigned = [c for k, lst in by_ch.items() if not k for c in lst]
+            if unassigned:
+                top = QTreeWidgetItem([_t("toc_other")])
+                top.setData(0, Qt.ItemDataRole.UserRole, ("chapter", ""))
+                for c in unassigned[:20]:
+                    child = QTreeWidgetItem([f"  {c.name}"])
+                    child.setData(0, Qt.ItemDataRole.UserRole, ("concept", c.id))
+                    top.addChild(child)
+                self._toc_tree.addTopLevelItem(top)
+            if self._toc_tree.topLevelItemCount() == 0:
+                self._toc_tree.addTopLevelItem(QTreeWidgetItem([_t("chapter_empty")]))
+            self._toc_tree.itemClicked.connect(self._on_toc_clicked)
+            toc_lay.addWidget(self._toc_tree)
+            layout.addWidget(toc_card)
+
         # Tab widget for concepts and history
         tabs = QTabWidget()
         tabs.setStyleSheet("""
@@ -1051,6 +1120,17 @@ class MainWindow(QMainWindow):
 
         # rebuild all views
         self._rebuild_all_views()
+
+    def _on_toc_clicked(self, item) -> None:
+        """TOC click: chapter -> locate in source; concept -> open panel."""
+        kind, payload = item.data(0, Qt.ItemDataRole.UserRole) or ("", "")
+        if kind == "chapter":
+            self.on_nav_click("source")
+            sv = getattr(self, "_source_view_widget", None)
+            if sv is not None:
+                sv.scroll_to_text(payload)
+        elif kind == "concept":
+            self._open_concept_panel(payload)
 
     def _build_sidebar(self):
         sidebar = QFrame()

@@ -187,6 +187,28 @@ class SourceTextView(QTextBrowser):
                 self.ensureCursorVisible()
                 return
 
+    def scroll_to_text(self, needle: str) -> None:
+        """Scroll to the first occurrence of an arbitrary text (e.g. a chapter
+        title) and highlight its paragraph."""
+        if not needle:
+            return
+        doc = self.document()
+        cursor = doc.find(needle[:200])
+        if cursor.isNull():
+            return
+        block = cursor.block()
+        fmt = QTextCharFormat()
+        fmt.setBackground(QColor("#B3E5FC"))
+        sel = self.ExtraSelection()
+        sel.format = fmt
+        sel.cursor = QTextCursor(block)
+        sel.cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+        self.setExtraSelections([sel])
+        tc = QTextCursor(doc)
+        tc.setPosition(cursor.selectionStart())
+        self.setTextCursor(tc)
+        self.ensureCursorVisible()
+
     # -- anchor handling ------------------------------------------------------
     def _on_anchor(self, url: QUrl) -> None:
         if url.scheme() == "concept":
@@ -253,6 +275,12 @@ class ConceptDetailPanel(QDialog):
             def_lbl.setWordWrap(True)
             def_lbl.setStyleSheet("font-size: 13.5px; color: #37474F;")
             root.addWidget(def_lbl)
+
+        # chapter attribution (source-location light)
+        if getattr(concept, "chapter", ""):
+            ch_lbl = QLabel(_t("chapter_label", ch=concept.chapter))
+            ch_lbl.setStyleSheet("font-size: 11.5px; color: #0284C7;")
+            root.addWidget(ch_lbl)
 
         # mastery bar
         bar = QProgressBar()

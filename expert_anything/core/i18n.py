@@ -509,6 +509,16 @@ _STRINGS: dict[str, dict[str, str]] = {
     "import_failed": {"zh-CN": "处理失败: {msg}", "en": "Processing failed: {msg}", "ja": "処理に失敗: {msg}"},
     "selflearning": {"zh-CN": "正在自我学习...", "en": "Self-learning…", "ja": "自己学習中…"},
     "selflearning_done": {"zh-CN": "自我学习完成: {n} 条待解项", "en": "Self-learning done: {n} open anomalies", "ja": "自己学習完了: 未解決 {n} 件"},
+    "toc_title": {"zh-CN": "📑 章节目录", "en": "📑 Contents", "ja": "📑 目次"},
+    "toc_other": {"zh-CN": "其他/未标注章节", "en": "Other / unassigned", "ja": "その他/未割当"},
+    "chapter_label": {"zh-CN": "所属章节：{ch}", "en": "Chapter: {ch}", "ja": "章: {ch}"},
+    "toc_hint": {
+        "zh-CN": "点击章节查看概念分布，点击概念直接进入详情",
+        "en": "Click a chapter to see its concepts; click a concept for details",
+        "ja": "章をクリックで概念を表示、概念をクリックで詳細へ",
+    },
+    "chapter_empty": {"zh-CN": "（本资产暂无章节信息）", "en": "(no chapter info for this asset)", "ja": "（この資産に章情報はありません）"},
+
     "asset_label": {"zh-CN": "知识资产", "en": "Knowledge Assets", "ja": "ナレッジ資産"},
 
     "asset_deleted": {"zh-CN": "已删除资产", "en": "Asset deleted", "ja": "資産を削除しました"},
