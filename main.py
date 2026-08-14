@@ -61,22 +61,38 @@ progress_signal = ProgressSignal()
 
 
 class ExtractWorker(QThread):
-    """Background thread for knowledge extraction."""
-    
+    """Background thread for knowledge extraction.
+
+    Accepts raw file bytes (or utf-8 text) + filename; text extraction
+    (pdf/epub/docx/md/txt/html) runs via core.parsers so binary formats
+    are handled without blocking the UI thread.
+    """
+
     finished = Signal(object)
     error = Signal(str)
-    
-    def __init__(self, text, filename, llm_client):
+
+    def __init__(self, raw, filename, llm_client):
         super().__init__()
-        self.text = text
+        self.raw = raw
         self.filename = filename
         self.llm_client = llm_client
-    
+
     def run(self):
         try:
+            from expert_anything.core.parsers import extract_from_bytes
+            if isinstance(self.raw, str):
+                text = self.raw
+            else:
+                text = extract_from_bytes(self.raw, self.filename)
+            if not text.strip():
+                self.error.emit(
+                    "无法从文件中提取文本。扫描版 PDF 需要 OCR，暂不支持；"
+                    "请确认文件不是加密或损坏的。"
+                )
+                return
             asset = extract_knowledge(
-                self.text, 
-                self.filename, 
+                text,
+                self.filename,
                 llm=self.llm_client,
                 on_progress=lambda stage, current, total, msg: None
             )
@@ -340,24 +356,25 @@ class MainWindow(QMainWindow):
 
     def load_data(self):
         """Load real data from ExpertAnything core."""
-        # Load assets
-        asset_dir = Path(__file__).parent / "data" / "assets"
-        for fname in asset_dir.glob("*.json"):
-            if not fname.name.startswith("teacher_"):
-                with open(fname) as f:
-                    aid = fname.stem
-                    self.assets[aid] = json.load(f)
+        # Load assets (data dir comes from config, override via EXPERTANYTHING_DATA_DIR)
+        asset_dir = config.DATA_DIR / "assets"
+        if asset_dir.exists():
+            for fname in asset_dir.glob("*.json"):
+                if not fname.name.startswith("teacher_"):
+                    with open(fname, encoding="utf-8") as f:
+                        aid = fname.stem
+                        self.assets[aid] = json.load(f)
         
         # Load teacher models
         for fname in asset_dir.glob("teacher_*.json"):
             aid = fname.stem.removeprefix("teacher_")
-            with open(fname) as f:
+            with open(fname, encoding="utf-8") as f:
                 self.teacher_models[aid] = json.load(f)
         
         # Load learner
-        learner_path = Path(__file__).parent / "data" / "learner.json"
+        learner_path = config.DATA_DIR / "learner.json"
         if learner_path.exists():
-            with open(learner_path) as f:
+            with open(learner_path, encoding="utf-8") as f:
                 self.learner = json.load(f)
         
         # Select first asset by default
@@ -865,6 +882,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(assets_label)
 
         # Add asset buttons dynamically
+        self._asset_buttons = {}
         for aid, data in self.assets.items():
             title = data.get('title', aid)
             btn = QPushButton(f"📚 {title[:25]}{'...' if len(title) > 25 else ''}")
@@ -888,6 +906,7 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             btn.setChecked(aid == self.current_asset_id)
             btn.clicked.connect(lambda checked, a=aid: self.on_asset_select(a))
+            self._asset_buttons[aid] = btn
             layout.addWidget(btn)
 
         return sidebar
@@ -931,15 +950,14 @@ class MainWindow(QMainWindow):
             self.content_stack.addWidget(v)
 
     def on_asset_select(self, asset_id):
-        """Handle asset selection (rebuild all views)."""
+        """Handle asset selection (rebuild all views, show knowledge model)."""
         self.current_asset_id = asset_id
-        # Update checked state
-        for child in self.findChildren(QPushButton):
-            if child.text().startswith("\U0001F4E5"):
-                child.setChecked(asset_id in child.text())
+        # Update checked state on the sidebar buttons
+        for aid, btn in getattr(self, "_asset_buttons", {}).items():
+            btn.setChecked(aid == asset_id)
         # Refresh all views
         self._rebuild_all_views()
-        self.content_stack.setCurrentIndex(0)
+        self.content_stack.setCurrentIndex(1)  # knowledge model view
 
     def _get_stylesheet(self):
         return """
@@ -1317,7 +1335,7 @@ class MainWindow(QMainWindow):
         title.setStyleSheet("font-size: 20px; font-weight: bold; color: #E65100;")
         header_layout.addWidget(title)
         
-        subtitle = QLabel("上传 Markdown/Text 文件，系统将自动提取概念并构建知识图谱")
+        subtitle = QLabel("支持 PDF / EPUB / Word (.docx) / Markdown / TXT / HTML，自动提取概念并构建知识图谱")
         subtitle.setStyleSheet("color: #757575; font-size: 12px;")
         header_layout.addWidget(subtitle)
         
@@ -1983,7 +2001,7 @@ class MainWindow(QMainWindow):
             self,
             "选择文件",
             str(Path(__file__).parent / "data" / "samples"),
-            "文本文件 (*.md *.txt);;所有文件 (*.*)"
+            "支持的文件 (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;PDF (*.pdf);;EPUB (*.epub);;Word (*.docx);;Markdown/文本 (*.md *.markdown *.txt);;HTML (*.html *.htm);;所有文件 (*.*)"
         )
         if file_path:
             self._import_fname.setText(file_path)
@@ -1994,7 +2012,7 @@ class MainWindow(QMainWindow):
             self,
             "选择文件",
             str(Path(__file__).parent / "data" / "samples"),
-            "文本文件 (*.md *.txt);;所有文件 (*.*)"
+            "支持的文件 (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;PDF (*.pdf);;EPUB (*.epub);;Word (*.docx);;Markdown/文本 (*.md *.markdown *.txt);;HTML (*.html *.htm);;所有文件 (*.*)"
         )
         if file_path:
             self._import_fname.setText(file_path)
@@ -2007,20 +2025,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "错误", "请先选择或输入文件名")
             return
         
-        # Try to read from file path
-        content = ""
+        # Try to read from file path (raw bytes; binary formats parsed later)
+        raw = b""
         if fname and Path(fname).exists():
             try:
-                with open(fname, 'r', encoding='utf-8') as f:
-                    content = f.read()
+                raw = Path(fname).read_bytes()
             except Exception as e:
                 QMessageBox.critical(self, "错误", f"读取文件失败: {e}")
                 return
         else:
             # Use pasted content
-            content = self._import_paste.toPlainText()
+            raw = self._import_paste.toPlainText().encode("utf-8")
         
-        if not content.strip():
+        if not raw.strip():
             QMessageBox.warning(self, "错误", "内容为空，请提供学习材料")
             return
         
@@ -2031,7 +2048,7 @@ class MainWindow(QMainWindow):
         self._import_status_label.repaint()
         
         # Run extraction in background thread
-        self._extract_worker = ExtractWorker(content, fname, self.llm_client)
+        self._extract_worker = ExtractWorker(raw, fname, self.llm_client)
         self._extract_worker.finished.connect(self._on_extraction_finished)
         self._extract_worker.error.connect(self._on_extraction_error)
         self._extract_worker.start()
@@ -2129,6 +2146,7 @@ class MainWindow(QMainWindow):
             btn.setCheckable(True)
             btn.setChecked(aid == self.current_asset_id)
             btn.clicked.connect(lambda checked, a=aid: self.on_asset_select(a))
+            self._asset_buttons[aid] = btn
             layout.addWidget(btn)
 
     def _on_export_report(self):

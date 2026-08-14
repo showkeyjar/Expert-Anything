@@ -23,6 +23,8 @@ def extract_from_bytes(raw: bytes, filename: str) -> str:
         return _extract_epub(raw)
     if suffix == ".pdf":
         return _extract_pdf(raw)
+    if suffix in (".docx", ".docm"):
+        return _extract_docx(raw)
     if suffix in (".html", ".htm"):
         return clean_text(raw.decode("utf-8", errors="ignore"))
     return raw.decode("utf-8", errors="ignore")
@@ -41,6 +43,28 @@ def _extract_epub(raw: bytes) -> str:
                     clean_text(book.read(name).decode("utf-8", errors="ignore"))
                 )
     return "\n\n".join(chunks)
+
+
+def _extract_docx(raw: bytes) -> str:
+    """Extract text from a .docx (OOXML zip) without external deps.
+
+    Reads word/document.xml, splits on paragraph boundaries and strips all
+    tags via clean_text(). Tables and headers are ignored (document.xml body
+    only) — good enough for learning-material ingestion.
+    """
+    try:
+        import io
+        with zipfile.ZipFile(io.BytesIO(raw)) as book:
+            xml = book.read("word/document.xml").decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+    paragraphs = re.split(r"</w:p>", xml)
+    out: list[str] = []
+    for para in paragraphs:
+        text = clean_text(para)
+        if text:
+            out.append(text)
+    return "\n\n".join(out)
 
 
 def _extract_pdf(raw: bytes) -> str:
