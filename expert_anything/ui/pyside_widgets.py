@@ -187,6 +187,33 @@ class SourceTextView(QTextBrowser):
                 self.ensureCursorVisible()
                 return
 
+    def search_all(self, term: str) -> int:
+        """Highlight every occurrence of ``term`` and jump to the first.
+        Returns the match count."""
+        if not term:
+            return 0
+        doc = self.document()
+        selections = []
+        cursor = doc.find(term)
+        count = 0
+        while not cursor.isNull() and count < 200:
+            sel = self.ExtraSelection()
+            fmt = QTextCharFormat()
+            fmt.setBackground(QColor("#FFD54F"))
+            sel.format = fmt
+            sel.cursor = QTextCursor(cursor)
+            selections.append(sel)
+            count += 1
+            cursor = doc.find(term, cursor.selectionEnd())
+        if count == 0:
+            return 0
+        self.setExtraSelections(selections)
+        tc = QTextCursor(doc)
+        tc.setPosition(selections[0].cursor.selectionStart())
+        self.setTextCursor(tc)
+        self.ensureCursorVisible()
+        return count
+
     def scroll_to_text(self, needle: str) -> None:
         """Scroll to the first occurrence of an arbitrary text (e.g. a chapter
         title) and highlight its paragraph."""
@@ -558,6 +585,8 @@ class TeachResultView(QWidget):
     submit_requested = Signal()
     followup_requested = Signal(str)
     neighbor_clicked = Signal(str)  # concept name
+    quiz_requested = Signal()       # user asked for a quick self-test
+    quiz_result = Signal(float)     # scored quiz (record into mastery)
 
     def __init__(self, result: dict, parent=None):
         super().__init__(parent)
@@ -693,6 +722,7 @@ class TeachResultView(QWidget):
 
         root.addStretch()
         self._build_followup()
+        self._build_quiz_area()
 
     # -- evaluation feedback ---------------------------------------------------
     def append_evaluation(self, score: float, feedback: str,
@@ -786,6 +816,164 @@ class TeachResultView(QWidget):
             chips_lay.addWidget(chip)
         chips_lay.addStretch()
         root.insertWidget(root.count() - 1, chips)
+
+    # -- quick self-test ----------------------------------------------------------
+    def _build_quiz_area(self) -> None:
+        """Button that asks the tutor to generate a self-test."""
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #F3E5F5; border: 1px solid #CE93D8;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        t = QLabel(_t("quiz_title"))
+        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #6A1B9A;")
+        lay.addWidget(t)
+        hint = QLabel(_t("quiz_hint"))
+        hint.setWordWrap(True)
+        hint.setStyleSheet("font-size: 11.5px; color: #7B5A9E;")
+        lay.addWidget(hint)
+        self._quiz_btn = QPushButton(_t("quiz_start"))
+        self._quiz_btn.setStyleSheet(
+            "QPushButton { background-color: #6A1B9A; color: white; border: none;"
+            "border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #4A148C; }"
+        )
+        self._quiz_btn.clicked.connect(self.quiz_requested)
+        lay.addWidget(self._quiz_btn, 0, Qt.AlignmentFlag.AlignRight)
+        self.layout().insertWidget(self.layout().count() - 1, card)
+
+    def show_quiz(self, quiz: dict | None) -> None:
+        """Render a generated quiz (or a hint when generation failed)."""
+        if quiz is None:
+            t = QLabel(_t("quiz_failed"))
+            t.setStyleSheet("font-size: 12px; color: #9E9E9E; padding: 6px;")
+            self.layout().insertWidget(self.layout().count() - 1, t)
+            return
+        qtype = quiz.get("type")
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #F3E5F5; border: 2px solid #AB47BC;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        head = QHBoxLayout()
+        badge = QLabel(_t("quiz_true_false") if qtype == "true_false" else _t("quiz_ordering"))
+        badge.setStyleSheet(
+            "background-color: #AB47BC; color: white; padding: 2px 10px;"
+            "border-radius: 8px; font-size: 10px; font-weight: bold;"
+        )
+        head.addWidget(badge)
+        head.addStretch()
+        lay.addLayout(head)
+
+        q = QLabel(quiz.get("question", ""))
+        q.setWordWrap(True)
+        q.setStyleSheet("font-size: 13px; color: #37474F; font-weight: bold;")
+        lay.addWidget(q)
+
+        self._quiz_data = quiz
+        self._quiz_answer: list[int] = []
+
+        if qtype == "true_false":
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            for val, label in [(True, _t("quiz_true")), (False, _t("quiz_false"))]:
+                b = QPushButton(label)
+                b.setStyleSheet(
+                    "QPushButton { background-color: white; color: #6A1B9A;"
+                    "border: 1px solid #CE93D8; border-radius: 6px; padding: 6px 18px;"
+                    "font-size: 12.5px; }"
+                    "QPushButton:hover { background-color: #F3E5F5; }"
+                )
+                b.clicked.connect(
+                    lambda checked, v=val: self._check_quiz(v))
+                row.addWidget(b)
+            row.addStretch()
+            lay.addLayout(row)
+        else:
+            self._quiz_order_label = QLabel("")
+            self._quiz_order_label.setStyleSheet("font-size: 12px; color: #6A1B9A;")
+            lay.addWidget(self._quiz_order_label)
+            for i, opt in enumerate(quiz.get("options", [])):
+                b = QPushButton(f"{i + 1}. {opt}")
+                b.setStyleSheet(
+                    "QPushButton { background-color: white; color: #37474F;"
+                    "border: 1px solid #E1BEE7; border-radius: 6px; padding: 5px 10px;"
+                    "font-size: 12px; text-align: left; }"
+                    "QPushButton:hover { background-color: #F3E5F5; }"
+                )
+                b.clicked.connect(
+                    lambda checked, idx=i: self._pick_order(idx))
+                lay.addWidget(b)
+            check = QPushButton(_t("quiz_check"))
+            check.setStyleSheet(
+                "QPushButton { background-color: #6A1B9A; color: white; border: none;"
+                "border-radius: 6px; padding: 5px 14px; font-size: 12px; }"
+            )
+            check.clicked.connect(lambda: self._check_quiz(self._quiz_answer))
+            lay.addWidget(check, 0, Qt.AlignmentFlag.AlignRight)
+
+        self.layout().insertWidget(self.layout().count() - 1, card)
+
+    def _pick_order(self, idx: int) -> None:
+        if idx not in self._quiz_answer:
+            self._quiz_answer.append(idx)
+        self._quiz_order_label.setText(
+            " → ".join(str(i + 1) for i in self._quiz_answer))
+
+    def _check_quiz(self, answer) -> None:
+        """Score locally, show result, emit quiz_result for mastery recording."""
+        quiz = getattr(self, "_quiz_data", None)
+        if quiz is None:
+            return
+        # local scoring: true_false exact; ordering fraction of correct positions
+        qtype = quiz.get("type")
+        if qtype == "true_false":
+            ok = bool(answer) == bool(quiz.get("correct"))
+            score = 1.0 if ok else 0.2
+        else:
+            correct = quiz.get("correct_order", [])
+            if len(answer) != len(correct):
+                score = 0.0
+            else:
+                hits = sum(1 for a, c in zip(answer, correct) if a == c)
+                score = round(hits / len(correct), 2)
+
+        result = QFrame()
+        result.setStyleSheet(
+            "QFrame { background-color: #E8F5E9; border-left: 4px solid #2E7D32;"
+            "border-radius: 6px; }"
+        )
+        rl = QVBoxLayout(result)
+        rl.setContentsMargins(10, 8, 10, 8)
+        rl.setSpacing(4)
+        head = QHBoxLayout()
+        verdict = _t("quiz_correct") if score >= 0.6 else _t("quiz_wrong")
+        v = QLabel(f"{verdict}  ({score:.0%})")
+        v.setStyleSheet(
+            f"color: {'#2E7D32' if score >= 0.6 else '#C62828'};"
+            "font-size: 12.5px; font-weight: bold;"
+        )
+        head.addWidget(v)
+        head.addStretch()
+        rl.addLayout(head)
+        if qtype == "ordering" and quiz.get("correct_order"):
+            right = " → ".join(str(i + 1) for i in quiz["correct_order"])
+            rl.addWidget(QLabel(f"{_t('quiz_correct_order')}: {right}"))
+        expl = quiz.get("explanation", "")
+        if expl:
+            e = QLabel(expl)
+            e.setWordWrap(True)
+            e.setStyleSheet("font-size: 12px; color: #37474F;")
+            rl.addWidget(e)
+        self.layout().insertWidget(self.layout().count() - 1, result)
+        self.quiz_result.emit(float(score))
 
     # -- follow-up conversation -------------------------------------------------
     def _build_followup(self) -> None:

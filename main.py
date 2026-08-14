@@ -1121,6 +1121,18 @@ class MainWindow(QMainWindow):
         # rebuild all views
         self._rebuild_all_views()
 
+    def _on_source_search(self) -> None:
+        """Highlight all occurrences of the term in the source reader."""
+        sv = getattr(self, "_source_view_widget", None)
+        if sv is None:
+            return
+        term = self._source_search.text().strip()
+        n = sv.search_all(term) if term else 0
+        if n:
+            self._source_search_status.setText(_t("search_hits", n=n))
+        else:
+            self._source_search_status.setText(_t("search_none"))
+
     def _on_toc_clicked(self, item) -> None:
         """TOC click: chapter -> locate in source; concept -> open panel."""
         kind, payload = item.data(0, Qt.ItemDataRole.UserRole) or ("", "")
@@ -1550,6 +1562,8 @@ class MainWindow(QMainWindow):
         view.submit_requested.connect(self._on_submit_answer)
         view.followup_requested.connect(self._on_followup)
         view.neighbor_clicked.connect(self._start_teach_by_name)
+        view.quiz_requested.connect(self._on_quiz_requested)
+        view.quiz_result.connect(self._on_quiz_result)
         self._teach_lesson = result
         if view.answer_input is not None:
             self._teach_answer_input = view.answer_input
@@ -1580,6 +1594,44 @@ class MainWindow(QMainWindow):
 
         self._teach_progress.setVisible(False)
         self._teach_result_label.setText("")
+
+    def _on_quiz_requested(self) -> None:
+        """Generate a quick self-test for the current concept (sync, quick)."""
+        if self.current_tutor is None:
+            asset = self.get_asset()
+            if asset is None:
+                return
+            self.current_tutor = Tutor(asset, llm=self.llm_client)
+        concept = None
+        asset = self.get_asset()
+        if asset is not None:
+            concept = asset.concept_by_name(getattr(self, "_teach_concept_now", "") or "")
+        view = getattr(self, "_teach_view", None)
+        if concept is None or view is None:
+            return
+        quiz = self.current_tutor.generate_quiz(concept)
+        view.show_quiz(quiz)
+
+    def _on_quiz_result(self, score: float) -> None:
+        """Record a quiz score into the learner model (mastery update)."""
+        concept_name = getattr(self, "_teach_concept_now", "")
+        asset = self.get_asset()
+        if not concept_name or asset is None:
+            return
+        try:
+            from expert_anything.core.learner import record_evaluation
+            record_evaluation(
+                self.learner,
+                concept_name,
+                asset.asset_id,
+                score,
+                f"[自测] {score:.0%}",
+                "快速自测",
+            )
+            self.save_learner_state()
+            self._update_topbar()
+        except Exception:
+            pass
 
     def _on_followup(self, question: str) -> None:
         """Answer a follow-up question in the background (grounded Q&A)."""
@@ -2062,6 +2114,31 @@ class MainWindow(QMainWindow):
         # Source text display with concept highlighting
         if self.current_asset_id and self.current_asset_id in self.assets:
             asset = self.get_asset()
+
+            # full-text search bar (P1-2)
+            search_row = QHBoxLayout()
+            search_row.setSpacing(6)
+            self._source_search = QLineEdit()
+            self._source_search.setPlaceholderText(_t("search_in_source"))
+            self._source_search.setStyleSheet(
+                "QLineEdit { border: 1px solid #BDBDBD; border-radius: 6px;"
+                "padding: 5px 10px; font-size: 12.5px; background-color: white; }"
+            )
+            self._source_search.returnPressed.connect(self._on_source_search)
+            search_row.addWidget(self._source_search, 1)
+            self._source_search_status = QLabel("")
+            self._source_search_status.setStyleSheet("color: #9E9E9E; font-size: 11px;")
+            search_row.addWidget(self._source_search_status)
+            sbtn = QPushButton(_t("search_btn"))
+            sbtn.setStyleSheet(
+                "QPushButton { background-color: white; color: #1565C0;"
+                "border: 1px solid #BBDEFB; border-radius: 6px; padding: 5px 14px;"
+                "font-size: 12.5px; }"
+                "QPushButton:hover { background-color: #E3F2FD; }"
+            )
+            sbtn.clicked.connect(self._on_source_search)
+            search_row.addWidget(sbtn)
+            layout.addLayout(search_row)
 
             # concept index chips (click -> jump to first occurrence)
             chips_scroll = QScrollArea()

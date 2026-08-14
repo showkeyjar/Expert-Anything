@@ -12,6 +12,30 @@ from expert_anything.core.learner import load as load_learner
 from expert_anything.core.llm import LLMClient, LLMError, LLMNotConfigured, Message
 from expert_anything.core.models import Concept, KnowledgeAsset
 
+def _tolerant_json(text: str) -> dict:
+    """Parse JSON from an LLM response, tolerating fences and prose."""
+    import json as _json
+    import re as _re
+
+    if not text:
+        return {}
+    s = text.strip()
+    s = _re.sub(r"^```(?:json)?\s*", "", s, flags=_re.IGNORECASE)
+    s = _re.sub(r"\s*```$", "", s)
+    try:
+        d = _json.loads(s)
+        return d if isinstance(d, dict) else {}
+    except _json.JSONDecodeError:
+        m = _re.search(r"\{.*\}", s, flags=_re.DOTALL)
+        if m:
+            try:
+                d = _json.loads(m.group(0))
+                return d if isinstance(d, dict) else {}
+            except _json.JSONDecodeError:
+                return {}
+    return {}
+
+
 TEACH_SYSTEM_BASE = (
     "你是耐心的私人导师。根据给出的【概念】和【原文证据】，用中文向学习者讲解。\n"
     "铁律：只基于给定证据讲解，不编造原文没有的内容；用学习者能理解的方式表达。\n"
@@ -280,6 +304,77 @@ class Tutor:
             "practice": f"用自己的话解释「{concept.name}」，并指出原文中支持你回答的关键句。",
             "evidence": concept.evidence,
         }
+
+    # --- quick self-test -------------------------------------------------------
+    def generate_quiz(self, concept: Concept, qtype: str = "") -> dict | None:
+        """Generate a quick self-test for a concept.
+
+        ``qtype`` alternates "true_false" / "ordering"; empty picks by a
+        simple counter. Returns None when no LLM is configured. Payload:
+          true_false: {type, question, correct(bool), explanation}
+          ordering:   {type, question, options[list], correct_order[list], explanation}
+        """
+        if self.llm is None:
+            return None
+        qtype = qtype or (["true_false", "ordering"][getattr(self, "_quiz_i", 0) % 2])
+        self._quiz_i = getattr(self, "_quiz_i", 0) + 1
+
+        evidence = "\n".join(f"- {e}" for e in (concept.evidence or ["（无原文证据）"]))
+        relations = _neighbor_context(self.asset, concept)
+
+        if qtype == "ordering":
+            sys_prompt = (
+                "你是严格的导师。根据【概念】和【原文证据】，设计一道「步骤排序」自测题："
+                "把该概念的关键流程/逻辑步骤打乱顺序，让学习者重排。"
+                "只输出 JSON：{type:'ordering', question:'题目', "
+                "options:['步骤A','步骤B',...](乱序), correct_order:[正确顺序的选项索引], "
+                "explanation:'基于证据的解释'}。步骤 3-5 个，必须来自原文。"
+            )
+        else:
+            sys_prompt = (
+                "你是严格的导师。根据【概念】和【原文证据】，设计一道「判断正误」自测题："
+                "给出一个关于该概念的陈述，学习者判断对错。"
+                "只输出 JSON：{type:'true_false', question:'陈述', correct:true或false, "
+                "explanation:'基于证据的解释'}。陈述必须能由证据直接判定，不许模棱两可。"
+            )
+        user = (
+            "概念：{name}\n定义：{defn}\n原文证据：\n{evidence}\n\n请生成自测题。"
+        ).format(
+            name=concept.name,
+            defn=concept.definition or concept.summary or "（无定义）",
+            evidence=evidence,
+        )
+        try:
+            content = self.llm.chat(
+                [Message("system", sys_prompt), Message("user", user)],
+                temperature=0.3,
+                max_tokens=700,
+            )
+            data = _tolerant_json(content)
+            if not isinstance(data, dict):
+                return None
+            data["concept"] = concept.name
+            return data
+        except Exception:
+            return None
+
+    def check_quiz(self, quiz: dict, answer) -> tuple[float, str]:
+        """Score an answer against a generated quiz.
+
+        Returns (score 0..1, feedback). true_false: right/wrong.
+        ordering: fraction of items placed correctly.
+        """
+        qtype = quiz.get("type")
+        if qtype == "true_false":
+            ok = bool(answer) == bool(quiz.get("correct"))
+            return (1.0 if ok else 0.2), quiz.get("explanation", "")
+        if qtype == "ordering":
+            correct = quiz.get("correct_order", [])
+            if not correct or len(answer) != len(correct):
+                return 0.0, quiz.get("explanation", "")
+            hits = sum(1 for a, c in zip(answer, correct) if a == c)
+            return round(hits / len(correct), 2), quiz.get("explanation", "")
+        return 0.0, quiz.get("explanation", "")
 
     # --- follow-up questions -------------------------------------------------
     def follow_up(self, concept: Concept, question: str,
