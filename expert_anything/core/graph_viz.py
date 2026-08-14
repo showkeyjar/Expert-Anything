@@ -29,6 +29,7 @@ import os
 
 from PIL import Image, ImageDraw, ImageFont
 
+from expert_anything.core.i18n import t as _t
 from expert_anything.core.models import KnowledgeAsset
 
 # --- layout constants --------------------------------------------------------
@@ -161,7 +162,7 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
             have = {(s, t) for s, t, _ in edges}
             for a, b in zip(seq, seq[1:]):
                 if (a, b) not in have and (b, a) not in have:
-                    edges.append((a, b, "路径相邻"))
+                    edges.append((a, b, _t("graph_path_edge")))
         return nodes, edges
 
     # --- focus mode --------------------------------------------------------
@@ -203,7 +204,7 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
         if r.source in keep_set and r.target in keep_set and r.source != r.target:
             edges.append((r.source, r.target, r.label or ""))
     for c2 in context:
-        edges.append((focus_id, c2, "路径相邻"))
+        edges.append((focus_id, c2, _t("graph_path_edge")))
     # if the ego network has almost no relation edges, add learning-path
     # neighbours as faint context so the focused view is never a lone node
     if len(edges) < 2 and asset.learning_path:
@@ -218,7 +219,7 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
                     if c2 in id_to_name and c2 not in roles:
                         context.append(c2)
                         roles[c2] = "context"
-                        edges.append((focus_id, c2, "路径相邻"))
+                        edges.append((focus_id, c2, _t("graph_path_edge")))
     return nodes, edges
 
 

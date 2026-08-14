@@ -303,5 +303,40 @@ class TestLivingGraph(unittest.TestCase):
         self.assertTrue(any("选择概念 · 学习 · 答题 · 追问" in t for t in labels))
 
 
+class TestI18n(unittest.TestCase):
+    """Language switching rebuilds the UI and translates texts."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+        cls.win.show()
+
+    def _nav_texts(self):
+        from PySide6.QtWidgets import QPushButton
+        return [b.text() for b in self.win._sidebar.findChildren(QPushButton)]
+
+    def test_default_chinese(self):
+        self.assertTrue(any("教学会话" in t for t in self._nav_texts()))
+
+    def test_switch_to_english(self):
+        from expert_anything.core import i18n
+        combo = self.win._lang_combo
+        combo.setCurrentIndex(combo.findData("en"))
+        texts = self._nav_texts()
+        self.assertTrue(any("Tutor" in t for t in texts))
+        self.assertIn("Mastered", self.win._topbar_progress.text())
+        # restore
+        combo.setCurrentIndex(combo.findData("zh-CN"))
+
+    def test_switch_to_japanese(self):
+        from expert_anything.core import i18n
+        combo = self.win._lang_combo
+        combo.setCurrentIndex(combo.findData("ja"))
+        texts = self._nav_texts()
+        self.assertTrue(any("学習セッション" in t for t in texts))
+        # restore
+        combo.setCurrentIndex(combo.findData("zh-CN"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

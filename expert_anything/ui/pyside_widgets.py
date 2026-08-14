@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from expert_anything.core.i18n import t as _t
 from expert_anything.core.models import KnowledgeAsset
 from expert_anything.core.teacher import TeacherModel
 
@@ -48,12 +49,12 @@ MASTERY_COLORS = {
 }
 
 TAG_LABELS = {
-    "weak": "薄弱",
-    "anom": "存疑",
-    "foundation": "基础",
-    "ready": "可学",
-    "blocked": "阻塞",
-    "path": "路径",
+    "weak": _t("legend_weak"),
+    "anom": _t("legend_anomaly"),
+    "foundation": _t("legend_unstudied"),
+    "ready": _t("legend_mastered"),
+    "blocked": _t("legend_learning"),
+    "path": _t("legend_focus"),
 }
 
 
@@ -209,7 +210,7 @@ class ConceptDetailPanel(QDialog):
         self._name_to_id = {c.id: c.name for c in asset.concepts}
         concept = asset.concept_by_id(concept_id)
 
-        self.setWindowTitle("概念详情")
+        self.setWindowTitle(_t("panel_title"))
         self.setMinimumSize(560, 640)
         self.setStyleSheet("QDialog { background-color: white; }")
 
@@ -235,7 +236,7 @@ class ConceptDetailPanel(QDialog):
         )
         rec = learner_state.get("concepts", {}).get(key or "", {})
         mastery = float(rec.get("mastery", 0.0))
-        m_lbl = QLabel(f"掌握度 {mastery:.0%}")
+        m_lbl = QLabel(_t("panel_mastery", m=mastery))
         m_lbl.setStyleSheet(
             f"background-color: {mastery_color(mastery)}; color: white;"
             "padding: 4px 12px; border-radius: 10px; font-size: 12px; font-weight: bold;"
@@ -273,7 +274,7 @@ class ConceptDetailPanel(QDialog):
 
         # -- evidence -----------------------------------------------------
         if concept.evidence:
-            body_l.addWidget(_sec_title(f"原文证据（{len(concept.evidence)} 条）", "#2E7D32"))
+            body_l.addWidget(_sec_title(_t("panel_evidence", n=len(concept.evidence)), "#2E7D32"))
             ev_list = QListWidget()
             ev_list.setStyleSheet(
                 "QListWidget { border: 1px solid #E0E0E0; border-radius: 6px; font-size: 12px; }"
@@ -290,7 +291,7 @@ class ConceptDetailPanel(QDialog):
         # -- relations -----------------------------------------------------
         rels = self._collect_relations(concept)
         if rels:
-            body_l.addWidget(_sec_title("知识网络中的位置", "#0284C7"))
+            body_l.addWidget(_sec_title(_t("panel_position"), "#0284C7"))
             rel_list = QListWidget()
             rel_list.setStyleSheet(
                 "QListWidget { border: 1px solid #E0E0E0; border-radius: 6px; font-size: 12px; }"
@@ -311,19 +312,19 @@ class ConceptDetailPanel(QDialog):
             if note is not None:
                 blocks: list[tuple[str, str]] = []
                 if note.significance:
-                    blocks.append(("为什么重要", note.significance))
+                    blocks.append((_t("panel_why"), note.significance))
                 if note.prerequisites:
-                    blocks.append(("前置知识", "；".join(note.prerequisites)))
+                    blocks.append((_t("panel_prereq"), "；".join(note.prerequisites)))
                 if note.misconceptions:
-                    blocks.append(("常见误解", "；".join(note.misconceptions)))
+                    blocks.append((_t("panel_miscon"), "；".join(note.misconceptions)))
                 if note.connections:
-                    blocks.append(("外部连接", "；".join(note.connections)))
+                    blocks.append((_t("panel_conn"), "；".join(note.connections)))
                 if note.external_notes:
-                    blocks.append(("外部补充（非原文）", "；".join(note.external_notes)))
+                    blocks.append((_t("panel_ext"), "；".join(note.external_notes)))
                 if note.note:
-                    blocks.append(("系统理解", note.note))
+                    blocks.append((_t("panel_understanding"), note.note))
                 if blocks:
-                    body_l.addWidget(_sec_title("教师笔记", "#7C3AED"))
+                    body_l.addWidget(_sec_title(_t("panel_teacher_notes"), "#7C3AED"))
                     for title, content in blocks:
                         t = QLabel(title)
                         t.setStyleSheet("font-size: 11.5px; color: #7C3AED; font-weight: bold; margin-top: 4px;")
@@ -340,7 +341,7 @@ class ConceptDetailPanel(QDialog):
                 if concept.name in (a.location or "") or concept.name in a.description
             ]
             if mine:
-                body_l.addWidget(_sec_title("相关待解项", "#E65100"))
+                body_l.addWidget(_sec_title(_t("panel_anomalies"), "#E65100"))
                 for a in mine:
                     lbl = QLabel(
                         f"[{a.kind} · {a.severity}] {a.description}"
@@ -358,7 +359,7 @@ class ConceptDetailPanel(QDialog):
 
         # -- actions ---------------------------------------------------------
         btn_row = QHBoxLayout()
-        teach_btn = QPushButton("开始教学")
+        teach_btn = QPushButton(_t("panel_teach"))
         teach_btn.setStyleSheet(
             "QPushButton { background-color: #1565C0; color: white; border: none;"
             "border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: bold; }"
@@ -369,7 +370,7 @@ class ConceptDetailPanel(QDialog):
         )
         btn_row.addWidget(teach_btn)
 
-        focus_btn = QPushButton("在图谱中聚焦")
+        focus_btn = QPushButton(_t("panel_focus"))
         focus_btn.setStyleSheet(
             "QPushButton { background-color: white; color: #0284C7; border: 1px solid #0284C7;"
             "border-radius: 6px; padding: 8px 18px; font-size: 13px; }"
@@ -431,7 +432,7 @@ class PathLadderView(QWidget):
         completed = completed or set()
 
         if not items:
-            lbl = QLabel("暂无推荐——所有概念已掌握或模型为空。")
+            lbl = QLabel(_t("path_empty"))
             lbl.setStyleSheet("color: #757575; font-size: 12px;")
             self._layout.addWidget(lbl)
             return
@@ -481,7 +482,7 @@ class PathLadderView(QWidget):
         )
         name_row.addWidget(n)
         if cid in completed:
-            name_row.addWidget(tag_chip("已完成", "#2E7D32"))
+            name_row.addWidget(tag_chip(_t("legend_mastered"), "#2E7D32"))
         for tag in tags[:3]:
             color = {"weak": "#F44336", "anom": "#E67828",
                      "foundation": "#0284C7", "ready": "#2E7D32",
@@ -563,7 +564,7 @@ class TeachResultView(QWidget):
         head.addWidget(title)
         style = result.get("style", "")
         if style:
-            head.addWidget(tag_chip(f"风格 · {style}", "#0284C7"))
+            head.addWidget(tag_chip(_t("style_" + {"例子": "example", "图示": "diagram", "拆解步骤": "steps"}.get(style, "example")), "#0284C7"))
         head.addStretch()
         root.addLayout(head)
 
@@ -581,18 +582,18 @@ class TeachResultView(QWidget):
         explanation = _txt(result.get("explanation"))
         if explanation:
             root.addWidget(self._card(
-                "讲解", explanation, "#E3F2FD", "#90CAF9", "#1565C0"))
+                _t("explanation"), explanation, "#E3F2FD", "#90CAF9", "#1565C0"))
 
         # example
         example = _txt(result.get("example"))
         if example:
             root.addWidget(self._card(
-                "示例", example, "#FFF8E1", "#FFE082", "#B45309"))
+                _t("example"), example, "#FFF8E1", "#FFE082", "#B45309"))
 
         # steps (numbered ladder)
         steps = _lst(result.get("steps"))
         if steps:
-            steps_title = QLabel("学习步骤")
+            steps_title = QLabel(_t("steps_title"))
             steps_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #37474F;")
             root.addWidget(steps_title)
             for i, s in enumerate(steps, 1):
@@ -623,7 +624,7 @@ class TeachResultView(QWidget):
             prac_lay = QVBoxLayout(prac_card)
             prac_lay.setContentsMargins(12, 10, 12, 10)
             prac_lay.setSpacing(6)
-            p_t = QLabel("练习")
+            p_t = QLabel(_t("practice"))
             p_t.setStyleSheet("font-size: 12px; font-weight: bold; color: #2E7D32;")
             prac_lay.addWidget(p_t)
             p_q = QLabel(practice)
@@ -632,7 +633,7 @@ class TeachResultView(QWidget):
             prac_lay.addWidget(p_q)
 
             self.answer_input = QTextEdit()
-            self.answer_input.setPlaceholderText("请用自己的话回答这个问题...")
+            self.answer_input.setPlaceholderText(_t("answer_placeholder"))
             self.answer_input.setMinimumHeight(80)
             self.answer_input.setStyleSheet(
                 "QTextEdit { border: 1px solid #C5E1A5; border-radius: 6px;"
@@ -640,7 +641,7 @@ class TeachResultView(QWidget):
             )
             prac_lay.addWidget(self.answer_input)
 
-            submit_btn = QPushButton("提交答案")
+            submit_btn = QPushButton(_t("submit_answer"))
             submit_btn.setStyleSheet(
                 "QPushButton { background-color: #4CAF50; color: white; border: none;"
                 "border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: bold; }"
@@ -654,7 +655,7 @@ class TeachResultView(QWidget):
         evidence = [str(e) for e in (result.get("evidence") or []) if str(e).strip()]
         if evidence:
             root.addWidget(self._card(
-                "原文证据（来源约束）",
+                _t("evidence_label"),
                 "\n".join(f"• {e}" for e in evidence[:3]),
                 "#E8EAF6", "#C5CAE9", "#3F51B5",
             ))
@@ -679,7 +680,7 @@ class TeachResultView(QWidget):
         # score row
         head = QHBoxLayout()
         head.setSpacing(8)
-        head.addWidget(_sec_title("评估结果", "#6A1B9A"))
+        head.addWidget(_sec_title(_t("eval_result"), "#6A1B9A"))
         score_lbl = QLabel(f"{score:.0%}")
         score_lbl.setStyleSheet(
             f"background-color: {mastery_color(score)}; color: white;"
@@ -696,7 +697,7 @@ class TeachResultView(QWidget):
             lay.addWidget(fb)
 
         if reference:
-            ref_title = QLabel("参考回答（基于原文证据）")
+            ref_title = QLabel(_t("eval_reference"))
             ref_title.setStyleSheet("font-size: 11.5px; font-weight: bold; color: #6A1B9A; margin-top: 2px;")
             lay.addWidget(ref_title)
             ref = QLabel(reference)
@@ -708,7 +709,7 @@ class TeachResultView(QWidget):
             lay.addWidget(ref)
 
         if gap:
-            gap_title = QLabel("与参考的差距")
+            gap_title = QLabel(_t("eval_gap"))
             gap_title.setStyleSheet("font-size: 11.5px; font-weight: bold; color: #C62828; margin-top: 2px;")
             lay.addWidget(gap_title)
             gp = QLabel(gap)
@@ -731,7 +732,7 @@ class TeachResultView(QWidget):
         if not neighbors:
             return
         root = self.layout()
-        t = QLabel("关联概念（顺藤摸瓜）")
+        t = QLabel(_t("related_concepts"))
         t.setStyleSheet("font-size: 12px; font-weight: bold; color: #0c4a6e;")
         root.insertWidget(root.count() - 1, t)
 
@@ -768,12 +769,12 @@ class TeachResultView(QWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(6)
 
-        t = QLabel("还有疑问？追问导师（基于原文证据回答）")
+        t = QLabel(_t("followup_title"))
         t.setStyleSheet("font-size: 12px; font-weight: bold; color: #37474F;")
         lay.addWidget(t)
 
         self._followup_input = QTextEdit()
-        self._followup_input.setPlaceholderText("例如：这个概念和刚才讲的另一个概念有什么区别？")
+        self._followup_input.setPlaceholderText(_t("followup_placeholder"))
         self._followup_input.setMaximumHeight(64)
         self._followup_input.setStyleSheet(
             "QTextEdit { border: 1px solid #BDBDBD; border-radius: 6px;"
@@ -781,7 +782,7 @@ class TeachResultView(QWidget):
         )
         lay.addWidget(self._followup_input)
 
-        ask_btn = QPushButton("追问")
+        ask_btn = QPushButton(_t("ask"))
         ask_btn.setStyleSheet(
             "QPushButton { background-color: #0284C7; color: white; border: none;"
             "border-radius: 6px; padding: 7px 18px; font-size: 12.5px; font-weight: bold; }"
@@ -858,7 +859,7 @@ class TrendChartView(QWidget):
             font.setPointSize(11)
             painter.setFont(font)
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
-                             "暂无评估记录——完成答题后这里会显示你的成长曲线")
+                             _t("trend_empty"))
             return
 
         margin_l, margin_r, margin_t, margin_b = 44, 12, 18, 34
@@ -988,7 +989,7 @@ class NodeDetailCard(QFrame):
     # -- state ---------------------------------------------------------------
     def _empty(self) -> None:
         self._clear()
-        t = QLabel("点击左侧节点 - 查看它的定义、关系与教师理解")
+        t = QLabel(_t("detail_click_hint"))
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
         t.setStyleSheet("color: #9E9E9E; font-size: 12.5px; padding: 30px 0;")
         self._layout.addWidget(t)
@@ -1062,7 +1063,7 @@ class NodeDetailCard(QFrame):
                 if other:
                     rels.append((r.label or "关联", other.name, other.id))
         if rels:
-            self._layout.addWidget(_sec_title("关系 · 点击继续游走", "#0284C7"))
+            self._layout.addWidget(_sec_title(_t("detail_relations"), "#0284C7"))
             for label, other_name, other_id in rels[:6]:
                 btn = QPushButton(f"{label} → {other_name}")
                 btn.setStyleSheet(
@@ -1078,7 +1079,7 @@ class NodeDetailCard(QFrame):
 
         # first evidence
         if concept.evidence:
-            self._layout.addWidget(_sec_title("原文依据", "#2E7D32"))
+            self._layout.addWidget(_sec_title(_t("detail_evidence"), "#2E7D32"))
             ev = QLabel(concept.evidence[0][:160] + ("…" if len(concept.evidence[0]) > 160 else ""))
             ev.setWordWrap(True)
             ev.setStyleSheet(
@@ -1093,11 +1094,11 @@ class NodeDetailCard(QFrame):
             if note is not None:
                 bits = []
                 if note.significance:
-                    bits.append(f"为什么重要：{note.significance[:80]}")
+                    bits.append(_t("detail_why", s=note.significance[:80]))
                 if note.misconceptions:
-                    bits.append(f"常见误解：{note.misconceptions[0][:60]}")
+                    bits.append(_t("detail_miscon", s=note.misconceptions[0][:60]))
                 if bits:
-                    self._layout.addWidget(_sec_title("教师理解", "#7C3AED"))
+                    self._layout.addWidget(_sec_title(_t("detail_teacher"), "#7C3AED"))
                     for b in bits:
                         lbl = QLabel(b)
                         lbl.setWordWrap(True)
@@ -1107,7 +1108,7 @@ class NodeDetailCard(QFrame):
         # actions
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
-        teach_btn = QPushButton("开始教学")
+        teach_btn = QPushButton(_t("panel_teach"))
         teach_btn.setStyleSheet(
             "QPushButton { background-color: #1565C0; color: white; border: none;"
             "border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: bold; }"
@@ -1116,7 +1117,7 @@ class NodeDetailCard(QFrame):
         teach_btn.clicked.connect(
             lambda: self.teach_requested.emit(concept.name))
         btn_row.addWidget(teach_btn)
-        full_btn = QPushButton("完整详情")
+        full_btn = QPushButton(_t("detail_full"))
         full_btn.setStyleSheet(
             "QPushButton { background-color: white; color: #0284C7;"
             "border: 1px solid #BAE6FD; border-radius: 6px; padding: 6px 12px;"

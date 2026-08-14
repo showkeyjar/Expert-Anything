@@ -38,6 +38,7 @@ from expert_anything.core.graph_viz import (
     _radial_layout,
     _select_nodes,
 )
+from expert_anything.core.i18n import t as _t
 from expert_anything.core.models import KnowledgeAsset
 
 # --------------------------------------------------------------------------- #
@@ -433,7 +434,7 @@ class KnowledgeGraphView(QGraphicsView):
 
     def _is_context_edge(self, s: str, t: str) -> bool:
         for a, b, label in self._edges:
-            if {a, b} == {s, t} and label == "路径相邻":
+            if {a, b} == {s, t} and label in ("路径相邻", _t("graph_path_edge")):
                 return True
         return False
 

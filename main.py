@@ -44,6 +44,13 @@ from expert_anything.core.teacher import (
     record_learner_question,
 )
 from expert_anything.core.storage import save_teacher
+from expert_anything.core.i18n import (
+    LANGS as _LANGS,
+    get_lang as _get_lang,
+    set_lang as _set_lang,
+    save_lang as _save_lang,
+    t as _t,
+)
 from expert_anything.ui.pyside_graph import KnowledgeGraphView
 from expert_anything.ui.pyside_widgets import (
     ConceptDetailPanel,
@@ -468,6 +475,7 @@ class MainWindow(QMainWindow):
         main_layout.setSpacing(0)
 
         # Top function bar (always visible): asset + progress + quick actions
+        self._main_layout = main_layout
         self.topbar = self._build_topbar()
         main_layout.addWidget(self.topbar)
 
@@ -475,10 +483,11 @@ class MainWindow(QMainWindow):
         body = QHBoxLayout()
         body.setContentsMargins(0, 0, 0, 0)
         body.setSpacing(0)
+        self._body_layout = body
 
         # Sidebar (navigation area)
-        sidebar = self._build_sidebar()
-        body.addWidget(sidebar)
+        self._sidebar = self._build_sidebar()
+        body.addWidget(self._sidebar)
 
         # Content area (display area) with stacked views
         self.content_stack = QStackedWidget()
@@ -516,7 +525,7 @@ class MainWindow(QMainWindow):
 
         # Header
         header = self._view_header(
-            "知识模型",
+            _t("nav_knowledge"),
             self._get_asset_subtitle(),
         )
         layout.addWidget(header)
@@ -552,7 +561,7 @@ class MainWindow(QMainWindow):
         cards_layout.setContentsMargins(0, 0, 0, 0)
         cards_layout.setSpacing(8)
 
-        section_title = QLabel("推荐下一步")
+        section_title = QLabel(_t("section_recommend"))
         section_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1565C0; padding: 4px 0;")
         cards_layout.addWidget(section_title)
 
@@ -575,7 +584,7 @@ class MainWindow(QMainWindow):
         graph_layout.setContentsMargins(0, 0, 0, 0)
         graph_layout.setSpacing(8)
 
-        graph_title = QLabel("概念网络图")
+        graph_title = QLabel(_t("section_graph"))
         graph_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1565C0; padding: 4px 0;")
         graph_layout.addWidget(graph_title)
 
@@ -633,8 +642,8 @@ class MainWindow(QMainWindow):
 
         # Header
         header = self._view_header(
-            "学习者模型",
-            f"跨资产累积掌握度 | {len(self.learner.get('concepts', {}))} 个概念",
+            _t("nav_learner"),
+            _t("learner_subtitle", n=len(self.learner.get('concepts', {}))),
         )
         layout.addWidget(header)
 
@@ -643,10 +652,10 @@ class MainWindow(QMainWindow):
         due = due_for_review(self.learner)
         stat_row = QHBoxLayout()
         stat_row.setSpacing(12)
-        stat_row.addWidget(StatCard("✓", "已掌握 (≥60%)", stats["mastered"], "#2E7D32"))
-        stat_row.addWidget(StatCard("◐", "学习中", stats["learning"], "#B45309"))
-        stat_row.addWidget(StatCard("⏰", "待复习", len(due), "#C62828"))
-        stat_row.addWidget(StatCard("🧠", "跨资产概念", len(self.learner.get('concepts', {})), "#0284C7"))
+        stat_row.addWidget(StatCard("✓", _t("stat_mastered"), stats["mastered"], "#2E7D32"))
+        stat_row.addWidget(StatCard("◐", _t("stat_learning"), stats["learning"], "#B45309"))
+        stat_row.addWidget(StatCard("⏰", _t("stat_due"), len(due), "#C62828"))
+        stat_row.addWidget(StatCard("🧠", _t("stat_cross"), len(self.learner.get('concepts', {})), "#0284C7"))
         stat_row.addStretch()
         layout.addLayout(stat_row)
 
@@ -683,7 +692,7 @@ class MainWindow(QMainWindow):
         ov_lay.setContentsMargins(16, 12, 16, 12)
         ov_lay.setSpacing(6)
 
-        ov_title = QLabel("学习总览")
+        ov_title = QLabel(_t("overview_title"))
         ov_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
         ov_lay.addWidget(ov_title)
 
@@ -733,7 +742,7 @@ class MainWindow(QMainWindow):
         # Review queue (spacing-effect based)
         due = due_for_review(self.learner)
         if due:
-            due_title = QLabel(f"待复习（{len(due)} 个概念 · 基于遗忘曲线）")
+            due_title = QLabel(_t("due_title", n=len(due)))
             due_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #C62828; padding: 4px 0;")
             concepts_layout.addWidget(due_title)
             for d in due:
@@ -747,13 +756,11 @@ class MainWindow(QMainWindow):
                     lambda e, n=d['name']: self._start_teach_by_name(n, review=True)
                 )
                 concepts_layout.addWidget(card)
-            due_hint = QLabel(
-                "间隔复习：薄弱概念 1 天、掌握概念 3-6 天到期——在遗忘前重温效果最好。"
-            )
+            due_hint = QLabel(_t("due_hint"))
             due_hint.setStyleSheet("font-size: 11px; color: #9E9E9E;")
             concepts_layout.addWidget(due_hint)
 
-        section_title = QLabel("所有概念掌握度")
+        section_title = QLabel(_t("all_concepts"))
         section_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32; padding: 4px 0;")
         concepts_layout.addWidget(section_title)
 
@@ -803,7 +810,7 @@ class MainWindow(QMainWindow):
         history_layout = QVBoxLayout(history_widget)
         history_layout.setContentsMargins(20, 16, 20, 20)
 
-        history_title = QLabel("学习历史记录")
+        history_title = QLabel(_t("history_title"))
         history_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32; padding: 4px 0;")
         history_layout.addWidget(history_title)
 
@@ -820,7 +827,7 @@ class MainWindow(QMainWindow):
 
         history_table = QTableWidget()
         history_table.setColumnCount(4)
-        history_table.setHorizontalHeaderLabels(["时间", "概念", "得分", "反馈"])
+        history_table.setHorizontalHeaderLabels([_t("history_col_time"), _t("history_col_concept"), _t("history_col_score"), _t("history_col_feedback")])
         history_table.horizontalHeader().setStretchLastSection(True)
         history_table.verticalHeader().setVisible(False)
         history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -868,14 +875,14 @@ class MainWindow(QMainWindow):
         history_table.setColumnWidth(2, 60)
         if not history:
             history_table.setRowCount(1)
-            empty = QTableWidgetItem("暂无学习历史记录。开始学习并答题后将显示记录。")
+            empty = QTableWidgetItem(_t("history_empty"))
             history_table.setSpan(0, 0, 1, 4)
             history_table.setItem(0, 0, empty)
 
         history_layout.addWidget(history_table)
 
         # Export button
-        export_btn = QPushButton("导出学习报告")
+        export_btn = QPushButton(_t("export_report"))
         export_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -980,12 +987,26 @@ class MainWindow(QMainWindow):
         lay.addWidget(self._topbar_progress)
         lay.addStretch()
 
-        for text, view_name in [
-            ("🎓 开始学习", "teach"),
-            ("🕸 概念网络", "concept_map"),
-            ("📖 阅读原文", "source"),
+        # language switcher
+        self._lang_combo = QComboBox()
+        self._lang_combo.setStyleSheet(
+            "QComboBox { border: 1px solid #BDBDBD; border-radius: 6px;"
+            "padding: 4px 8px; font-size: 12px; background-color: white; }"
+        )
+        for code, name in _LANGS.items():
+            self._lang_combo.addItem(name, code)
+        idx = self._lang_combo.findData(_get_lang())
+        if idx >= 0:
+            self._lang_combo.setCurrentIndex(idx)
+        self._lang_combo.currentIndexChanged.connect(self._apply_language)
+        lay.addWidget(self._lang_combo)
+
+        for key, view_name in [
+            ("quick_teach", "teach"),
+            ("quick_map", "concept_map"),
+            ("quick_source", "source"),
         ]:
-            btn = QPushButton(text)
+            btn = QPushButton(_t(key))
             btn.setStyleSheet(
                 "QPushButton { background-color: white; color: #1565C0;"
                 "border: 1px solid #BBDEFB; border-radius: 6px; padding: 6px 14px;"
@@ -999,7 +1020,7 @@ class MainWindow(QMainWindow):
     def _update_topbar(self) -> None:
         """Refresh the top bar after asset/learner changes."""
         if not self.current_asset_id or self.current_asset_id not in self.assets:
-            self._topbar_asset.setText("未选择资产")
+            self._topbar_asset.setText(_t("topbar_no_asset"))
             self._topbar_progress.setText("")
             return
         data = self.assets[self.current_asset_id]
@@ -1007,10 +1028,34 @@ class MainWindow(QMainWindow):
         self._topbar_asset.setText(f"📚 {title}")
         stats = self._compute_stats()
         due = due_for_review(self.learner)
-        self._topbar_progress.setText(
-            f"已掌握 {stats['mastered']}/{stats['total']} · "
-            f"学习中 {stats['learning']} · 待复习 {len(due)}"
-        )
+        self._topbar_progress.setText(_t(
+            "topbar_progress",
+            m=stats["mastered"], t=stats["total"],
+            l=stats["learning"], r=len(due),
+        ))
+
+    def _apply_language(self) -> None:
+        """Switch UI language and rebuild everything."""
+        code = self._lang_combo.currentData()
+        if not code or code == _get_lang():
+            return
+        _set_lang(code)
+        _save_lang()
+
+        # rebuild topbar
+        new_bar = self._build_topbar()
+        self._main_layout.replaceWidget(self.topbar, new_bar)
+        self.topbar.deleteLater()
+        self.topbar = new_bar
+
+        # rebuild sidebar
+        new_sb = self._build_sidebar()
+        self._body_layout.replaceWidget(self._sidebar, new_sb)
+        self._sidebar.deleteLater()
+        self._sidebar = new_sb
+
+        # rebuild all views
+        self._rebuild_all_views()
 
     def _build_sidebar(self):
         sidebar = QFrame()
@@ -1027,18 +1072,18 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        nav_items = [
-            ("📥", "导入知识资产", "import"),
-            ("🌳", "知识模型", "knowledge"),
-            ("🗺️", "概念图", "concept_map"),
-            ("📖", "阅读原文", "source"),
-            ("🎓", "教学会话", "teach"),
-            ("🧠", "学习者模型", "learner"),
-            ("👨‍🏫", "教师模型", "teacher"),
+        nav_keys = [
+            ("import", "nav_import"),
+            ("knowledge", "nav_knowledge"),
+            ("concept_map", "nav_map"),
+            ("source", "nav_source"),
+            ("teach", "nav_teach"),
+            ("learner", "nav_learner"),
+            ("teacher", "nav_teacher"),
         ]
 
-        for icon, text, view_name in nav_items:
-            btn = QPushButton(f"{icon}  {text}")
+        for view_name, key in nav_keys:
+            btn = QPushButton(_t(key))
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: transparent;
@@ -1607,8 +1652,8 @@ class MainWindow(QMainWindow):
 
         # Header
         header = self._view_header(
-            "导入知识资产",
-            "支持 PDF / EPUB / Word (.docx) / Markdown / TXT / HTML，自动提取概念并构建知识图谱",
+            _t("import_title"),
+            _t("import_subtitle2"),
         )
         layout.addWidget(header)
 
@@ -1723,8 +1768,8 @@ class MainWindow(QMainWindow):
 
         # Header
         header = self._view_header(
-            "概念网络图",
-            "可视化概念之间的关系和层次结构",
+            _t("nav_map"),
+            _t("map_subtitle"),
         )
         layout.addWidget(header)
 
@@ -1740,7 +1785,7 @@ class MainWindow(QMainWindow):
             toolbar.setSpacing(8)
 
             self._map_search = QLineEdit()
-            self._map_search.setPlaceholderText("🔍 搜索概念并定位（回车）")
+            self._map_search.setPlaceholderText(_t("search_placeholder"))
             self._map_search.setStyleSheet(
                 "QLineEdit { border: 1px solid #BDBDBD; border-radius: 6px;"
                 "padding: 5px 10px; font-size: 12.5px; background-color: white; }"
@@ -1749,11 +1794,11 @@ class MainWindow(QMainWindow):
             toolbar.addWidget(self._map_search, 1)
 
             zoom_out_btn = QPushButton("−")
-            zoom_out_btn.setToolTip("缩小")
-            zoom_fit_btn = QPushButton("适应")
-            zoom_fit_btn.setToolTip("自适应缩放")
+            zoom_out_btn.setToolTip(_t("zoom_out_tip"))
+            zoom_fit_btn = QPushButton(_t("zoom_fit"))
+            zoom_fit_btn.setToolTip(_t("zoom_fit"))
             zoom_in_btn = QPushButton("＋")
-            zoom_in_btn.setToolTip("放大")
+            zoom_in_btn.setToolTip(_t("zoom_in_tip"))
             for b in (zoom_out_btn, zoom_fit_btn, zoom_in_btn):
                 b.setStyleSheet(
                     "QPushButton { background-color: white; color: #1565C0;"
@@ -1774,7 +1819,7 @@ class MainWindow(QMainWindow):
             toolbar.addWidget(zoom_fit_btn)
             toolbar.addWidget(zoom_in_btn)
 
-            reset_btn = QPushButton("复位全图")
+            reset_btn = QPushButton(_t("reset_map"))
             reset_btn.setStyleSheet(
                 "QPushButton { background-color: white; color: #1565C0;"
                 "border: 1px solid #BBDEFB; border-radius: 6px; padding: 5px 14px;"
@@ -1787,7 +1832,7 @@ class MainWindow(QMainWindow):
             toolbar.addWidget(reset_btn)
 
             self._map_scope = QComboBox()
-            self._map_scope.addItems(["全部资产", "仅当前资产"])
+            self._map_scope.addItems([_t("scope_all"), _t("scope_current")])
             self._map_scope.setStyleSheet(
                 "QComboBox { border: 1px solid #BDBDBD; border-radius: 6px;"
                 "padding: 4px 8px; font-size: 12.5px; background-color: white; }"
@@ -1935,8 +1980,8 @@ class MainWindow(QMainWindow):
 
         # Header
         header = self._view_header(
-            "阅读原文",
-            "查看原始学习材料",
+            _t("nav_source"),
+            _t("source_subtitle"),
         )
         layout.addWidget(header)
 
@@ -1998,10 +2043,10 @@ class MainWindow(QMainWindow):
         h_lay = QHBoxLayout(header)
         h_lay.setContentsMargins(20, 5, 20, 5)
         h_lay.setSpacing(10)
-        h_t = QLabel("教学会话")
+        h_t = QLabel(_t("nav_teach"))
         h_t.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
         h_lay.addWidget(h_t)
-        h_s = QLabel("选择概念 · 学习 · 答题 · 追问")
+        h_s = QLabel(_t("teach_hint"))
         h_s.setStyleSheet("color: #9E9E9E; font-size: 11px;")
         h_lay.addWidget(h_s)
         h_lay.addStretch()
@@ -2015,7 +2060,7 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(16, 16, 8, 16)
         
-        concept_label = QLabel("选择要学习的概念:")
+        concept_label = QLabel(_t("select_concept"))
         concept_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         left_layout.addWidget(concept_label)
 
@@ -2027,12 +2072,12 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self._teach_concept_list)
         
         # Style selector
-        style_label = QLabel("教学风格:")
+        style_label = QLabel(_t("style_label"))
         style_label.setStyleSheet("font-size: 12px; font-weight: bold; margin-top: 12px;")
         left_layout.addWidget(style_label)
         
         self._teach_style_combo = QComboBox()
-        self._teach_style_combo.addItems(["例子", "图示", "拆解步骤"])
+        self._teach_style_combo.addItems([_t("style_example"), _t("style_diagram"), _t("style_steps")])
         self._teach_style_combo.setStyleSheet("""
             QComboBox {
                 padding: 6px;
@@ -2044,7 +2089,7 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self._teach_style_combo)
 
         # Start button
-        start_btn = QPushButton("开始教学")
+        start_btn = QPushButton(_t("start_teach"))
         start_btn.setStyleSheet("""
             QPushButton {
                 background-color: #1565C0;
@@ -2069,7 +2114,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(8, 16, 16, 16)
         
-        self._teach_result_label = QLabel("选择一个概念开始学习")
+        self._teach_result_label = QLabel(_t("lesson_ready"))
         self._teach_result_label.setStyleSheet("color: #757575; font-size: 13px;")
         right_layout.addWidget(self._teach_result_label)
 
@@ -2117,8 +2162,8 @@ class MainWindow(QMainWindow):
 
         # Header
         header = self._view_header(
-            "教师模型",
-            "系统自己的理解和学习反馈",
+            _t("nav_teacher"),
+            _t("teacher_subtitle"),
         )
         layout.addWidget(header)
 
@@ -2137,7 +2182,7 @@ class MainWindow(QMainWindow):
         ex_lay = QVBoxLayout(explain)
         ex_lay.setContentsMargins(12, 10, 12, 10)
         ex_lay.setSpacing(4)
-        ex_t = QLabel("这个视图是什么？")
+        ex_t = QLabel(_t("teacher_explain_title"))
         ex_t.setStyleSheet("font-size: 12.5px; font-weight: bold; color: #B45309;")
         ex_lay.addWidget(ex_t)
         ex_b = QLabel(
@@ -2181,7 +2226,7 @@ class MainWindow(QMainWindow):
             # Buttons
             btn_layout = QHBoxLayout()
             
-            recheck_btn = QPushButton("重新自检")
+            recheck_btn = QPushButton(_t("recheck"))
             recheck_btn.setStyleSheet("""
                 QPushButton {
                     background-color: #FF9800;
@@ -2199,7 +2244,7 @@ class MainWindow(QMainWindow):
             btn_layout.addWidget(recheck_btn)
             
             if not self.llm_client:
-                hint_label = QLabel("（需要配置 LLM 才能重新自检）")
+                hint_label = QLabel(_t("recheck_needs_llm"))
                 hint_label.setStyleSheet("color: #999; font-size: 12px;")
                 btn_layout.addWidget(hint_label)
             
@@ -2209,7 +2254,7 @@ class MainWindow(QMainWindow):
             # Anomalies section
             anomalies = teacher_data.get('anomalies', [])
             if anomalies:
-                anom_label = QLabel(f"待解项 ({len(anomalies)} 条):")
+                anom_label = QLabel(_t("anomaly_label", n=len(anomalies)))
                 anom_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #E65100; margin-top: 12px;")
                 content_layout.addWidget(anom_label)
                 
@@ -2267,7 +2312,7 @@ class MainWindow(QMainWindow):
             # Concept notes section
             notes = teacher_data.get('concept_notes', [])
             if notes:
-                notes_label = QLabel(f"概念笔记 ({len(notes)} 条):")
+                notes_label = QLabel(_t("notes_label", n=len(notes)))
                 notes_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #666; margin-top: 12px;")
                 content_layout.addWidget(notes_label)
                 
