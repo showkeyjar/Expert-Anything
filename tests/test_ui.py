@@ -320,22 +320,20 @@ class TestI18n(unittest.TestCase):
 
     def test_switch_to_english(self):
         from expert_anything.core import i18n
-        combo = self.win._lang_combo
-        combo.setCurrentIndex(combo.findData("en"))
+        self.win._lang_combo.setCurrentIndex(self.win._lang_combo.findData("en"))
         texts = self._nav_texts()
         self.assertTrue(any("Tutor" in t for t in texts))
         self.assertIn("Mastered", self.win._topbar_progress.text())
-        # restore
-        combo.setCurrentIndex(combo.findData("zh-CN"))
+        # restore (re-fetch: the combo is rebuilt on every switch)
+        self.win._lang_combo.setCurrentIndex(self.win._lang_combo.findData("zh-CN"))
 
     def test_switch_to_japanese(self):
         from expert_anything.core import i18n
-        combo = self.win._lang_combo
-        combo.setCurrentIndex(combo.findData("ja"))
+        self.win._lang_combo.setCurrentIndex(self.win._lang_combo.findData("ja"))
         texts = self._nav_texts()
         self.assertTrue(any("学習セッション" in t for t in texts))
         # restore
-        combo.setCurrentIndex(combo.findData("zh-CN"))
+        self.win._lang_combo.setCurrentIndex(self.win._lang_combo.findData("zh-CN"))
 
 
 if __name__ == "__main__":
