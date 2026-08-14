@@ -261,6 +261,45 @@ def adaptive_path(asset: KnowledgeAsset, learner_state: dict, anomaly_ids: set |
     return items[:limit]
 
 
+def concept_density(asset: KnowledgeAsset, state: dict) -> dict[str, dict]:
+    """Knowledge-density marking for each concept.
+
+    density = importance x novelty:
+      - importance (1-5): relational degree (hub concepts in the graph are
+        structurally important), scaled and clipped.
+      - novelty (0-1): 1 - mastery (unlearned concepts are the newest for
+        this learner).
+    Returns {cid: {"importance": int, "novelty": float, "badge": str}} where
+    badge is a reason code for the UI: "hot" / "important" / "new" / "".
+    """
+    adj: dict[str, set] = {c.id: set() for c in asset.concepts}
+    for r in asset.relations or []:
+        s = getattr(r, "source", None)
+        t = getattr(r, "target", None)
+        if s in adj and t in adj and s != t:
+            adj[s].add(t)
+            adj[t].add(s)
+
+    by_norm = {normalize(k): float(r.get("mastery", 0.0))
+               for k, r in state.get("concepts", {}).items()}
+    out: dict[str, dict] = {}
+    for c in asset.concepts:
+        deg = len(adj[c.id])
+        importance = min(5, max(1, round(deg / 1.5) + 1))
+        mastery = by_norm.get(normalize(c.name), 0.0)
+        novelty = round(1.0 - mastery, 2)
+        if importance >= 4 and mastery == 0:
+            badge = "hot"
+        elif importance >= 4:
+            badge = "important"
+        elif mastery == 0 and importance >= 2:
+            badge = "new"
+        else:
+            badge = ""
+        out[c.id] = {"importance": importance, "novelty": novelty, "badge": badge}
+    return out
+
+
 def topic_clusters(asset: KnowledgeAsset, min_size: int = 1) -> list[dict]:
     """Group a book's concepts into topic clusters.
 

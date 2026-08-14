@@ -539,6 +539,14 @@ class PathLadderView(QWidget):
             "font-size: 13px; font-weight: bold; color: #1F2933;"
         )
         name_row.addWidget(n)
+        badge = item.get("badge", "")
+        if badge:
+            bmap = {"hot": ("🔥 " + _t("badge_hot"), "#D32F2F"),
+                    "important": ("⭐ " + _t("badge_important"), "#B45309"),
+                    "new": ("💡 " + _t("badge_new"), "#0284C7")}
+            if badge in bmap:
+                text, color = bmap[badge]
+                name_row.addWidget(tag_chip(text, color))
         if cid in completed:
             name_row.addWidget(tag_chip(_t("legend_mastered"), "#2E7D32"))
         for tag in tags[:3]:

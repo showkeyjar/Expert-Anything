@@ -550,6 +550,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "\u201c{name}\u201d is an external concept (from the model's knowledge, not in this book). Configure an LLM to see its explanation.",
         "ja": "「{name}」は外部概念です（本にはなく、モデルの知識に由来）。LLMを設定すると説明を表示できます。",
     },
+    "badge_hot": {"zh-CN": "高价值·未学", "en": "high-value, unlearned", "ja": "高価値・未学習"},
+    "badge_important": {"zh-CN": "核心概念", "en": "core", "ja": "核心概念"},
+    "badge_new": {"zh-CN": "新概念", "en": "new", "ja": "新概念"},
+
     "crosslink_title": {
         "zh-CN": "📎 与你已学的「{name}」相关（{asset}）",
         "en": "📎 Related to \u201c{name}\u201d you already learned ({asset})",

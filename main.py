@@ -31,7 +31,7 @@ if sys_path not in sys.path:
 
 from expert_anything.core.learner import (
     adaptive_path, normalize, register_asset, record_evaluation,
-    mark_completed, due_for_review, topic_clusters,
+    mark_completed, due_for_review, topic_clusters, concept_density,
     load as load_learner, save as save_learner,
 )
 from expert_anything.core.extraction import extract_knowledge
@@ -677,13 +677,20 @@ class MainWindow(QMainWindow):
         section_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1565C0; padding: 4px 0;")
         cards_layout.addWidget(section_title)
 
-        # Adaptive path ladder (ranked, with status chips)
+        # Adaptive path ladder (ranked, with status chips + density badges)
         self._path_ladder = PathLadderView()
         self._path_ladder.concept_clicked.connect(self._open_concept_panel)
         if self.current_asset_id:
             path_items = self.get_adaptive_path(self.current_asset_id)
             entry = self.learner.get('assets', {}).get(self.current_asset_id, {})
             completed = set(entry.get('completed', []))
+            # knowledge-density marking (importance x novelty)
+            try:
+                density = concept_density(asset, self.learner)
+                for it in path_items:
+                    it["badge"] = density.get(it.get("cid", ""), {}).get("badge", "")
+            except Exception:
+                pass
             self._path_ladder.set_items(path_items, completed=completed)
         cards_layout.addWidget(self._path_ladder)
 
