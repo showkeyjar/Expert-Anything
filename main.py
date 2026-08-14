@@ -1748,6 +1748,32 @@ class MainWindow(QMainWindow):
             self._map_search.returnPressed.connect(self._on_map_search)
             toolbar.addWidget(self._map_search, 1)
 
+            zoom_out_btn = QPushButton("−")
+            zoom_out_btn.setToolTip("缩小")
+            zoom_fit_btn = QPushButton("适应")
+            zoom_fit_btn.setToolTip("自适应缩放")
+            zoom_in_btn = QPushButton("＋")
+            zoom_in_btn.setToolTip("放大")
+            for b in (zoom_out_btn, zoom_fit_btn, zoom_in_btn):
+                b.setStyleSheet(
+                    "QPushButton { background-color: white; color: #1565C0;"
+                    "border: 1px solid #BBDEFB; border-radius: 6px; padding: 5px 10px;"
+                    "font-size: 12.5px; }"
+                    "QPushButton:hover { background-color: #E3F2FD; }"
+                )
+            zoom_out_btn.clicked.connect(
+                lambda: self._graph_view.zoom_out() if hasattr(self, "_graph_view") else None
+            )
+            zoom_fit_btn.clicked.connect(
+                lambda: self._graph_view.fit_content() if hasattr(self, "_graph_view") else None
+            )
+            zoom_in_btn.clicked.connect(
+                lambda: self._graph_view.zoom_in() if hasattr(self, "_graph_view") else None
+            )
+            toolbar.addWidget(zoom_out_btn)
+            toolbar.addWidget(zoom_fit_btn)
+            toolbar.addWidget(zoom_in_btn)
+
             reset_btn = QPushButton("复位全图")
             reset_btn.setStyleSheet(
                 "QPushButton { background-color: white; color: #1565C0;"

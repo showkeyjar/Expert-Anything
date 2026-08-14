@@ -169,11 +169,18 @@ class KnowledgeGraphView(QGraphicsView):
 
         # layout ----------------------------------------------------------
         if focus_id is None:
-            pos = _layered_layout(nodes, edges)
-            xs = [p[0] for p in pos.values()]
-            ys = [p[1] for p in pos.values()]
-            w = int(max(xs) + BOX_W / 2 + MARGIN) if xs else 400
-            h = int(max(ys) + BOX_H / 2 + MARGIN) if ys else 300
+            # circular scatter as the force-directed initial state: compact
+            # enough to be readable immediately, the physics then spreads it
+            # into a natural network (a layered layout here produced a
+            # 4600px-tall strip that was unreadable at any zoom).
+            n = len(nodes)
+            radius = 70 + 26 * n
+            cx, cy = 700.0, 450.0
+            pos = {}
+            for i, (cid, _name, _role) in enumerate(nodes):
+                ang = -math.pi / 2 + 2 * math.pi * i / max(1, n)
+                pos[cid] = (cx + radius * math.cos(ang), cy + radius * math.sin(ang))
+            w = h = int(radius * 2 + 500)
         else:
             pos, w, h = _radial_layout(nodes, focus_id)
 
@@ -258,14 +265,21 @@ class KnowledgeGraphView(QGraphicsView):
             item.setPos(QPointF(*c))
             item.setData(0, cid)
             item.setData(1, name)
-            item.setToolTip(name)
+            definition = next(
+                (c.definition or c.summary for c in self._asset.concepts
+                 if c.id == cid), "")
+            tip = name
+            if definition:
+                tip += "\n\n" + definition[:120]
+            item.setToolTip(tip)
             scene.addItem(item)
             self._node_items[cid] = item
 
             text = QGraphicsSimpleTextItem(name)
             text.setBrush(QColor("#212529"))
             tf = QFont()
-            tf.setPointSize(10 if role == "focus" else 8)
+            tf.setPointSize(12 if role == "focus" else 10)
+            tf.setBold(role == "focus")
             text.setFont(tf)
             text.setParentItem(item)
             text.setPos(-text.boundingRect().width() / 2,
@@ -280,10 +294,37 @@ class KnowledgeGraphView(QGraphicsView):
         canvas_h = max(h, 900)
         scene.setSceneRect(0, 0, canvas_w, canvas_h)
         self.resetTransform()
-        self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self.fit_content()
         self._hover_cid = None
         self._update_edges()
         self.view_changed.emit()
+
+    # ------------------------------------------------------------------ #
+    # zoom control
+    # ------------------------------------------------------------------ #
+    def fit_content(self) -> None:
+        """Zoom so the node cluster fills the viewport (readable by default)."""
+        scene = self.scene()
+        if not self._node_items:
+            self.fitInView(scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+            return
+        content = QRectF()
+        for item in self._node_items.values():
+            content = content.united(item.sceneBoundingRect())
+        content.adjust(-70, -70, 70, 70)
+        self.fitInView(content, Qt.AspectRatioMode.KeepAspectRatio)
+        # guarantee a readable minimum zoom (nodes ~150px+ wide, text legible)
+        if self.transform().m11() < 0.85:
+            self.scale(0.85 / self.transform().m11(),
+                       0.85 / self.transform().m11())
+
+    def zoom_in(self) -> None:
+        self.scale(1.25, 1.25)
+
+    def zoom_out(self) -> None:
+        new_zoom = self.transform().m11() * (1 / 1.25)
+        if new_zoom >= 0.2:
+            self.scale(1 / 1.25, 1 / 1.25)
 
     # ------------------------------------------------------------------ #
     # force-directed physics

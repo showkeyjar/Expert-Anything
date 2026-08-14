@@ -1,6 +1,6 @@
-=== 2026-08-14T15:14:44.283855 ===
+=== 2026-08-14T15:19:40.161081 ===
 Traceback (most recent call last):
-  File "D:\data\AutoClaw\.openclaw\tmp\verify_round11.py", line 56, in <module>
-    labels1 = [l.text() for l in detail.findChildren(type(detail))[0].findChildren(__import__("PySide6.QtWidgets", fromlist=["QLabel"]).QLabel)]
-                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
-IndexError: list index out of range
+  File "D:\data\AutoClaw\.openclaw\tmp\verify_round12.py", line 38, in <module>
+    assert m11 >= 0.8, f"nodes too small at init (scale {m11})"
+           ^^^^^^^^^^
+AssertionError: nodes too small at init (scale 0.6482051282051282)
