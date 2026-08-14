@@ -15,7 +15,7 @@ from tests.util import ensure_demo, load_main_window, prepare_app
 prepare_app()
 ensure_demo()
 
-from PySide6.QtWidgets import QDialog, QFrame, QLabel, QPushButton, QTableWidget
+from PySide6.QtWidgets import QDialog, QFrame, QLabel, QProgressBar, QPushButton, QTableWidget
 
 from main import MainWindow
 from expert_anything.ui.pyside_graph import KnowledgeGraphView
@@ -211,6 +211,55 @@ class TestPathLadder(unittest.TestCase):
         ladder.set_items([])
         ladder.show()
         self.assertIsNotNone(ladder.grab())
+
+
+class TestRegressionsRound9(unittest.TestCase):
+    """Round-9 fixes: crash after asset switch, global map, single-click panel."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+        cls.win.show()
+
+    def test_asset_switch_then_teach_no_crash(self):
+        other = next(a for a in self.win.assets if a != self.win.current_asset_id)
+        self.win.on_asset_select(other)
+        self.assertIsNotNone(getattr(self.win, "_teach_graph", None))
+        items = self.win.get_adaptive_path(self.win.current_asset_id)
+        self.assertTrue(items)
+        self.win._open_concept_panel(items[0]["cid"])
+        panel = getattr(self.win, "_concept_panel", None)
+        self.assertIsNotNone(panel)
+        panel.teach_requested.emit(items[0]["name"])  # must not raise
+
+    def test_global_map_has_grey_nodes(self):
+        self.win.content_stack.setCurrentIndex(2)
+        gv = self.win._graph_view
+        self.assertGreater(len(gv._grey_ids), 0)
+        self.assertGreater(len(gv.scene().items()), 0)
+
+    def test_single_click_emits_panel_signal(self):
+        gv = self.win._graph_view
+        clicked = []
+        gv.node_single_clicked.connect(clicked.append)
+        cid = next(iter(gv._node_items))
+        item = gv._node_items[cid]
+        pos = gv.mapFromScene(item.scenePos())
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        QTest.mouseClick(gv.viewport(), Qt.MouseButton.LeftButton,
+                         Qt.KeyboardModifier.NoModifier, pos)
+        self.assertEqual(len(clicked), 1)
+
+    def test_learner_view_has_no_progress_bars(self):
+        self.win.content_stack.setCurrentIndex(5)
+        bars = self.win.learner_view.findChildren(QProgressBar)
+        self.assertEqual(len(bars), 0)
+
+    def test_teacher_explainer_present(self):
+        self.win.content_stack.setCurrentIndex(6)
+        labels = [l.text() for l in self.win.teacher_view.findChildren(QLabel)]
+        self.assertTrue(any("教师模型 = 系统对这本书自己的理解" in t for t in labels))
 
 
 if __name__ == "__main__":

@@ -82,6 +82,7 @@ class KnowledgeGraphView(QGraphicsView):
     """Interactive, pan/zoom knowledge graph for the desktop app."""
 
     concept_clicked = Signal(str)   # double-click -> teach (concept name)
+    node_single_clicked = Signal(str)  # single-click on a node (concept id)
     view_changed = Signal()         # focus/full mode changed (for status label)
 
     def __init__(self, parent=None):
@@ -95,6 +96,7 @@ class KnowledgeGraphView(QGraphicsView):
         self._asset: KnowledgeAsset | None = None
         self._mastery: dict[str, float] = {}
         self._anomaly_ids: set[str] = set()
+        self._grey_ids: set[str] = set()
         self._current_id: str | None = None
         self._focus_id: str | None = None
         self._nodes: list[tuple[str, str, str]] = []   # (cid, name, role)
@@ -112,11 +114,18 @@ class KnowledgeGraphView(QGraphicsView):
         mastery_map: dict[str, float] | None = None,
         anomaly_ids: set[str] | None = None,
         current_id: str | None = None,
+        grey_ids: set[str] | None = None,
     ) -> None:
-        """Bind the asset and render the full network (no focus)."""
+        """Bind the asset and render the full network (no focus).
+
+        ``grey_ids``: concept ids rendered grey (e.g. concepts from other
+        assets in the global map) so the map covers a wider scope while the
+        current asset stays colourful.
+        """
         self._asset = asset
         self._mastery = mastery_map or {}
         self._anomaly_ids = anomaly_ids or set()
+        self._grey_ids = grey_ids or set()
         self._current_id = current_id
         self._focus_id = None
         self.render_graph()
@@ -210,13 +219,17 @@ class KnowledgeGraphView(QGraphicsView):
                 fill = _hex(_FILL_CONTEXT)
                 border, bwidth = _hex(_BORDER_CONTEXT), 1
             else:
-                fill = _mastery_fill(self._mastery.get(cid, 0.0))
-                if cid in self._anomaly_ids:
-                    border, bwidth = _hex(_BORDER_ANOMALY), 3
-                elif cid == self._current_id:
-                    border, bwidth = _hex(_BORDER_FOCUS), 3
+                if cid in self._grey_ids:
+                    fill = _hex(_FILL_GREY)
+                    border, bwidth = _hex(_BORDER_CONTEXT), 1
                 else:
-                    border, bwidth = _hex(_BORDER_NORMAL), 1
+                    fill = _mastery_fill(self._mastery.get(cid, 0.0))
+                    if cid in self._anomaly_ids:
+                        border, bwidth = _hex(_BORDER_ANOMALY), 3
+                    elif cid == self._current_id:
+                        border, bwidth = _hex(_BORDER_FOCUS), 3
+                    else:
+                        border, bwidth = _hex(_BORDER_NORMAL), 1
 
             path = QPainterPath()
             path.addRoundedRect(rect, _RADIUS, _RADIUS)
@@ -286,6 +299,7 @@ class KnowledgeGraphView(QGraphicsView):
                     self.reset_focus()
                 else:
                     self.focus_concept(cid)
+                self.node_single_clicked.emit(cid)
                 event.accept()
                 return
             # clicked empty space -> back to full view

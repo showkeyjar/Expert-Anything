@@ -242,18 +242,17 @@ class KnowledgeCard(QFrame):
         title_row.addStretch()
         layout.addLayout(title_row)
 
-        # Mastery bar
-        progress = QFrame(self)
-        progress.setMinimumHeight(6)
-        progress.setMaximumHeight(6)
-        progress.setStyleSheet("background-color: #E0E0E0; border-radius: 3px;")
-        layout.addWidget(progress)
-
-        fill = QFrame(progress)
-        mastery_width = int(self.width() * max(self.mastery, 0.1)) if self.width() > 0 else 50
-        fill.setFixedSize(mastery_width, 6)
-        fill.setStyleSheet(self._get_mastery_color())
-        fill.move(0, 0)
+        # Mastery indicator: colour dot + percent (no horizontal bar)
+        dot_row = QHBoxLayout()
+        dot_row.setSpacing(6)
+        dot = QLabel("●")
+        dot.setStyleSheet(f"color: {self._get_mastery_hex()}; font-size: 12px;")
+        dot_row.addWidget(dot)
+        pct = QLabel(f"{self.mastery:.0%}")
+        pct.setStyleSheet("color: #616161; font-size: 12px; font-weight: bold;")
+        dot_row.addWidget(pct)
+        dot_row.addStretch()
+        layout.addLayout(dot_row)
 
         # Action button
         btn_row = QHBoxLayout()
@@ -304,6 +303,14 @@ class KnowledgeCard(QFrame):
             return "background-color: #FF9800;"
         else:
             return "background-color: #F44336;"
+
+    def _get_mastery_hex(self):
+        if self.mastery >= 0.6:
+            return "#4CAF50"
+        elif self.mastery >= 0.3:
+            return "#FF9800"
+        else:
+            return "#F44336"
 
     def mousePressEvent(self, event):
         self.clicked.emit(self.concept_name)
@@ -1101,14 +1108,8 @@ class MainWindow(QMainWindow):
     def _rebuild_all_views(self):
         """Rebuild every view (after asset switch) without leaking widgets."""
         self._update_topbar()
-        self.import_view = self._build_import_view()
-        self.knowledge_view = self._build_knowledge_view()
-        self.concept_map_view = self._build_concept_map_view()
-        self.source_view = self._build_source_view()
-        self.teach_view = self._build_teach_view()
-        self.learner_view = self._build_learner_view()
-        self.teacher_view = self._build_teacher_view()
-        # reset stale widget refs so handlers can never touch deleted objects
+        # clear stale widget refs BEFORE rebuilding so no handler can touch a
+        # deleted object, and the new views re-register fresh references
         self._teach_view = None
         self._teach_graph = None
         self._graph_view = None
@@ -1116,6 +1117,13 @@ class MainWindow(QMainWindow):
         self._dash_graph = None
         self._path_ladder = None
         self._teach_answer_input = None
+        self.import_view = self._build_import_view()
+        self.knowledge_view = self._build_knowledge_view()
+        self.concept_map_view = self._build_concept_map_view()
+        self.source_view = self._build_source_view()
+        self.teach_view = self._build_teach_view()
+        self.learner_view = self._build_learner_view()
+        self.teacher_view = self._build_teacher_view()
         while self.content_stack.count():
             w = self.content_stack.widget(0)
             self.content_stack.removeWidget(w)
@@ -1171,6 +1179,58 @@ class MainWindow(QMainWindow):
                 border-radius: 4px;
             }
         """
+
+    def _build_global_asset(self):
+        """Virtual asset merging every loaded asset (global knowledge map).
+
+        Concepts of the current asset keep their ids and colours; concepts
+        from other assets get prefixed ids and are rendered grey. Concepts
+        shared across assets (same normalized name) are linked with a
+        '共享概念' edge so the map shows cross-book connections.
+        """
+        from uuid import uuid4 as _uuid4
+        from expert_anything.core.learner import normalize as _norm
+
+        cur = self.get_asset()
+        concepts, relations, id_map, grey_ids = [], [], {}, set()
+        name_to_ids = {}
+        for aid, data in self.assets.items():
+            is_cur = aid == self.current_asset_id
+            for c in data.get("concepts", []):
+                cid = c["id"] if is_cur else f"{aid}:{c['id']}"
+                concepts.append(Concept(
+                    id=cid, name=c.get("name", "?"),
+                    definition=c.get("definition", ""),
+                    summary=c.get("summary", ""),
+                    evidence=c.get("evidence", []),
+                ))
+                if not is_cur:
+                    grey_ids.add(cid)
+                id_map[(aid, c["id"])] = cid
+                name_to_ids.setdefault(_norm(c.get("name", "")), []).append(cid)
+            for r in data.get("relations", []):
+                s = id_map.get((aid, r.get("source")))
+                t = id_map.get((aid, r.get("target")))
+                if s and t and s != t:
+                    relations.append(Relation(
+                        id=str(_uuid4()), source=s, target=t,
+                        label=r.get("label", ""), type="related"))
+        for norm, ids in name_to_ids.items():
+            for a in ids:
+                for b in ids:
+                    if a < b:
+                        relations.append(Relation(
+                            id=str(_uuid4()), source=a, target=b,
+                            label="共享概念", type="related"))
+        path = []
+        if cur is not None:
+            path = [id_map.get((self.current_asset_id, cid), cid)
+                    for cid in cur.learning_path]
+        return KnowledgeAsset(
+            asset_id="global", type="global", title="全局知识图谱",
+            source_name="", created_at="", source_text="",
+            concepts=concepts, relations=relations, learning_path=path,
+        ), grey_ids
 
     def _open_concept_panel(self, concept_id: str) -> None:
         """Open the concept hub dialog for a concept id."""
@@ -1306,7 +1366,9 @@ class MainWindow(QMainWindow):
                 self._teach_graph.focus_concept(concept.id)
                 self._teach_graph.setVisible(True)
         except Exception:
-            self._teach_graph.setVisible(False)
+            tg = getattr(self, "_teach_graph", None)
+            if tg is not None:
+                tg.setVisible(False)
         
         # Run teaching in background
         self._teach_worker = TeachWorker(self.current_tutor, concept, vary=vary)
@@ -1642,13 +1704,13 @@ class MainWindow(QMainWindow):
 
         if self.current_asset_id and self.current_asset_id in self.assets:
             data = self.assets[self.current_asset_id]
-            asset = self.get_asset()
+            asset, grey_ids = self._build_global_asset()
             concepts = data.get('concepts', [])
             relations = data.get('relations', [])
 
             info_label = QLabel(
-                f"共 {len(concepts)} 个概念，{len(relations)} 条关系。"
-                "单击节点聚焦其知识网络，双击开始学习；滚轮缩放，拖拽平移。"
+                f"当前书 {len(concepts)} 个概念（彩色）+ 其它资产 {len(grey_ids)} 个概念（灰色）。"
+                "单击节点查看概念详情，双击开始学习；滚轮缩放，拖拽平移。"
             )
             info_label.setStyleSheet("font-size: 12px; color: #666;")
             content_layout.addWidget(info_label)
@@ -1695,11 +1757,14 @@ class MainWindow(QMainWindow):
                 mastery_map=mastery_map,
                 anomaly_ids=anomaly_ids,
                 current_id=current_id,
+                grey_ids=grey_ids,
             )
+            self._graph_view.node_single_clicked.connect(self._open_concept_panel)
 
             # Legend
             legend_label = QLabel(
-                "图例：绿色 已掌握 · 琥珀 学习中 · 橙色 薄弱 · 灰色 未学 · 蓝框 聚焦/推荐 · 橙框 系统存疑"
+                "图例：绿色 已掌握 · 琥珀 学习中 · 橙色 薄弱 · 深灰 未学 · 浅灰 其它资产概念 ·"
+                "蓝框 聚焦/推荐 · 橙框 系统存疑"
             )
             legend_label.setStyleSheet("font-size: 11px; color: #666; margin-top: 8px;")
             content_layout.addWidget(legend_label)
@@ -1902,6 +1967,31 @@ class MainWindow(QMainWindow):
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(20, 16, 20, 20)
         content_layout.setSpacing(12)
+
+        # What is this view? (plain-language explainer)
+        explain = QFrame()
+        explain.setStyleSheet(
+            "QFrame { background-color: #FFF8E1; border: 1px solid #FFE0B2;"
+            "border-radius: 8px; }"
+        )
+        ex_lay = QVBoxLayout(explain)
+        ex_lay.setContentsMargins(12, 10, 12, 10)
+        ex_lay.setSpacing(4)
+        ex_t = QLabel("这个视图是什么？")
+        ex_t.setStyleSheet("font-size: 12.5px; font-weight: bold; color: #B45309;")
+        ex_lay.addWidget(ex_t)
+        ex_b = QLabel(
+            "教师模型 = 系统对这本书自己的理解（不是你的学习记录）。"
+            "它深读材料后，为每个概念标注「为什么重要 / 前置知识 / 常见误解 / 外部连接」，"
+            "并标出材料中矛盾、未定义、逻辑断点等可疑点（待解项）。"
+            "「重新自检」= 让系统再深读一遍材料并更新理解（需要 LLM）。"
+            "下方「概念笔记」逐条对应书中的概念，点击笔记可查看概念详情并开始学习。"
+        )
+        ex_b.setWordWrap(True)
+        ex_b.setStyleSheet("font-size: 12px; color: #5D4037;")
+        ex_lay.addWidget(ex_t)
+        ex_lay.addWidget(ex_b)
+        content_layout.addWidget(explain)
 
         # Check if teacher data exists
         if self.current_asset_id in self.teacher_models:

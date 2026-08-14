@@ -1,20 +1,6 @@
-=== 2026-08-14T13:51:38.932908 ===
+=== 2026-08-14T14:30:58.357846 ===
 Traceback (most recent call last):
-  File "D:\codes\Expert-Anything\main.py", line 1300, in _show_teaching_content
-    self._teach_graph.set_asset(
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'NoneType' object has no attribute 'set_asset'
-
-During handling of the above exception, another exception occurred:
-
-Traceback (most recent call last):
-  File "D:\codes\Expert-Anything\main.py", line 1216, in _start_teach_by_name
-    self._on_start_teach()
-    ~~~~~~~~~~~~~~~~~~~~^^
-  File "D:\codes\Expert-Anything\main.py", line 1267, in _on_start_teach
-    self._show_teaching_content(concept, vary=vary)
-    ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
-  File "D:\codes\Expert-Anything\main.py", line 1309, in _show_teaching_content
-    self._teach_graph.setVisible(False)
-    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-AttributeError: 'NoneType' object has no attribute 'setVisible'
+  File "D:\codes\Expert-Anything\main.py", line 2140, in _on_teacher_recheck_finished
+    self.content_stack.replaceWidget(old_view, new_view)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'PySide6.QtWidgets.QStackedWidget' object has no attribute 'replaceWidget'. Did you mean: 'removeWidget'?
