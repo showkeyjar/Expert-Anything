@@ -68,6 +68,37 @@ verify_core.py / verify_teacher.py   无头验证（核心闭环 / 教师模型�
 6. **学习者模型** — 跨资产掌握度排行、薄弱项、最近 50 条学习历史、导出学习报告
 7. **教师模型** — 系统自我理解（概念笔记 + 异常列表），可重新自检
 
+## 测试
+
+`powershell
+# 快速（无 LLM，~3 秒，59 个用例）
+python run_tests.py --quick
+
+# 全量（含真实 LLM 测试，~90 秒，66 个用例）
+python run_tests.py
+
+# 单层
+python run_tests.py --layer core
+python run_tests.py --layer ui
+python run_tests.py --layer llm
+`
+
+**分层覆盖**：
+
+| 层 | 用例数 | 内容 |
+|---|---|---|
+| core | 30 | 解析器 (txt/md/docx/epub/pdf)、抽取 (来源约束)、模型序列化、学习者 (掌握度/路径/复习/薄弱)、教学 (三风格/评估)、教师 (异常/信号) |
+| data | 7 | 演示数据完整性 (资产/关系/路径/教师模型/learner 一致性) |
+| ui | 22 | 窗口构建、图谱渲染/聚焦、原文高亮/定位、概念面板、学习者/教师视图、脏数据渲染、路径阶梯、资产切换 |
+| llm | 7 | 真实抽取 (幻觉防护)、三风格差异化、评估参考回答、追问、教师模型 |
+
+每次改进后跑 python run_tests.py --quick 即可确认核心无回归；
+发布前跑全量含 LLM 验证端到端链路。
+
+旧版独立验证脚本 (erify_core.py / erify_teacher.py) 仍保留可用，
+但推荐使用 
+un_tests.py 作为统一入口。
+
 ## 验证
 
 ```powershell
