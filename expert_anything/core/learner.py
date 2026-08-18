@@ -101,7 +101,17 @@ def record_evaluation(
     score: float,
     answer: str,
     feedback: str,
+    meta: dict | None = None,
 ) -> float:
+    """Record one evaluated attempt.
+
+    ``meta`` (optional) carries the *learning trace* — which teaching
+    strategy produced this attempt (style / vary), via which channel
+    (answer / quiz / practice) and whether the generated artifact passed
+    the admission checks. Borrowed from OmniScientist's "execution record
+    as the source of truth": later audits (stuck detection, reports, the
+    teacher model) read this record instead of trusting narrative text.
+    """
     key = normalize(concept_name)
     state.setdefault("concepts", {})
     rec = state["concepts"].setdefault(
@@ -123,18 +133,18 @@ def record_evaluation(
     rec["updated_at"] = datetime.now(timezone.utc).isoformat()
 
     state.setdefault("history", [])
-    state["history"].insert(
-        0,
-        {
-            "concept": concept_name,
-            "key": key,
-            "asset_id": asset_id,
-            "score": round(max(0.0, min(1.0, score)), 2),
-            "answer": answer,
-            "feedback": feedback,
-            "at": rec["updated_at"],
-        },
-    )
+    row = {
+        "concept": concept_name,
+        "key": key,
+        "asset_id": asset_id,
+        "score": round(max(0.0, min(1.0, score)), 2),
+        "answer": answer,
+        "feedback": feedback,
+        "at": rec["updated_at"],
+    }
+    if meta:
+        row["meta"] = {str(k): v for k, v in meta.items()}
+    state["history"].insert(0, row)
     state["history"] = state["history"][:50]
     return new
 
@@ -170,10 +180,11 @@ def adaptive_path(asset: KnowledgeAsset, learner_state: dict, anomaly_ids: set |
     `tags` are reason codes the UI turns into chips: "anom", "weak",
     "foundation", "unblock:<n>", "ready", "blocked", "path".
 
-    The score blends four signals so the queue reflects *real* adaptive
+    The score blends five signals so the queue reflects *real* adaptive
     behaviour instead of one hard-coded rule:
       * mastery deficit  (lower mastery -> higher priority);
       * anomaly link     (walk ahead of the student to resolve open anomalies);
+      * stuck link       (repeated failed attempts -> change strategy, re-teach);
       * foundational leverage (being a prerequisite for many downstream concepts);
       * declared-path position (earlier concepts get a mild boost).
     Readiness is reported via "ready"/"blocked" tags rather than silently
@@ -219,13 +230,14 @@ def adaptive_path(asset: KnowledgeAsset, learner_state: dict, anomaly_ids: set |
         downstream[c.id] = len(seen)
 
     pos = {cid: i for i, cid in enumerate(dict.fromkeys(path))}
+    stuck_keys = {s["key"] for s in stuck_concepts(learner_state)}
 
     items: list[dict] = []
     for c in asset.concepts:
         cid = c.id
         m = mm.get(cid, 0.0)
-        if m >= W and cid not in anomaly_ids:
-            continue  # already mastered and not anomaly-linked -> skip
+        if m >= W and cid not in anomaly_ids and normalize(c.name) not in stuck_keys:
+            continue  # already mastered, not anomaly/stuck-linked -> skip
         tags: list[str] = []
         score = 0.0
         deficit = max(0.0, (W - m)) / W if W > 0 else 0.0
@@ -235,6 +247,9 @@ def adaptive_path(asset: KnowledgeAsset, learner_state: dict, anomaly_ids: set |
         if cid in anomaly_ids:
             score += 0.35
             tags.append("anom")
+        if normalize(c.name) in stuck_keys:
+            score += 0.45
+            tags.append("stuck")
         if incoming[cid] and not outgoing[cid]:
             score += 0.08
             tags.append("foundation")
@@ -348,6 +363,55 @@ def topic_clusters(asset: KnowledgeAsset, min_size: int = 1) -> list[dict]:
         })
     out.sort(key=lambda x: -x["size"])
     return out
+
+
+def stuck_concepts(
+    state: dict, attempts: int = 3, threshold: float | None = None
+) -> list[dict]:
+    """Concepts whose last N evaluated attempts ALL fell below the weakness
+    threshold — the learning-loop analog of OmniScientist's "null result →
+    re-ideate": when repeated tests keep failing, the pipeline must change
+    its teaching strategy instead of repeating it.
+
+    Reads the history trace (source of truth), newest-first; returns
+    [{key, name, attempts, avg}] for every concept with >= ``attempts``
+    recent evaluations whose maximum score is still below ``threshold``.
+    """
+    if attempts < 2:
+        attempts = 2
+    if threshold is None:
+        threshold = config.WEAKNESS_THRESHOLD
+    recent: dict[str, list[float]] = {}
+    names: dict[str, str] = {}
+    for h in state.get("history", []):  # newest first
+        key = h.get("key") or normalize(h.get("concept", ""))
+        if not key:
+            continue
+        scores = recent.setdefault(key, [])
+        names.setdefault(key, h.get("concept", key))
+        if len(scores) >= attempts:
+            continue  # only the most recent N attempts matter
+        try:
+            scores.append(float(h.get("score", 0.0)))
+        except (TypeError, ValueError):
+            continue
+    out: list[dict] = []
+    for key, scores in recent.items():
+        if len(scores) >= attempts and max(scores) < threshold:
+            out.append({
+                "key": key,
+                "name": names.get(key, key),
+                "attempts": len(scores),
+                "avg": round(sum(scores) / len(scores), 2),
+            })
+    out.sort(key=lambda x: x["avg"])
+    return out
+
+
+def is_stuck(state: dict, concept_name: str, attempts: int = 3) -> bool:
+    """Fast predicate: is THIS concept currently stuck?"""
+    key = normalize(concept_name)
+    return any(s["key"] == key for s in stuck_concepts(state, attempts=attempts))
 
 
 def due_for_review(state: dict, limit: int = 8) -> list[dict]:

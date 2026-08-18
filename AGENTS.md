@@ -1,13 +1,20 @@
 # AGENTS.md
 
-# Project: ExpertAnything — Personal Learning OS
+# Project: ExpertAnything — Knowledge Decoder & Learning OS
 
 ## Vision
-> Make anyone expert in anything.
+> Make anyone expert in anything — by decoding knowledge into what the learner can see, play and master.
 
-The system transforms books, papers, documents and courses into interactive,
-adaptive learning experiences. It is **not an AI reader** — it is a Knowledge
-Runtime: 知识资产 → 知识模型 → 学习闭环 → 能力成长.
+本系统不仅是一个辅助学习系统，更是一个**知识解码与生成系统（Knowledge Decoder & Generator）**：
+把书籍/论文/文档中的抽象知识"解译"为图像、动画、互动演示与小游戏，
+配合教学-评估-复习闭环，**直到用户完全理解**。
+
+- 知识链路：知识资产 → 知识模型 → 知识解码（多模态表征）→ 学习闭环 → 能力成长
+- 解码链路（2026-08 落地）：概念+证据+关系 → **SceneSpec**（LLM 生成的类型化场景规范）
+  → `check_scene` 代码准入校验 → 确定性渲染器（分步动画 SVG / 互动 HTML 演示+排序游戏）
+  → 理解验证（游戏得分记入掌握度）。见 `core/decoder.py` 与 `docs/Knowledge_Decoder.md`。
+- 解码铁律（延续来源约束）：场景中的节点/步骤必须源于概念证据与关系，
+  LLM 只产出结构规范，**渲染由确定性代码完成**（开放推理 + 确定性外壳）。
 
 Core principle: optimize for **"Does the user learn?"**, not "Can the AI answer?".
 Do not build a simple RAG chatbot.
@@ -60,6 +67,37 @@ Do not build a simple RAG chatbot.
    - 全局 excepthook：未捕获异常写 error.log + 弹窗，禁止静默消失
 8. **多语言**：所有用户可见文本走 `t(key)`；语言切换重建 topbar/sidebar/views 并
    持久化 lang.json；模块级 `_t()` 求值的常量会导致切语言失效（用渲染时查表函数）。
+
+8. **章节目录与主题是结构入口**：技术人员学习先看结构——知识模型页必须有
+   章节目录树（章节→概念，点击定位原文）与主题聚合（按关系连通分量聚类，
+   一键按学习路径顺序学整个主题）。概念必须有章节归属（SourceLocation 轻量版，
+   用证据位置确定性匹配章节标题，不依赖 LLM）。
+9. **多形式验证闭环**：答题（参考对照）之外，教学流程必须提供
+   - 快速自测（判断正误 / 步骤排序，基于证据出题，得分记入掌握度）
+   - 动手实践任务（证明/构造/伪代码/复现：生成→作答→严格评估→参考解答→记入掌握度）
+10. **LLM 输出语言跟随 UI**：教学/评估/追问/自测/实践的 prompt 按当前界面语言
+    追加语言指令（必须在**调用时**拼接，模块级常量拼接会在 import 时冻结语言）。
+11. **LLM 长输出稳定性**：单次输出超过端点限制（如 33 概念一次自检）必须分批
+    （≤12/批）；长 prompt + json_mode 在部分端点返回空——优先用普通模式 +
+    容错 JSON 解析；单批失败不得丢弃已成功批次。
+12. **代码强制准入 + 卡壳回退（OmniScientist 借鉴，见 docs/OmniScientist_Inspiration.md）**：
+    - LLM 生成的讲解/自测/实践/评估必须通过 `core/checks.py` 的代码校验
+      （结构完整、讲解非定义复制、扣住本概念、anti-template 相似度），
+      失败带原因重试 1 次，仍失败显式降级——prompt 里的铁律是请求，检查才是强制；
+    - 学习轨迹（`record_evaluation(meta=...)`）是唯一事实源：通道/风格/策略
+      轮换全部落轨迹，卡壳检测、报告、教师模型都读它而非叙述文本；
+    - 卡壳闭环：连续 3 次评估不达标 → `stuck` 标签提优先级 + `Tutor.teach`
+      自动轮换讲解风格 + `incorporate_stuck_signal` 写入教师模型；
+    - 生成文本中绝对化措辞必须经 `checks.temper_claims` 软化。
+13. **知识解码：多模态表征生成（见 docs/Knowledge_Decoder.md）**：
+    - LLM 只产出 **SceneSpec**（类型化 JSON 场景规范：nodes/edges/steps/game），
+      渲染一律由确定性代码完成（`core/decoder.py`），LLM 永不直接输出 SVG/HTML；
+    - SceneSpec 必须过 `decoder.check_scene` 代码准入（节点数 3-8、边引用存在、
+      步骤 2-6 且引用节点存在、游戏答案为合法排列），失败带原因重试 1 次，
+      仍失败降级为基于概念关系的确定性场景（结构图仍在，动画/游戏缺省）；
+    - 场景内容必须源于概念定义/证据/关系（来源约束延伸到多模态）；
+    - 互动游戏的得分经既有 quiz 通道记入掌握度——解码产物必须回到学习闭环，
+      不做"看完就走"的展示品。
 
 ## 工程纪律
 

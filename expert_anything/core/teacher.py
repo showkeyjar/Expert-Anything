@@ -573,6 +573,55 @@ def record_learner_question(
     return teacher
 
 
+def incorporate_stuck_signal(
+    asset: KnowledgeAsset,
+    teacher: TeacherModel | None,
+    concept_id: str,
+    attempts: int,
+    avg_score: float,
+) -> TeacherModel:
+    """Closed-loop step for STUCK concepts (repeated failed attempts).
+
+    OmniScientist backtracks to ideation when an experiment keeps yielding
+    null results; here repeated low scores mean the *teaching strategy*
+    must be re-ideated, not just retried. This records the situation as a
+    visible ``learner_gap`` anomaly (kind stays compatible with existing
+    filters) so the Teacher Model — and the anomaly-prioritized path —
+    keeps the concept in front of the learner while Tutor.teach rotates
+    its style. Deterministic, no LLM; caller persists.
+    """
+    if teacher is None:
+        teacher = TeacherModel(asset_id=asset.asset_id, status="fallback", method="lazy_init")
+    c = asset.concept_by_id(concept_id)
+    cname = c.name if c is not None else "(未知概念)"
+    note = teacher.concept_note_by_id(concept_id)
+    if note is None:
+        note = ConceptNote(concept_id=concept_id, name=cname)
+        teacher.concept_notes.append(note)
+    note.learner_signals.append(
+        f"卡壳信号：连续 {attempts} 次评估均未达标（平均 {avg_score:.2f}），"
+        f"当前教学策略可能不适合该学习者，已触发换角度重讲。"
+    )
+    note.learner_signals = note.learner_signals[-8:]
+    teacher.anomalies.append(
+        Anomaly(
+            id=_new_id("an"),
+            kind="learner_gap",
+            description=(
+                f"学习者对「{cname}」连续 {attempts} 次评估未达标（平均得分 {avg_score:.2f}）。"
+                f"这不是单次失误而是系统性卡壳：教学将自动更换讲解风格（例子/图示/拆解步骤轮换），"
+                f"并优先安排复习。"
+            ),
+            location=cname,
+            severity="high",
+            status="surfaced_to_student",
+            source="internal",
+        )
+    )
+    teacher.synthesized_at = datetime.now(timezone.utc).isoformat()
+    return teacher
+
+
 def anomaly_concept_ids(asset: KnowledgeAsset, teacher: TeacherModel | None) -> set[str]:
     """Concept ids that are touched by at least one open/investigating anomaly."""
     ids: set[str] = set()

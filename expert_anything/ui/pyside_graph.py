@@ -39,6 +39,7 @@ from expert_anything.core.graph_viz import (
     _select_nodes,
 )
 from expert_anything.core.i18n import t as _t
+from expert_anything.core.learner import topic_clusters
 from expert_anything.core.models import KnowledgeAsset
 
 # --------------------------------------------------------------------------- #
@@ -76,6 +77,126 @@ def _mastery_fill(m: float) -> QColor:
     if m > 0:
         return _hex(_FILL_ORANGE)
     return _hex(_FILL_GREY)
+
+
+def _clustered_layout(
+    nodes: list[tuple[str, str, str]],
+    asset: KnowledgeAsset,
+) -> tuple[dict[str, tuple[float, float]], int, int]:
+    """Cluster-aware initial layout: each topic cluster gets its own
+    territory on an outer ring; members scatter around their cluster centre.
+
+    Falls back to a plain circular scatter if clustering is not available or
+    every node ends up unassigned.
+    """
+    node_ids = [cid for cid, _n, _r in nodes]
+    node_set = set(node_ids)
+    try:
+        clusters = topic_clusters(asset)
+    except Exception:
+        clusters = []
+
+    # cid -> cluster index (only for displayed nodes)
+    cid_to_clidx: dict[str, int] = {}
+    for i, cl in enumerate(clusters):
+        for cid in cl.get("concept_ids", []) or []:
+            if cid in node_set:
+                cid_to_clidx[cid] = i
+
+    cl_groups: dict[int, list[str]] = {}
+    unassigned: list[str] = []
+    for cid in node_ids:
+        if cid in cid_to_clidx:
+            cl_groups.setdefault(cid_to_clidx[cid], []).append(cid)
+        else:
+            unassigned.append(cid)
+    # singletons are not a "territory" — scatter them with unassigned
+    singleton_clusters = [k for k, v in cl_groups.items() if len(v) < 2]
+    for k in singleton_clusters:
+        for cid in cl_groups.pop(k):
+            unassigned.append(cid)
+
+    # nothing clustered at all -> circular fallback
+    if not cl_groups and not unassigned:
+        n = len(node_ids)
+        radius = 70 + 26 * n
+        cx, cy = 700.0, 450.0
+        pos = {}
+        for i, cid in enumerate(node_ids):
+            ang = -math.pi / 2 + 2 * math.pi * i / max(1, n)
+            pos[cid] = (cx + radius * math.cos(ang), cy + radius * math.sin(ang))
+        w = h = int(radius * 2 + 500)
+        return pos, w, h
+
+    cx, cy = 700.0, 450.0
+    visible_clusters = sorted(cl_groups.keys())
+    n_slots = len(visible_clusters) + (1 if unassigned else 0)
+    outer_r = 150 + 80 * max(1, n_slots)
+    pos: dict[str, tuple[float, float]] = {}
+    centres: dict[int, tuple[float, float]] = {}
+    for k, cl_idx in enumerate(visible_clusters):
+        ang = -math.pi / 2 + 2 * math.pi * k / max(1, n_slots)
+        centres[cl_idx] = (cx + outer_r * math.cos(ang), cy + outer_r * math.sin(ang))
+    if unassigned:
+        ang = -math.pi / 2 + 2 * math.pi * len(visible_clusters) / max(1, n_slots)
+        centres[-1] = (cx + outer_r * math.cos(ang), cy + outer_r * math.sin(ang))
+
+    for cl_idx, members in cl_groups.items():
+        hx, hy = centres.get(cl_idx, (cx, cy))
+        nm = len(members)
+        for j, cid in enumerate(members):
+            if nm == 1:
+                pos[cid] = (hx, hy)
+            else:
+                r = 38 + 16 * nm
+                a = 2 * math.pi * j / max(1, nm)
+                pos[cid] = (hx + r * math.cos(a), hy + r * math.sin(a))
+    for j, cid in enumerate(unassigned):
+        hx, hy = centres.get(-1, (cx, cy))
+        nm = len(unassigned)
+        if nm == 1:
+            pos[cid] = (hx, hy)
+        else:
+            r = 38 + 16 * nm
+            a = 2 * math.pi * j / max(1, nm)
+            pos[cid] = (hx + r * math.cos(a), hy + r * math.sin(a))
+
+    w = h = int(outer_r * 2 + 360)
+    return pos, w, h
+
+
+def _cluster_regions(
+    nodes: list[tuple[str, str, str]],
+    asset: KnowledgeAsset,
+    pos: dict[str, tuple[float, float]],
+) -> list[dict]:
+    """Padded bounding rect per topic cluster — used to draw faint
+    territory backgrounds behind the nodes."""
+    node_set = set(cid for cid, _n, _r in nodes)
+    try:
+        clusters = topic_clusters(asset)
+    except Exception:
+        return []
+    regions: list[dict] = []
+    for i, cl in enumerate(clusters):
+        members = [cid for cid in (cl.get("concept_ids") or []) if cid in node_set and cid in pos]
+        # singletons are not territories — skip region drawing
+        if len(members) < 2:
+            continue
+        pts = [pos[cid] for cid in members]
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        pad = 58
+        minx, miny = min(xs) - pad, min(ys) - pad
+        maxx, maxy = max(xs) + pad, max(ys) + pad
+        regions.append({
+            "label": cl.get("name", "Topic"),
+            "rect": QRectF(minx, miny, maxx - minx, maxy - miny),
+            "idx": i,
+            "hub_id": cl.get("id"),
+            "members": members,
+        })
+    return regions
 
 
 # physics tuning --------------------------------------------------------------
@@ -131,6 +252,14 @@ class KnowledgeGraphView(QGraphicsView):
         self._phases: dict[str, float] = {}
         self._freqs: dict[str, float] = {}
 
+        # cognitive-map analytics: node importance + learning frontier
+        self._centrality: dict[str, float] = {}
+        self._frontier_ids: set[str] = set()
+
+        # cluster territories (drawn behind nodes)
+        self._cluster_regions: list[dict] = []
+        self._region_items: list[tuple] = []  # (rect_item, label_item)
+
         # dragging
         self._drag_cid: str | None = None
         self._drag_start = QPointF()
@@ -168,22 +297,21 @@ class KnowledgeGraphView(QGraphicsView):
         self._nodes = nodes
         self._edges = edges
 
+        # cognitive-map analytics: hub sizing + learning frontier
+        self._centrality = self._compute_centrality()
+        self._frontier_ids = self._compute_frontier()
+
         # layout ----------------------------------------------------------
         if focus_id is None:
-            # circular scatter as the force-directed initial state: compact
-            # enough to be readable immediately, the physics then spreads it
-            # into a natural network (a layered layout here produced a
-            # 4600px-tall strip that was unreadable at any zoom).
-            n = len(nodes)
-            radius = 70 + 26 * n
-            cx, cy = 700.0, 450.0
-            pos = {}
-            for i, (cid, _name, _role) in enumerate(nodes):
-                ang = -math.pi / 2 + 2 * math.pi * i / max(1, n)
-                pos[cid] = (cx + radius * math.cos(ang), cy + radius * math.sin(ang))
-            w = h = int(radius * 2 + 500)
+            # cluster-aware initial layout: each topic cluster gets its own
+            # territory on an outer ring so the map reads as named regions,
+            # not a featureless scatter. Physics then settles within each
+            # territory without breaking the regional structure.
+            pos, w, h = _clustered_layout(nodes, self._asset)
+            self._cluster_regions = _cluster_regions(nodes, self._asset, pos)
         else:
             pos, w, h = _radial_layout(nodes, focus_id)
+            self._cluster_regions = []
 
         self._rebuild_scene(pos, w, h)
 
@@ -200,6 +328,59 @@ class KnowledgeGraphView(QGraphicsView):
 
     def is_focused(self) -> bool:
         return self._focus_id is not None
+
+    # ------------------------------------------------------------------ #
+    # cognitive-map analytics
+    # ------------------------------------------------------------------ #
+    def _compute_centrality(self) -> dict[str, float]:
+        """Degree-based importance: hubs (more connections) render larger."""
+        deg: dict[str, int] = {}
+        for s_id, t_id, _label in self._edges:
+            deg[s_id] = deg.get(s_id, 0) + 1
+            deg[t_id] = deg.get(t_id, 0) + 1
+        if not deg:
+            return {}
+        maxd = max(deg.values())
+        out: dict[str, float] = {}
+        for cid, _name, _role in self._nodes:
+            d = deg.get(cid, 0)
+            f = 0.85 + 0.9 * (d / maxd if maxd else 0.0)
+            out[cid] = max(0.85, min(1.9, f))
+        return out
+
+    def _compute_frontier(self) -> set[str]:
+        """Learning-frontier concepts: unstudied but buildable from what you
+        already know (an adjacent mastered concept). On a fresh map with nothing
+        mastered yet, the highest-centrality hubs become the starting frontier.
+        """
+        if not self._asset:
+            return set()
+        neigh: dict[str, set[str]] = {cid: set() for cid, _n, _r in self._nodes}
+        for s_id, t_id, _label in self._edges:
+            if s_id in neigh:
+                neigh[s_id].add(t_id)
+            if t_id in neigh:
+                neigh[t_id].add(s_id)
+        mastered = {
+            cid for cid, _n, _r in self._nodes
+            if not str(cid).startswith("ext:") and self._mastery.get(cid, 0.0) >= 0.6
+        }
+        unstudied = [
+            cid for cid, _n, _r in self._nodes
+            if not str(cid).startswith("ext:")
+            and self._mastery.get(cid, 0.0) < 0.3
+        ]
+        frontier: set[str] = set()
+        if mastered:
+            for cid in unstudied:
+                if any(n in mastered for n in neigh.get(cid, set())):
+                    frontier.add(cid)
+        else:
+            ranked = sorted(
+                unstudied, key=lambda c: -self._centrality.get(c, 1.0)
+            )
+            frontier = set(ranked[: max(3, len(ranked) // 4 + 1)])
+        return frontier
 
     # ------------------------------------------------------------------ #
     # scene building
@@ -219,7 +400,34 @@ class KnowledgeGraphView(QGraphicsView):
                 return FBOX_W, FBOX_H
             if role == "context":
                 return CBOX_W, CBOX_H
-            return BOX_W, BOX_H
+            f = self._centrality.get(cid, 1.0)
+            return BOX_W * f, BOX_H * f
+
+        # cluster territories (faint background; drawn first / lowest z) ----
+        self._region_items = []
+        for _i, reg in enumerate(self._cluster_regions):
+            rect = reg["rect"]
+            rpath = QPainterPath()
+            rpath.addRoundedRect(rect, 18, 18)
+            ritem = QGraphicsPathItem(rpath)
+            ritem.setBrush(QBrush(QColor(0x66, 0x9A, 0xD6, 32)))
+            pen = QPen(QColor(0x4A, 0x7A, 0xB0, 170), 1.4)
+            pen.setStyle(Qt.PenStyle.DashLine)
+            ritem.setPen(pen)
+            ritem.setZValue(-10)
+            ritem.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            scene.addItem(ritem)
+            label = QGraphicsSimpleTextItem(reg["label"])
+            lf = QFont()
+            lf.setPointSize(9)
+            lf.setBold(True)
+            label.setFont(lf)
+            label.setBrush(QColor(0x2A, 0x4A, 0x6E, 220))
+            label.setPos(rect.x() + 10, rect.y() + 4)
+            label.setZValue(-9)
+            label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            scene.addItem(label)
+            self._region_items.append((ritem, label))
 
         # edges ------------------------------------------------------------
         for s_id, t_id, _label in self._edges:
@@ -272,9 +480,57 @@ class KnowledgeGraphView(QGraphicsView):
             tip = name
             if definition:
                 tip += "\n\n" + definition[:120]
+            # frontier nodes get an explicit affordance — the legend explains
+            # the orange dashed ring, but the tooltip removes any guesswork
+            if cid in self._frontier_ids:
+                tip = "🎯 " + _t("frontier_tip_prefix") + "\n\n" + tip
             item.setToolTip(tip)
             scene.addItem(item)
             self._node_items[cid] = item
+
+            # learning-frontier ring (does not capture mouse events)
+            if cid in self._frontier_ids:
+                rw, rh = bw + 12, bh + 12
+                rpath = QPainterPath()
+                rpath.addRoundedRect(
+                    QRectF(-rw / 2, -rh / 2, rw, rh), _RADIUS + 3, _RADIUS + 3
+                )
+                ring = QGraphicsPathItem(rpath)
+                rpen = QPen(_hex(_BORDER_ANOMALY), 2.5)
+                rpen.setStyle(Qt.PenStyle.DashLine)
+                ring.setPen(rpen)
+                ring.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+                ring.setPos(QPointF(*c))
+                ring.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                ring.setZValue(item.zValue() - 1)
+                scene.addItem(ring)
+
+            # mastery growth arc: a thin progress ring around the node that
+            # visually shows how much of this concept the learner has acquired.
+            # drawn after the frontier ring so it sits on top of node fill.
+            mastery = self._mastery.get(cid, 0.0)
+            if mastery > 0 and role not in ("focus", "context") and cid not in self._grey_ids:
+                if mastery >= 0.6:
+                    arc_color = QColor(0x2E, 0x7D, 0x32)
+                elif mastery >= 0.3:
+                    arc_color = QColor(0xC8, 0x82, 0x1E)
+                else:
+                    arc_color = QColor(0xE6, 0x78, 0x28)
+                arc_r = max(bw, bh) / 2 + 4
+                arc_rect = QRectF(-arc_r, -arc_r, arc_r * 2, arc_r * 2)
+                arc_path = QPainterPath()
+                # start at 12 o'clock, sweep clockwise proportional to mastery
+                arc_path.arcMoveTo(arc_rect, 90)
+                arc_path.arcTo(arc_rect, 90, -360 * mastery)
+                arc_item = QGraphicsPathItem(arc_path)
+                apen = QPen(arc_color, 3)
+                apen.setCapStyle(Qt.PenCapStyle.RoundCap)
+                arc_item.setPen(apen)
+                arc_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+                arc_item.setPos(QPointF(*c))
+                arc_item.setZValue(item.zValue() + 1)
+                arc_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                scene.addItem(arc_item)
 
             text = QGraphicsSimpleTextItem(name)
             text.setBrush(QColor("#212529"))

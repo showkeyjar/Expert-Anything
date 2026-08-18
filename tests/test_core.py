@@ -12,7 +12,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from expert_anything.core import learner, storage
-from expert_anything.core.extraction import extract_knowledge
+from expert_anything.core.extraction import extract_knowledge, _assemble, _fallback
 from expert_anything.core.learner import (
     adaptive_path,
     due_for_review,
@@ -144,6 +144,54 @@ class TestExtraction(unittest.TestCase):
         for c in asset.concepts:
             for ev in c.evidence:
                 self.assertIn(ev, SAMPLE, "evidence not literally in source")
+
+    def test_fallback_stamps_source_locations(self):
+        asset = extract_knowledge(SAMPLE, "agent-memory.md", llm=None)
+        located = 0
+        for c in asset.concepts:
+            if not c.evidence:
+                continue
+            self.assertTrue(c.locations, f"concept {c.name!r} evidence has no location")
+            for loc in c.locations:
+                self.assertGreaterEqual(loc.char_start, 0)
+                self.assertGreater(loc.char_end, loc.char_start)
+                self.assertGreaterEqual(loc.line, 1)
+                self.assertIsInstance(loc.chapter, str)
+                # the recorded span must map back to one of the concept's evidence
+                self.assertIn(
+                    SAMPLE[loc.char_start:loc.char_end],
+                    c.evidence,
+                    "recorded span must be one of the concept's evidence",
+                )
+            located += 1
+        self.assertGreater(located, 0, "no grounded concept was located")
+
+    def test_assemble_stamps_locations_from_llm_dict(self):
+        text = "Alpha 是第一个概念。Beta 依赖 Alpha 才能运行。"
+        data = {
+            "concepts": [
+                {"name": "Alpha", "definition": "第一个概念", "evidence": ["Alpha 是第一个概念。"]},
+                {"name": "Beta", "definition": "第二个概念", "evidence": ["Beta 依赖 Alpha 才能运行。"]},
+            ],
+            "relations": [{"source": "Alpha", "target": "Beta", "label": "依赖", "evidence": "Beta 依赖 Alpha"}],
+            "learning_path": ["Alpha", "Beta"],
+        }
+        asset = _assemble(data, text, "x.md", "test")
+        by_name = {c.name: c for c in asset.concepts}
+        alpha = by_name["Alpha"]
+        self.assertTrue(alpha.locations, "Alpha should have a source location")
+        loc = alpha.locations[0]
+        self.assertEqual(text[loc.char_start:loc.char_end], "Alpha 是第一个概念。")
+        self.assertEqual(loc.line, 1)
+        # HTML/JSON round-trip preserves locations
+        alpha2 = Concept.from_dict(alpha.to_dict())
+        self.assertEqual(len(alpha2.locations), len(alpha.locations))
+        self.assertEqual(alpha2.locations[0].char_start, loc.char_start)
+
+    def test_concept_from_dict_tolerates_missing_locations(self):
+        c = Concept.from_dict({"name": "X"})
+        self.assertEqual(c.locations, [])
+        self.assertIn("locations", c.to_dict())
 
 
 # --------------------------------------------------------------------------- #

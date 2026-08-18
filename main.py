@@ -53,6 +53,7 @@ from expert_anything.core.i18n import (
     save_lang as _save_lang,
     t as _t,
 )
+from expert_anything.core.report_html import build_html_report, localize_method
 from expert_anything.ui.pyside_graph import KnowledgeGraphView
 from expert_anything.ui.pyside_widgets import (
     ConceptDetailPanel,
@@ -62,6 +63,7 @@ from expert_anything.ui.pyside_widgets import (
     TrendChartView,
     MasteryDistributionBar,
     NodeDetailCard,
+    MapLegend,
 )
 
 def _install_excepthook():
@@ -513,29 +515,46 @@ class MainWindow(QMainWindow):
         main_layout.addLayout(body, 1)
         self._update_topbar()
 
-    def _build_knowledge_view(self):
-        """Build the knowledge model view with adaptive learning path."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Header
-        header = self._view_header(
-            _t("nav_knowledge"),
-            self._get_asset_subtitle(),
+    # --- focused "Learn" home -------------------------------------------
+    def _concept_mastery(self, concept) -> float:
+        return float(
+            self.learner.get("concepts", {})
+            .get(normalize(concept.name), {})
+            .get("mastery", 0.0)
         )
-        layout.addWidget(header)
 
-        # Scrollable content
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    def _next_concept(self):
+        """Return (next Concept, mastery) to learn, skipping completed ones."""
+        asset = self.get_asset()
+        if asset is None:
+            return None, 0.0
+        completed = set(
+            self.learner.get("assets", {})
+            .get(self.current_asset_id, {})
+            .get("completed", [])
+        )
+        path = self.get_adaptive_path(self.current_asset_id) if self.current_asset_id else []
+        for it in path:
+            cid = it.get("cid")
+            if cid in completed:
+                continue
+            c = asset.concept_by_id(cid)
+            if c is not None:
+                return c, self._concept_mastery(c)
+        for c in asset.concepts:
+            if c.id not in completed:
+                return c, self._concept_mastery(c)
+        if asset.concepts:
+            return asset.concepts[0], self._concept_mastery(asset.concepts[0])
+        return None, 0.0
 
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setContentsMargins(20, 16, 20, 20)
-        scroll_layout.setSpacing(16)
+    def _build_browse_drawer(self) -> QWidget:
+        """Heavy, rarely-needed overview: stats + full TOC + clusters + ladder +
+        graph. Hidden by default on the Learn home; shown only on demand."""
+        drawer = QWidget()
+        dlayout = QVBoxLayout(drawer)
+        dlayout.setContentsMargins(0, 0, 0, 0)
+        dlayout.setSpacing(16)
 
         # Dashboard stats
         stats_layout = QHBoxLayout()
@@ -550,7 +569,7 @@ class MainWindow(QMainWindow):
         ]:
             stats_layout.addWidget(StatCard(*card))
         stats_layout.addStretch()
-        scroll_layout.addLayout(stats_layout)
+        dlayout.addLayout(stats_layout)
         # Chapter table of contents + topic clusters (structure map, P0-1/P1-3)
         asset = self.get_asset()
         if asset is not None:
@@ -613,7 +632,7 @@ class MainWindow(QMainWindow):
                 self._toc_tree.addTopLevelItem(QTreeWidgetItem([_t("chapter_empty")]))
             self._toc_tree.itemClicked.connect(self._on_toc_clicked)
             toc_lay.addWidget(self._toc_tree)
-            scroll_layout.addWidget(toc_card)
+            dlayout.addWidget(toc_card)
 
             # Topic clusters (P1-3)
             clusters = topic_clusters(asset)
@@ -664,7 +683,7 @@ class MainWindow(QMainWindow):
                         lambda checked, cid=cl["id"]: self._start_topic(cid))
                     row.addWidget(learn_btn)
                     tp_lay.addLayout(row)
-                scroll_layout.addWidget(topic_card)
+                dlayout.addWidget(topic_card)
 
 
         # Concept cards from adaptive path
@@ -695,7 +714,7 @@ class MainWindow(QMainWindow):
         cards_layout.addWidget(self._path_ladder)
 
         cards_layout.addStretch()
-        scroll_layout.addWidget(cards_container)
+        dlayout.addWidget(cards_container)
 
         # Live concept graph (embedded dashboard view)
         graph_container = QWidget()
@@ -744,7 +763,51 @@ class MainWindow(QMainWindow):
                 )
                 self._dash_graph.concept_clicked.connect(self.on_card_click)
 
-        scroll_layout.addWidget(graph_container)
+        dlayout.addWidget(graph_container)
+        dlayout.addStretch()
+        return drawer
+
+    def _build_knowledge_view(self):
+        """Build the knowledge model view with adaptive learning path."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # Header
+        header = self._view_header(
+            _t("nav_knowledge"),
+            self._get_asset_subtitle(),
+        )
+        layout.addWidget(header)
+
+        # Fallback (deterministic) extraction warning banner
+        cur_asset = self.get_asset()
+        if cur_asset is not None:
+            mlow = (cur_asset.method or "").lower()
+            if "fallback" in mlow or "failed" in mlow or "deterministic" in mlow:
+                warn = QLabel(_t("dash_fallback_warn", method=localize_method(cur_asset.method)))
+                warn.setWordWrap(True)
+                warn.setStyleSheet(
+                    "background-color:#FFF4E5; color:#8A4B00; border:1px solid #FFD28A;"
+                    "border-radius:8px; padding:10px 14px; font-size:13px; margin:0 16px;"
+                )
+                layout.addWidget(warn)
+
+        # Scrollable content
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(20, 16, 20, 20)
+        scroll_layout.setSpacing(16)
+
+        # ---- Detailed knowledge model (secondary view; the cognitive map is the home) ----
+        drawer = self._build_browse_drawer()
+        scroll_layout.addWidget(drawer)
+
         scroll_layout.addStretch()
 
         scroll.setWidget(scroll_content)
@@ -1015,6 +1078,22 @@ class MainWindow(QMainWindow):
         """)
         export_btn.clicked.connect(self._on_export_report)
         history_layout.addWidget(export_btn)
+
+        export_html_btn = QPushButton(_t("export_html"))
+        export_html_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1565C0;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+            QPushButton:hover { background-color: #0D47A1; }
+        """)
+        export_html_btn.clicked.connect(self._on_export_report_html)
+        history_layout.addWidget(export_html_btn)
+
         history_layout.addStretch()
 
         tabs.addTab(history_widget, _t("tab_history"))
@@ -1028,7 +1107,7 @@ class MainWindow(QMainWindow):
         if self.current_asset_id and self.current_asset_id in self.assets:
             data = self.assets[self.current_asset_id]
             title = data.get('title', self.current_asset_id)
-            method = data.get('method', 'llm_extraction_chunked_v1')
+            method = localize_method(data.get('method', 'llm_extraction_chunked_v1'))
             concepts = len(data.get('concepts', []))
             return _t("dash_subtitle", title=title, concepts=concepts, method=method)
         return _t("dash_loading")
@@ -1237,35 +1316,45 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        nav_keys = [
-            ("import", "nav_import"),
-            ("knowledge", "nav_knowledge"),
-            ("concept_map", "nav_map"),
-            ("source", "nav_source"),
-            ("teach", "nav_teach"),
-            ("learner", "nav_learner"),
-            ("teacher", "nav_teacher"),
-        ]
+        # Primary navigation — the cognitive map is the home; learning happens on the map
+        primary = [("concept_map", "nav_map"), ("teach", "nav_teach"), ("import", "nav_import")]
 
-        for view_name, key in nav_keys:
+        def add_nav(view_name, key, muted=False):
             btn = QPushButton(_t(key))
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: transparent;
-                    color: #BBDEFB;
-                    text-align: left;
-                    padding: 10px 12px;
-                    border: none;
-                    border-radius: 6px;
-                    font-size: 13px;
-                }
-                QPushButton:hover {
-                    background-color: #283593;
-                    color: white;
-                }
-            """)
+            if muted:
+                btn.setStyleSheet(
+                    "QPushButton { background-color: transparent; color: #7986CB;"
+                    "text-align: left; padding: 8px 12px; border: none;"
+                    "border-radius: 6px; font-size: 12.5px; }"
+                    "QPushButton:hover { background-color: #283593; color: white; }"
+                )
+            else:
+                btn.setStyleSheet(
+                    "QPushButton { background-color: transparent; color: #E3F2FD;"
+                    "text-align: left; padding: 10px 12px; border: none;"
+                    "border-radius: 6px; font-size: 13.5px; font-weight: bold; }"
+                    "QPushButton:hover { background-color: #283593; color: white; }"
+                )
             btn.clicked.connect(lambda checked, v=view_name: self.on_nav_click(v))
             layout.addWidget(btn)
+
+        for view_name, key in primary:
+            add_nav(view_name, key, muted=False)
+
+        # Muted "explore" group — meta views, secondary to learning
+        explore_label = QLabel(_t("explore_group"))
+        explore_label.setStyleSheet(
+            "color: #5C6BC0; font-size: 10.5px; letter-spacing: 1px; padding: 6px 12px 0;"
+        )
+        layout.addWidget(explore_label)
+
+        for view_name, key in [
+            ("knowledge", "nav_knowledge"),
+            ("source", "nav_source"),
+            ("learner", "nav_learner"),
+            ("teacher", "nav_teacher"),
+        ]:
+            add_nav(view_name, key, muted=True)
 
         layout.addStretch()
 
@@ -1359,7 +1448,7 @@ class MainWindow(QMainWindow):
             btn.setChecked(aid == asset_id)
         # Refresh all views
         self._rebuild_all_views()
-        self.content_stack.setCurrentIndex(1)  # knowledge model view
+        self.content_stack.setCurrentIndex(2)  # cognitive map is the home view
 
     def _get_stylesheet(self):
         return """
@@ -1537,10 +1626,9 @@ class MainWindow(QMainWindow):
         explain from a different angle so the review adds something new).
         """
         self.on_nav_click("teach")
-        for i in range(self._teach_concept_list.count()):
-            if self._teach_concept_list.item(i).text() == concept_name:
-                self._teach_concept_list.setCurrentRow(i)
-                break
+        idx = self._teach_concept_list.findText(concept_name)
+        if idx >= 0:
+            self._teach_concept_list.setCurrentIndex(idx)
         self._review_mode = review
         self._on_start_teach()
 
@@ -1559,19 +1647,17 @@ class MainWindow(QMainWindow):
         # Navigate to teach view
         self.on_nav_click("teach")
         # Find and select the concept
-        for i in range(self._teach_concept_list.count()):
-            if self._teach_concept_list.item(i).text() == concept_name:
-                self._teach_concept_list.setCurrentRow(i)
-                break
+        idx = self._teach_concept_list.findText(concept_name)
+        if idx >= 0:
+            self._teach_concept_list.setCurrentIndex(idx)
 
     def _on_start_teach(self):
         """Handle starting teaching session."""
-        selected = self._teach_concept_list.currentItem()
-        if not selected:
+        concept_name = self._teach_concept_list.currentText()
+        if not concept_name:
             QMessageBox.warning(self, _t("hint"), _t("pick_concept_first"))
             return
 
-        concept_name = selected.text()
         asset = self.get_asset()
         if not asset:
             return
@@ -1640,6 +1726,7 @@ class MainWindow(QMainWindow):
                 tg.setVisible(False)
         
         # Run teaching in background
+        self._teach_vary = vary
         self._teach_worker = TeachWorker(self.current_tutor, concept, vary=vary)
         self._teach_worker.finished.connect(self._on_teach_finished)
         self._teach_worker.error.connect(self._on_teach_error)
@@ -1749,6 +1836,7 @@ class MainWindow(QMainWindow):
                 result.get("score", 0.0),
                 f"[实践] {answer[:60]}",
                 result.get("feedback", ""),
+                meta={"channel": "practice"},
             )
             self.save_learner_state()
             self._update_topbar()
@@ -1787,6 +1875,7 @@ class MainWindow(QMainWindow):
                 score,
                 f"[自测] {score:.0%}",
                 "快速自测",
+                meta={"channel": "quiz"},
             )
             self.save_learner_state()
             self._update_topbar()
@@ -1854,11 +1943,10 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, _t("hint"), _t("no_answer"))
             return
         
-        selected = self._teach_concept_list.currentItem()
-        if not selected:
+        concept_name = self._teach_concept_list.currentText()
+        if not concept_name:
             return
-        
-        concept_name = selected.text()
+
         asset = self.get_asset()
         if not asset:
             return
@@ -1881,7 +1969,10 @@ class MainWindow(QMainWindow):
             feedback = result.get('feedback', '')
             understood = result.get('understood', False)
             
-            # Record evaluation
+            # Record evaluation, with the learning trace (which teaching
+            # strategy produced this attempt) as meta — the trace is the
+            # source of truth for stuck detection and later audits.
+            lesson = getattr(self, "_teach_lesson", None) or {}
             new_mastery = record_evaluation(
                 self.learner,
                 concept.name,
@@ -1889,8 +1980,40 @@ class MainWindow(QMainWindow):
                 score,
                 answer,
                 feedback,
+                meta={
+                    "channel": "answer",
+                    "style": lesson.get("style", ""),
+                    "vary": getattr(self, "_teach_vary", 0),
+                    "rotated_style": bool(lesson.get("rotated_style")),
+                    "judges": result.get("judges", 1),
+                },
             )
             self.save_learner_state()
+
+            # Stuck detection (OmniScientist "null result → re-ideate"): when
+            # repeated attempts keep failing, surface it in the Teacher Model
+            # so the anomaly-prioritized path keeps the concept in front and
+            # Tutor.teach rotates its style on the next lesson.
+            try:
+                from expert_anything.core.learner import stuck_concepts
+                from expert_anything.core.teacher import incorporate_stuck_signal
+                key = normalize(concept.name)
+                hit = next(
+                    (s for s in stuck_concepts(self.learner) if s["key"] == key), None
+                )
+                if hit is not None:
+                    teacher = None
+                    td = self.teacher_models.get(asset.asset_id)
+                    if td:
+                        teacher = TeacherModel.from_dict(td)
+                    teacher = incorporate_stuck_signal(
+                        asset, teacher, concept.id,
+                        hit["attempts"], hit["avg"],
+                    )
+                    save_teacher(asset.asset_id, teacher)
+                    self.teacher_models[asset.asset_id] = teacher.to_dict()
+            except Exception:
+                pass
             
             # Show result as an evaluation card (reference + gap)
             reference = result.get('reference', '')
@@ -2156,12 +2279,10 @@ class MainWindow(QMainWindow):
 
             self._refresh_map_view()
 
-            # Legend
-            legend_label = QLabel(
-                _t("legend_full")
-            )
-            legend_label.setStyleSheet("font-size: 11px; color: #666; margin-top: 8px;")
-            content_layout.addWidget(legend_label)
+            # Visual legend chips (replaces the plain-text legend so the orange
+            # dashed frontier ring has an obvious visual explanation).
+            self._map_legend = MapLegend()
+            content_layout.addWidget(self._map_legend)
         else:
             placeholder = QLabel(_t("no_asset_placeholder"))
             placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -2416,15 +2537,24 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(16, 16, 8, 16)
         
-        concept_label = QLabel(_t("select_concept"))
+        concept_label = QLabel(_t("swap_concept"))
         concept_label.setStyleSheet("font-size: 13px; font-weight: bold;")
         left_layout.addWidget(concept_label)
 
-        self._teach_concept_list = QListWidget()
+        self._teach_concept_list = QComboBox()
+        self._teach_concept_list.setStyleSheet(
+            "QComboBox { padding: 6px; border: 1px solid #E0E0E0; border-radius: 4px;"
+            "font-size: 12px; background-color: white; }"
+        )
         if self.current_asset_id and self.current_asset_id in self.assets:
             data = self.assets[self.current_asset_id]
-            for c in data.get('concepts', []):
-                self._teach_concept_list.addItem(c.get('name', '?'))
+            names = [c.get('name', '?') for c in data.get('concepts', [])]
+            self._teach_concept_list.addItems(names)
+            # Default to the adaptive next concept so the learner isn't faced with
+            # a full list to scan — the rest stay hidden behind the dropdown.
+            next_c, _ = self._next_concept()
+            if next_c is not None and next_c.name in names:
+                self._teach_concept_list.setCurrentText(next_c.name)
         left_layout.addWidget(self._teach_concept_list)
         
         # Style selector
@@ -3004,6 +3134,41 @@ class MainWindow(QMainWindow):
                     _t("done"),
                     _t("report_saved", filename=filename)
                 )
+            except Exception as e:
+                QMessageBox.critical(self, _t("error"), _t("report_failed", e=e))
+
+    def _on_export_report_html(self):
+        """Export a self-contained HTML visual report (mastery + network + history)."""
+        try:
+            html_content = build_html_report(
+                self.assets,
+                self.learner,
+                lang=_get_lang(),
+                current_asset_id=self.current_asset_id,
+            )
+        except Exception as e:
+            QMessageBox.critical(self, _t("error"), _t("report_failed", e=e))
+            return
+
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self,
+            _t("save_report_html"),
+            _t("report_html_filename", ts=datetime.now().strftime("%Y%m%d_%H%M%S")),
+            "HTML (*.html);;All (*.*)",
+        )
+        if filename:
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    f.write(html_content)
+                QMessageBox.information(
+                    self,
+                    _t("done"),
+                    _t("report_html_saved", filename=filename),
+                )
+                QDesktopServices.openUrl(QUrl.fromLocalFile(filename))
             except Exception as e:
                 QMessageBox.critical(self, _t("error"), _t("report_failed", e=e))
 

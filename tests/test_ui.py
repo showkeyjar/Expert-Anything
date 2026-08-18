@@ -59,7 +59,8 @@ class TestWindow(unittest.TestCase):
         self.win.on_asset_select(other)
         self.assertEqual(self.win.current_asset_id, other)
         self.assertEqual(self.win.content_stack.count(), 7)
-        self.assertEqual(self.win.content_stack.currentIndex(), 1)
+        # the cognitive map is the home view, so asset switch lands there
+        self.assertEqual(self.win.content_stack.currentIndex(), 2)
 
 
 class TestGraph(unittest.TestCase):

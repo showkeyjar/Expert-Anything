@@ -1,6 +1,6 @@
-=== 2026-08-14T15:50:08.259733 ===
+=== 2026-08-17T11:38:27.687047 ===
 Traceback (most recent call last):
-  File "D:\data\AutoClaw\.openclaw\tmp\verify_i18n_final2.py", line 72, in <module>
-    assert len(bad) == 0, f"leftovers: {bad}"
-           ^^^^^^^^^^^^^
-AssertionError: leftovers: [(1, '薄弱'), (1, '未学'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (1, '薄弱'), (1, '聚焦/推荐'), (6, 'Location: 全局')]
+  File "D:\codes\Expert-Anything\.workbuddy\render_map.py", line 16, in <module>
+    win.on_asset_select()
+    ~~~~~~~~~~~~~~~~~~~^^
+TypeError: MainWindow.on_asset_select() missing 1 required positional argument: 'asset_id'

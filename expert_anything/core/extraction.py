@@ -19,6 +19,7 @@ from expert_anything.core.models import (
     Concept,
     KnowledgeAsset,
     Relation,
+    SourceLocation,
 )
 from expert_anything.core.parsers import title_from
 
@@ -111,6 +112,34 @@ def _norm(name: str) -> str:
     return (name or "").strip().lower()
 
 
+def _as_str(v) -> str:
+    """Coerce an LLM-returned field to a clean string.
+
+    The model sometimes emits a list where the schema expects a string
+    (e.g. ``"name": ["A", "B"]``). Naive ``.strip()`` then raises
+    AttributeError and — because extract_knowledge swallows all exceptions —
+    the whole import silently falls back to deterministic extraction. Flatten
+    lists here so a single malformed field never aborts the extraction.
+    """
+    if v is None:
+        return ""
+    if isinstance(v, list):
+        return " ".join(str(x).strip() for x in v if x is not None).strip()
+    return str(v).strip()
+
+
+def _as_str_list(v) -> list[str]:
+    """Coerce an LLM-returned field to a list of clean strings."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v.strip()] if v.strip() else []
+    if isinstance(v, list):
+        return [str(x).strip() for x in v if str(x).strip()]
+    s = str(v).strip()
+    return [s] if s else []
+
+
 def _extract_with_llm(
     text: str, filename: str, llm: LLMClient, on_progress=None
 ) -> KnowledgeAsset:
@@ -158,7 +187,7 @@ def _extract_with_llm(
             d = fut.result() if not fut.exception() else None
             if d:
                 for c in d.get("concepts", []):
-                    nm = (c.get("name") or "").strip()
+                    nm = _as_str(c.get("name"))
                     if not nm:
                         continue
                     key = _norm(nm)
@@ -166,7 +195,7 @@ def _extract_with_llm(
                         (x for x in merged["concepts"] if _norm(x["name"]) == key), None
                     )
                     if existing is not None:
-                        for ev in c.get("evidence", []):
+                        for ev in _as_str_list(c.get("evidence")):
                             if ev and ev not in existing["evidence"]:
                                 existing["evidence"].append(ev)
                         continue
@@ -176,8 +205,8 @@ def _extract_with_llm(
                     merged["concepts"].append(
                         {
                             "name": nm,
-                            "definition": (c.get("definition") or "").strip(),
-                            "evidence": list(c.get("evidence", [])),
+                            "definition": _as_str(c.get("definition")),
+                            "evidence": _as_str_list(c.get("evidence")),
                         }
                     )
                 for r in d.get("relations", []):
@@ -283,15 +312,50 @@ def _assign_chapters(asset: "KnowledgeAsset") -> "KnowledgeAsset":
     return asset
 
 
+def _stamp_locations(asset: "KnowledgeAsset") -> "KnowledgeAsset":
+    """Record each concept's evidence position in the raw source text.
+
+    For every grounded evidence snippet we store its character offset in
+    ``source_text``, derive the 1-based line number, and attach the concept's
+    chapter. This powers a truthful 'source location' label and a precise jump
+    in the reader. Works on both LLM and deterministic-fallback assets because
+    evidence is always grounded in the source.
+    """
+    text = asset.source_text or ""
+    for c in asset.concepts:
+        locs: list[SourceLocation] = []
+        for ev in c.evidence or []:
+            if not ev:
+                continue
+            start = text.find(ev)
+            if start < 0 and len(ev) > 60:
+                # evidence may have been truncated; fall back to a long prefix
+                start = text.find(ev[:60])
+            if start < 0:
+                continue
+            line = text.count("\n", 0, start) + 1
+            locs.append(
+                SourceLocation(
+                    char_start=start,
+                    char_end=start + len(ev),
+                    chapter=getattr(c, "chapter", "") or "",
+                    snippet=ev[:200],
+                    line=line,
+                )
+            )
+        c.locations = locs
+    return asset
+
+
 def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAsset:
     concepts: list[Concept] = []
     name_to_id: dict[str, str] = {}
     lowered = text.lower()
     for c in data.get("concepts", []):
-        name = (c.get("name") or "").strip()
+        name = _as_str(c.get("name"))
         if not name:
             continue
-        evidence = _ground_evidence(text, c.get("evidence", []), name)
+        evidence = _ground_evidence(text, _as_str_list(c.get("evidence")), name)
         # Hallucination guard: drop concepts whose name does not appear in the
         # source AND have no grounded evidence. They are almost certainly
         # invented terms the model slipped in despite the prompt.
@@ -299,7 +363,7 @@ def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAss
             continue
         cid = _new_id("c")
         name_to_id[_norm(name)] = cid
-        definition = (c.get("definition") or "").strip()
+        definition = _as_str(c.get("definition"))
         # If the model gave no definition but we have evidence, derive a stub
         # from the first evidence sentence instead of leaving it empty.
         if not definition and evidence:
@@ -311,7 +375,7 @@ def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAss
                 definition=definition,
                 summary=definition,
                 evidence=evidence,
-                chapter=(c.get("chapter") or "").strip()[:80],
+                chapter=_as_str(c.get("chapter"))[:80],
             )
         )
 
@@ -324,13 +388,13 @@ def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAss
                     id=_new_id("r"),
                     source=name_to_id[s],
                     target=name_to_id[t],
-                    label=(r.get("label") or "").strip(),
+                    label=_as_str(r.get("label")),
                     type="related",
-                    evidence=(r.get("evidence") or "").strip(),
+                    evidence=_as_str(r.get("evidence")),
                 )
             )
 
-    path_names = [_norm(n) for n in data.get("learning_path", [])]
+    path_names = [_norm(n) for n in _as_str_list(data.get("learning_path", []))]
     learning_path = [name_to_id[n] for n in path_names if n in name_to_id]
     # any concept not on the path gets appended
     for c in concepts:
@@ -338,7 +402,7 @@ def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAss
             learning_path.append(c.id)
 
     chapters = [
-        Chapter(id=_new_id("ch"), title=(ch.get("title") or "").strip(), order=i)
+        Chapter(id=_new_id("ch"), title=_as_str(ch.get("title")), order=i)
         for i, ch in enumerate(data.get("chapters", []))
         if (ch.get("title") or "").strip()
     ]
@@ -356,7 +420,8 @@ def _assemble(data: dict, text: str, filename: str, method: str) -> KnowledgeAss
         learning_path=learning_path,
         method=method,
     )
-    return _assign_chapters(asset)
+    asset = _assign_chapters(asset)
+    return _stamp_locations(asset)
 
 
 # --- Deterministic fallback (no LLM) -----------------------------------------
@@ -437,7 +502,7 @@ def _fallback(text: str, filename: str) -> KnowledgeAsset:
         if heading_lines
         else []
     )
-    return KnowledgeAsset(
+    asset = KnowledgeAsset(
         asset_id=_new_id("a"),
         type=(filename.split(".")[-1] if "." in filename else "text").lower(),
         title=title_from(text, filename),
@@ -450,6 +515,8 @@ def _fallback(text: str, filename: str) -> KnowledgeAsset:
         learning_path=[c.id for c in concepts],
         method="deterministic_fallback_v1",
     )
+    asset = _assign_chapters(asset)
+    return _stamp_locations(asset)
 
 
 def extract_knowledge(

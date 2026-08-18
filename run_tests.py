@@ -21,7 +21,8 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 LAYERS = {
-    "core": ["tests.test_core"],
+    "core": ["tests.test_core", "tests.test_report", "tests.test_checks",
+             "tests.test_decoder"],
     "data": ["tests.test_demo_data"],
     "ui": ["tests.test_ui"],
     "llm": ["tests.test_llm"],

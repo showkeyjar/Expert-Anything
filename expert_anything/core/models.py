@@ -16,6 +16,44 @@ def _new_id(prefix: str) -> str:
 
 
 @dataclass
+class SourceLocation:
+    """Precise anchor of an evidence snippet inside the raw source text.
+
+    `char_start`/`char_end` index into ``KnowledgeAsset.source_text``; `line`
+    is the 1-based line number derived from `char_start`; `chapter` mirrors the
+    concept's owning chapter for convenience. Lets the UI show a truthful
+    'source location' (e.g. ``line 42, Ch.3``) and jump straight to the passage.
+    Independent of LLM: computed from grounded evidence in either extraction path.
+    """
+    char_start: int = -1
+    char_end: int = -1
+    chapter: str = ""
+    snippet: str = ""
+    line: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "char_start": self.char_start,
+            "char_end": self.char_end,
+            "chapter": self.chapter,
+            "snippet": self.snippet,
+            "line": self.line,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "SourceLocation":
+        if not isinstance(d, dict):
+            return cls()
+        return cls(
+            char_start=int(d.get("char_start", -1)),
+            char_end=int(d.get("char_end", -1)),
+            chapter=d.get("chapter", ""),
+            snippet=d.get("snippet", ""),
+            line=int(d.get("line", 0)),
+        )
+
+
+@dataclass
 class Concept:
     id: str
     name: str
@@ -23,6 +61,7 @@ class Concept:
     summary: str = ""
     evidence: list[str] = field(default_factory=list)
     chapter: str = ""  # source-location light: the chapter/section that discusses it
+    locations: list[SourceLocation] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -32,6 +71,7 @@ class Concept:
             "summary": self.summary,
             "evidence": self.evidence,
             "chapter": self.chapter,
+            "locations": [l.to_dict() for l in self.locations],
         }
 
     @classmethod
@@ -43,6 +83,7 @@ class Concept:
             summary=d.get("summary", ""),
             evidence=d.get("evidence", []),
             chapter=d.get("chapter", ""),
+            locations=[SourceLocation.from_dict(l) for l in d.get("locations", [])],
         )
 
 

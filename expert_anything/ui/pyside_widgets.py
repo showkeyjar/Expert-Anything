@@ -21,6 +21,8 @@ from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QDialog,
     QFrame,
+    QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
@@ -58,6 +60,7 @@ def _tag_label(tag: str) -> str:
         "ready": _t("legend_mastered"),
         "blocked": _t("legend_learning"),
         "path": _t("legend_focus"),
+        "stuck": _t("tag_stuck"),
     }.get(tag, tag)
 
 
@@ -153,7 +156,12 @@ class SourceTextView(QTextBrowser):
 
     # -- navigation -----------------------------------------------------------
     def scroll_to_concept(self, concept_id: str, evidence: str | None = None) -> None:
-        """Jump to the first occurrence of the concept (or its evidence)."""
+        """Jump to the first occurrence of the concept (or its evidence).
+
+        If the concept carries a chapter, the search starts at the chapter
+        heading so we land in the right section instead of a duplicate that
+        appears earlier/later in a different chapter.
+        """
         if self._asset is None:
             return
         c = self._asset.concept_by_id(concept_id)
@@ -162,10 +170,20 @@ class SourceTextView(QTextBrowser):
         needles = [evidence] if evidence else list(c.evidence or [])
         needles.append(c.name)
         doc = self.document()
+        # Chapter-scoped search: begin from the chapter heading when present.
+        from_pos = 0
+        chapter = getattr(c, "chapter", "") or ""
+        if chapter:
+            ch_cursor = doc.find(chapter[:80])
+            if not ch_cursor.isNull():
+                from_pos = ch_cursor.selectionStart()
         for needle in needles:
             if not needle:
                 continue
-            cursor = doc.find(needle[:200])
+            cursor = doc.find(needle[:200], from_pos)
+            if cursor.isNull() and from_pos:
+                # not found within the chapter -> fall back to the whole doc
+                cursor = doc.find(needle[:200])
             if not cursor.isNull():
                 # paragraph highlight
                 sel_start = cursor.selectionStart()
@@ -303,9 +321,16 @@ class ConceptDetailPanel(QDialog):
             def_lbl.setStyleSheet("font-size: 13.5px; color: #37474F;")
             root.addWidget(def_lbl)
 
-        # chapter attribution (source-location light)
-        if getattr(concept, "chapter", ""):
-            ch_lbl = QLabel(_t("chapter_label", ch=concept.chapter))
+        # source-location attribution (chapter + precise line)
+        loc0 = (getattr(concept, "locations", []) or [None])[0]
+        loc_line = getattr(loc0, "line", 0) if loc0 else 0
+        if getattr(concept, "chapter", "") or loc_line:
+            parts = []
+            if getattr(concept, "chapter", ""):
+                parts.append(_t("chapter_label", ch=concept.chapter))
+            if loc_line:
+                parts.append(_t("loc_line", n=loc_line))
+            ch_lbl = QLabel("  ·  ".join(parts))
             ch_lbl.setStyleSheet("font-size: 11.5px; color: #0284C7;")
             root.addWidget(ch_lbl)
 
@@ -338,8 +363,17 @@ class ConceptDetailPanel(QDialog):
                 "QListWidget { border: 1px solid #E0E0E0; border-radius: 6px; font-size: 12px; }"
                 "QListWidget::item { padding: 6px; border-bottom: 1px solid #F0F0F0; }"
             )
+            loc_by_ev: dict[str, int] = {}
+            for loc in (getattr(concept, "locations", []) or []):
+                key = (getattr(loc, "snippet", "") or "")[:180]
+                if key and getattr(loc, "line", 0):
+                    loc_by_ev.setdefault(key, loc.line)
             for ev in concept.evidence:
-                item = QListWidgetItem(ev[:180] + ("…" if len(ev) > 180 else ""))
+                label = ev[:180] + ("…" if len(ev) > 180 else "")
+                line_no = loc_by_ev.get(ev[:180])
+                if line_no:
+                    label += f"　({_t('loc_line', n=line_no)})"
+                item = QListWidgetItem(label)
                 item.setData(Qt.ItemDataRole.UserRole, ev)
                 item.setToolTip(ev)
                 ev_list.addItem(item)
@@ -552,7 +586,8 @@ class PathLadderView(QWidget):
         for tag in tags[:3]:
             color = {"weak": "#F44336", "anom": "#E67828",
                      "foundation": "#0284C7", "ready": "#2E7D32",
-                     "blocked": "#78909C", "path": "#64748B"}.get(tag, "#64748B")
+                     "blocked": "#78909C", "path": "#64748B",
+                     "stuck": "#B71C1C"}.get(tag, "#64748B")
             name_row.addWidget(tag_chip(_tag_label(tag), color))
         name_row.addStretch()
         col.addLayout(name_row)
@@ -581,6 +616,377 @@ class PathLadderView(QWidget):
 # --------------------------------------------------------------------------- #
 # TeachResultView
 # --------------------------------------------------------------------------- #
+class DecoderSceneCard(QWidget):
+    """Knowledge decoding card: SceneSpec → step-animated SVG + sort game.
+
+    The spec is produced by Tutor (LLM SceneSpec with code admission, or the
+    deterministic relation-graph fallback) and rendered here by pure code —
+    the step player (QtSvg), an in-app ordering mini-game whose score re-enters
+    the mastery loop via ``game_scored``, and a richer self-contained HTML
+    (animation + game) that opens in the browser.
+    """
+
+    game_scored = Signal(float)
+
+    def __init__(self, scene: dict, concept: str = "", source_title: str = "",
+                 parent=None):
+        super().__init__(parent)
+        self._scene = scene
+        self._concept = concept
+        self._source_title = source_title
+        self._frames: list[dict] = []
+        self._idx = 0
+        self._picked: list[int] = []
+        self._build()
+
+    # --- shell ---------------------------------------------------------------
+    def _build(self) -> None:
+        from expert_anything.core import decoder
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(6)
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #FFF3E0; border: 1px solid #FFCC80;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(8)
+        root.addWidget(card)
+
+        head = QHBoxLayout()
+        t = QLabel(_t("decoder_card_title"))
+        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #E65100;")
+        head.addWidget(t)
+        head.addStretch()
+        open_btn = QPushButton(_t("decoder_open_html"))
+        open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        open_btn.setStyleSheet(
+            "font-size: 12px; color: #E65100; border: 1px solid #FFCC80;"
+            "border-radius: 6px; padding: 2px 10px; background: white;"
+        )
+        open_btn.clicked.connect(self._open_html)
+        head.addWidget(open_btn)
+        lay.addLayout(head)
+
+        # --- step player -----------------------------------------------------
+        self._frames = decoder.render_step_svgs(self._scene)
+        self._dot_btns: list[QPushButton] = []
+        self._svg_host: QWidget | None = None
+        self._fade: QGraphicsOpacityEffect | None = None
+        self._fade_anim = None
+        try:
+            from PySide6.QtSvgWidgets import QSvgWidget
+            self._svg_widget = QSvgWidget()
+            self._svg_widget.setMinimumHeight(240)
+            self._svg_widget.setStyleSheet(
+                "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+                " stop:0 #FBFDFF, stop:1 #F0F5FA);"
+                "border: 1px solid #EDF2F8; border-radius: 10px;"
+            )
+            lay.addWidget(self._svg_widget)
+            self._svg_host = self._svg_widget
+            self._fade = QGraphicsOpacityEffect(self._svg_widget)
+            self._svg_widget.setGraphicsEffect(self._fade)
+        except Exception:
+            self._svg_widget = None
+            note = QLabel("（当前环境不支持内嵌 SVG，请点击右上角打开互动演示。）")
+            note.setWordWrap(True)
+            lay.addWidget(note)
+
+        self._caption = QLabel("")
+        self._caption.setWordWrap(True)
+        self._caption.setStyleSheet("font-size: 13.5px; color: #123B66;")
+        lay.addWidget(self._caption)
+
+        # clickable step dots (jump to any step)
+        dots = QHBoxLayout()
+        dots.setSpacing(6)
+        for k in range(len(self._frames)):
+            d = QPushButton(str(k + 1))
+            d.setFixedSize(24, 24)
+            d.setCursor(Qt.CursorShape.PointingHandCursor)
+            d.clicked.connect(lambda _=False, j=k: self._show(j))
+            dots.addWidget(d)
+            self._dot_btns.append(d)
+        dots.addStretch()
+        lay.addLayout(dots)
+
+        from PySide6.QtCore import QTimer
+        ctrl = QHBoxLayout()
+        self._btn_back = QPushButton("◎ " + _t("decoder_overview_btn"))
+        self._btn_start = QPushButton(_t("decoder_step_btn") + " ›")
+        self._btn_prev = QPushButton(_t("decoder_prev"))
+        self._btn_next = QPushButton(_t("decoder_next"))
+        self._btn_play = QPushButton(_t("decoder_play"))
+        for b in (self._btn_back, self._btn_start, self._btn_prev,
+                  self._btn_next, self._btn_play):
+            b.setStyleSheet(
+                "font-size: 12px; padding: 3px 12px; border: 1px solid #FFCC80;"
+                "border-radius: 6px; background: white; color: #E65100;"
+            )
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_start.setStyleSheet(
+            "font-size: 12px; padding: 3px 14px; border: none;"
+            "border-radius: 6px; background: #E65100; color: white;"
+            "font-weight: bold;"
+        )
+        ctrl.addWidget(self._btn_back)
+        ctrl.addWidget(self._btn_start)
+        ctrl.addWidget(self._btn_prev)
+        ctrl.addWidget(self._btn_play)
+        ctrl.addWidget(self._btn_next)
+        ctrl.addStretch()
+        lay.addLayout(ctrl)
+        self._btn_back.clicked.connect(self._show_static)
+        self._btn_start.clicked.connect(lambda: self._show(0))
+        self._btn_prev.clicked.connect(lambda: self._show(self._idx - 1))
+        self._btn_next.clicked.connect(lambda: self._show(self._idx + 1))
+        self._timer = QTimer(self)
+        self._timer.setInterval(2200)
+        self._timer.timeout.connect(self._auto_advance)
+        self._btn_play.clicked.connect(self._toggle_play)
+        # L1 by default: static overview first — animation is opt-in
+        self._show_static()
+
+        # --- ordering mini-game (score re-enters the mastery loop) -----------
+        game = self._scene.get("game")
+        if isinstance(game, dict) and game.get("items"):
+            gh = QLabel(_t("decoder_game_title"))
+            gh.setStyleSheet("font-size: 12px; font-weight: bold; color: #BF360C;")
+            lay.addWidget(gh)
+            goal = QLabel(str(game.get("goal", "")))
+            goal.setWordWrap(True)
+            goal.setStyleSheet("font-size: 12px; color: #5D4037;")
+            lay.addWidget(goal)
+
+            grid = QGridLayout()
+            grid.setSpacing(4)
+            self._chip_btns: list[QPushButton] = []
+            for i, item in enumerate(game["items"]):
+                b = QPushButton(str(item))
+                b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setCheckable(False)
+                b.setStyleSheet(
+                    "font-size: 12px; padding: 4px 10px; border-radius: 12px;"
+                    "border: 1px solid #FFB74D; background: #FFF8E1; color: #5D4037;"
+                    "text-align: center;"
+                )
+                b.clicked.connect(lambda _=False, k=i: self._pick(k))
+                grid.addWidget(b, i // 3, i % 3)
+                self._chip_btns.append(b)
+            lay.addLayout(grid)
+
+            hint = QLabel(_t("decoder_your_order"))
+            hint.setStyleSheet("font-size: 11px; color: #8D6E63;")
+            lay.addWidget(hint)
+            self._picked_label = QLabel("—")
+            self._picked_label.setWordWrap(True)
+            self._picked_label.setStyleSheet(
+                "font-size: 13px; color: #37474F; background: white;"
+                "border-radius: 6px; padding: 4px;"
+            )
+            lay.addWidget(self._picked_label)
+
+            gctrl = QHBoxLayout()
+            self._btn_check = QPushButton(_t("decoder_game_check"))
+            self._btn_check.setStyleSheet(
+                "font-size: 12px; padding: 3px 12px; border-radius: 6px;"
+                "background: #E65100; color: white;"
+            )
+            self._btn_check.setCursor(Qt.CursorShape.PointingHandCursor)
+            self._btn_check.clicked.connect(self._check_game)
+            retry = QPushButton(_t("decoder_game_retry"))
+            retry.setStyleSheet(
+                "font-size: 12px; padding: 3px 12px; border-radius: 6px;"
+                "border: 1px solid #FFCC80; background: white; color: #E65100;"
+            )
+            retry.setCursor(Qt.CursorShape.PointingHandCursor)
+            retry.clicked.connect(self._reset_game)
+            reveal = QPushButton(_t("decoder_game_answer"))
+            reveal.setStyleSheet(
+                "font-size: 12px; padding: 3px 12px; border-radius: 6px;"
+                "border: 1px solid #FFCC80; background: white; color: #E65100;"
+            )
+            reveal.setCursor(Qt.CursorShape.PointingHandCursor)
+            reveal.clicked.connect(self._reveal_game)
+            for b in (self._btn_check, retry, reveal):
+                gctrl.addWidget(b)
+            gctrl.addStretch()
+            lay.addLayout(gctrl)
+            self._verdict = QLabel("")
+            self._verdict.setWordWrap(True)
+            self._verdict.setStyleSheet("font-size: 12px;")
+            lay.addWidget(self._verdict)
+
+    # --- step player behaviour ----------------------------------------------
+    def _set_step_ui(self, on: bool) -> None:
+        """Toggle between L1 (overview) and L2 (step-by-step) chrome."""
+        widgets = [self._btn_back, self._btn_prev, self._btn_play,
+                   self._btn_next, *self._dot_btns]
+        for w in widgets:
+            w.setVisible(on)
+        self._btn_start.setVisible(not on)
+
+    def _show_static(self) -> None:
+        """L1 — static overview: full diagram, minimal cognitive cost.
+
+        Nothing animates by default; the walkthrough is one explicit
+        click away (progressive representation)."""
+        from expert_anything.core import decoder
+        if self._timer.isActive():
+            self._timer.stop()
+            self._btn_play.setText(_t("decoder_play"))
+        self._set_step_ui(False)
+        self._load_frame(decoder.render_svg(self._scene))
+        self._caption.setText(
+            f"<span style='background-color:#1976D2; color:white;"
+            f"border-radius:4px; padding:1px 8px; font-size:11px;'>◎</span>"
+            f"&nbsp; {html.escape(_t('decoder_overview_hint'))}"
+        )
+
+    def _show(self, i: int) -> None:
+        if not self._frames:
+            return
+        self._set_step_ui(True)
+        self._idx = max(0, min(i, len(self._frames) - 1))
+        f = self._frames[self._idx]
+        self._load_frame(f["svg"])
+        self._caption.setText(
+            f"<span style='background-color:#1976D2; color:white;"
+            f"border-radius:4px; padding:1px 8px; font-size:11px;'>"
+            f"&nbsp;{self._idx + 1}/{len(self._frames)}&nbsp;</span>"
+            f"&nbsp; {html.escape(f['caption'])}"
+        )
+        for k, d in enumerate(self._dot_btns):
+            if k == self._idx:
+                style = ("background: #1976D2; color: white; border: none;"
+                         "font-weight: bold;")
+            elif k < self._idx:
+                style = ("background: #DCEBFB; color: #1565C0;"
+                         "border: 1px solid #64B5F6;")
+            else:
+                style = ("background: white; color: #7B8FA3;"
+                         "border: 1px solid #C6D4E4;")
+            d.setStyleSheet(style + "border-radius: 12px; font-size: 11px;")
+
+    def _load_frame(self, svg: str) -> None:
+        """Swap the frame SVG with a gentle fade-in (keeps steps feeling
+        animated even though QtSvg ignores SMIL)."""
+        if self._svg_widget is None:
+            return
+        data = svg.encode("utf-8")
+        try:
+            from PySide6.QtCore import QByteArray
+            self._svg_widget.load(QByteArray(data))
+        except Exception:
+            self._svg_widget.load(data)
+        if self._fade is not None:
+            try:
+                from PySide6.QtCore import (QEasingCurve, QPropertyAnimation)
+                self._fade_anim = QPropertyAnimation(self._fade, b"opacity", self)
+                self._fade_anim.setDuration(280)
+                self._fade_anim.setStartValue(0.0)
+                self._fade_anim.setEndValue(1.0)
+                self._fade_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+                self._fade_anim.start()
+            except Exception:
+                self._fade.setOpacity(1.0)
+
+    def _auto_advance(self) -> None:
+        if self._idx >= len(self._frames) - 1:
+            self._timer.stop()
+            self._btn_play.setText(_t("decoder_play"))
+            return
+        self._show(self._idx + 1)
+
+    def _toggle_play(self) -> None:
+        if self._timer.isActive():
+            self._timer.stop()
+            self._btn_play.setText(_t("decoder_play"))
+        else:
+            self._show(0)
+            self._timer.start()
+            self._btn_play.setText("⏸")
+
+    # --- game behaviour -------------------------------------------------------
+    def _pick(self, i: int) -> None:
+        if i in self._picked:
+            self._picked.remove(i)
+        else:
+            self._picked.append(i)
+        items = self._scene["game"]["items"]
+        txt = " → ".join(str(items[k]) for k in self._picked) if self._picked else "—"
+        self._picked_label.setText(txt)
+        for k, b in enumerate(self._chip_btns):
+            b.setStyleSheet(
+                ("background: #E65100; color: white; border-color: #E65100;"
+                 if k in self._picked else
+                 "background: #FFF8E1; color: #5D4037; border-color: #FFB74D;")
+                + "font-size: 12px; padding: 4px 10px; border-radius: 12px;"
+                "border: 1px solid; text-align: center;"
+            )
+
+    def _check_game(self) -> None:
+        game = self._scene["game"]
+        n = len(game["items"])
+        if len(self._picked) != n:
+            return
+        answer = list(game.get("answer") or range(n))
+        hits = sum(1 for a, c in zip(self._picked, answer) if a == c)
+        score = round(hits / n, 2)
+        ok = hits == n
+        self._verdict.setText(
+            _t("decoder_game_correct") if ok
+            else f"{_t('decoder_game_wrong')}（{hits}/{n}）"
+        )
+        self._verdict.setStyleSheet(
+            f"font-size: 12px; font-weight: {'bold' if ok else 'normal'};"
+            f"color: {'#2E7D32' if ok else '#C62828'};"
+        )
+        self.game_scored.emit(score)
+
+    def _reset_game(self) -> None:
+        self._picked = []
+        self._picked_label.setText("—")
+        self._verdict.setText("")
+        for k in range(len(self._chip_btns)):
+            self._chip_btns[k].setStyleSheet(
+                "font-size: 12px; padding: 4px 10px; border-radius: 12px;"
+                "border: 1px solid #FFB74D; background: #FFF8E1; color: #5D4037;"
+                "text-align: center;"
+            )
+
+    def _reveal_game(self) -> None:
+        game = self._scene["game"]
+        items = game["items"]
+        answer = list(game.get("answer") or range(len(items)))
+        self._verdict.setText(
+            f"{_t('decoder_game_answer')}： " + " → ".join(str(items[k]) for k in answer)
+        )
+        self._verdict.setStyleSheet("font-size: 12px; color: #1565C0;")
+
+    # --- browser demo ---------------------------------------------------------
+    def _open_html(self) -> None:
+        import os
+        import tempfile
+
+        from PySide6.QtGui import QDesktopServices
+        from expert_anything.core import decoder
+
+        safe = re.sub(r"[^\w\-]+", "_", self._concept or "scene")[:32]
+        path = os.path.join(tempfile.gettempdir(), f"ea_decoder_{safe}.html")
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(decoder.render_interactive_html(
+                    self._scene, self._concept, self._source_title))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+        except Exception:
+            pass
+
+
 class TeachResultView(QWidget):
     """Structured lesson view: explanation / example / steps / practice / evidence.
 
@@ -697,6 +1103,13 @@ class TeachResultView(QWidget):
                 txt.setStyleSheet("font-size: 13px; color: #37474F;")
                 row.addWidget(txt, 1)
                 root.addLayout(row)
+
+        # knowledge decoding card (SceneSpec → step animation + sort game)
+        scene = result.get("scene")
+        if isinstance(scene, dict) and scene.get("nodes"):
+            dec_card = DecoderSceneCard(scene, _txt(result.get("concept")))
+            dec_card.game_scored.connect(self.quiz_result)
+            root.addWidget(dec_card)
 
         # practice
         practice = _txt(result.get("practice"))
@@ -1324,6 +1737,64 @@ class MasteryDistributionBar(QWidget):
                 painter.drawRect(int(x), 0, max(1, int(width)), h)
             x += width
         painter.end()
+
+# --------------------------------------------------------------------------- #
+# MapLegend — visual legend chips for the cognitive map
+# --------------------------------------------------------------------------- #
+class MapLegend(QFrame):
+    """A horizontal row of visual chips explaining the cognitive map.
+
+    Each chip is a tiny rendered preview + label so the user understands what
+    each style on the map means at a glance. Especially important for the
+    orange *dashed* frontier ring, which without context looks like an
+    unexplained empty box.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        lay = self.layout()
+        if lay is None:
+            lay = QHBoxLayout(self)
+            self.setLayout(lay)
+        # suppress framework type checker complaint
+        assert isinstance(lay, QHBoxLayout)
+        lay.setContentsMargins(10, 6, 10, 6)
+        lay.setSpacing(14)
+        lay.addWidget(self._chip("#E1E4E8", "#78909C", solid=1, text=_t("legend_unstudied")))
+        lay.addWidget(self._chip("#FDEBCE", "#78909C", solid=1, text=_t("legend_partial")))
+        lay.addWidget(self._chip("#C5E6C6", "#78909C", solid=1, text=_t("legend_mastered")))
+        lay.addWidget(self._chip("#E1E4E8", "#E67828", solid=1, dashed=True, text=_t("legend_frontier")))
+        lay.addWidget(self._chip("#E1E4E8", "#E67828", solid=3, text=_t("legend_anomaly")))
+        lay.addWidget(self._chip("#E1E4E8", "#0284C7", solid=3, text=_t("legend_current")))
+        lay.addStretch()
+        self.setStyleSheet(
+            "QFrame { background-color: white; border: 1px solid #E0E0E0;"
+            "border-radius: 8px; }"
+            "QLabel { font-size: 11px; color: #455A64; }"
+        )
+
+    def _chip(self, fill: str, border: str, solid: int = 1, dashed: bool = False,
+              text: str = "") -> QWidget:
+        wrap = QHBoxLayout()
+        wrap.setContentsMargins(0, 0, 0, 0)
+        wrap.setSpacing(5)
+        box = QFrame()
+        w = 22
+        h = 12
+        box.setFixedSize(w, h)
+        border_style = " dashed" if dashed else ""
+        box.setStyleSheet(
+            f"QFrame {{ background-color: {fill}; border: {solid}px{border_style} {border};"
+            f" border-radius: 4px; }}"
+        )
+        wrap.addWidget(box)
+        lbl = QLabel(text)
+        wrap.addWidget(lbl)
+        host = QWidget()
+        host.setLayout(wrap)
+        host.setStyleSheet("background: transparent; border: none;")
+        return host
+
 
 # --------------------------------------------------------------------------- #
 # NodeDetailCard — in-graph detail sidebar (changes per clicked node)
