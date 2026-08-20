@@ -19,6 +19,7 @@ from PySide6.QtCore import Qt, Signal, QUrl
 from PySide6.QtGui import QColor as _QColor, QFont as _QFont, QPainter as _QPainter, QPen as _QPen
 from PySide6.QtGui import QColor, QFont, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QFrame,
     QGraphicsOpacityEffect,
@@ -269,6 +270,7 @@ class ConceptDetailPanel(QDialog):
     teach_requested = Signal(str)            # concept name
     focus_requested = Signal(str)            # concept id (graph focus)
     evidence_requested = Signal(str, str)    # concept_id, evidence text
+    incorporate_requested = Signal(str, str)  # a_id, b_id (sink comparison)
 
     def __init__(self, asset: KnowledgeAsset, concept_id: str,
                  learner_state: dict, teacher: TeacherModel | None = None,
@@ -277,6 +279,7 @@ class ConceptDetailPanel(QDialog):
         self._asset = asset
         self._concept_id = concept_id
         self._teacher = teacher
+        self._learner = learner_state
         self._name_to_id = {c.id: c.name for c in asset.concepts}
         concept = asset.concept_by_id(concept_id)
 
@@ -398,6 +401,9 @@ class ConceptDetailPanel(QDialog):
             rel_list.itemClicked.connect(self._on_neighbor_clicked)
             body_l.addWidget(rel_list)
 
+        # -- peers & next level (position sense: alongside / where it leads)
+        self._append_position(body_l)
+
         # -- teacher notes ---------------------------------------------------
         if self._teacher is not None:
             note = self._teacher.concept_note_by_id(concept_id)
@@ -472,10 +478,69 @@ class ConceptDetailPanel(QDialog):
             lambda: (self.focus_requested.emit(concept_id), self.accept())
         )
         btn_row.addWidget(focus_btn)
+
+        cmp_btn = QPushButton(_t("detail_compare_with"))
+        cmp_btn.setStyleSheet(
+            "QPushButton { background-color: white; color: #00695C;"
+            "border: 1px solid #80CBC4; border-radius: 6px; padding: 8px 18px;"
+            "font-size: 13px; }"
+            "QPushButton:hover { background-color: #E0F2F1; }"
+        )
+        cmp_btn.clicked.connect(self._open_compare)
+        btn_row.addWidget(cmp_btn)
         btn_row.addStretch()
         root.addLayout(btn_row)
 
     # -- helpers --------------------------------------------------------------
+    def _append_position(self, body_l: QVBoxLayout) -> None:
+        """Same-level peers + next-level points, clickable to roam."""
+        try:
+            from expert_anything.core.map_context import siblings, next_level
+            peers = siblings(self._asset, self._concept_id, max_n=6,
+                             learner_state=self._learner)
+            nxt = next_level(self._asset, self._concept_id, max_n=8,
+                             learner_state=self._learner)
+        except Exception:
+            peers, nxt = [], []
+
+        if peers:
+            body_l.addWidget(_sec_title(_t("detail_siblings"), "#6D4C41"))
+            plist = QListWidget()
+            plist.setToolTip(_t("detail_dbl_teach"))
+            plist.setStyleSheet(
+                "QListWidget { border: 1px solid #E0E0E0; border-radius: 6px;"
+                "font-size: 12px; }"
+                "QListWidget::item { padding: 5px; border-bottom: 1px solid #F0F0F0; }"
+            )
+            for p in peers:
+                ch = f"　·　{p['chapter'][:24]}" if p.get("chapter") else ""
+                item = QListWidgetItem(f"◆ {p['name']}{ch}")
+                item.setData(Qt.ItemDataRole.UserRole, p["id"])
+                plist.addItem(item)
+            plist.itemClicked.connect(self._on_neighbor_clicked)
+            plist.itemDoubleClicked.connect(self._on_neighbor_activated)
+            body_l.addWidget(plist)
+
+        if nxt:
+            body_l.addWidget(_sec_title(_t("detail_next_level"), "#00695C"))
+            nlist = QListWidget()
+            nlist.setToolTip(_t("detail_dbl_teach"))
+            nlist.setStyleSheet(
+                "QListWidget { border: 1px solid #E0E0E0; border-radius: 6px;"
+                "font-size: 12px; }"
+                "QListWidget::item { padding: 5px; border-bottom: 1px solid #F0F0F0; }"
+            )
+            for n in nxt:
+                arrow = "→" if n["dir"] in ("out", "path") else "←"
+                label = f"{arrow} {n['label']}　{n['name']}" if n["label"] \
+                    else f"{arrow} {n['name']}"
+                item = QListWidgetItem(label)
+                item.setData(Qt.ItemDataRole.UserRole, n["id"])
+                nlist.addItem(item)
+            nlist.itemClicked.connect(self._on_neighbor_clicked)
+            nlist.itemDoubleClicked.connect(self._on_neighbor_activated)
+            body_l.addWidget(nlist)
+
     def _collect_relations(self, concept):
         out = []
         for r in self._asset.relations:
@@ -490,10 +555,286 @@ class ConceptDetailPanel(QDialog):
         if ev:
             self.evidence_requested.emit(self._concept_id, ev)
 
+    def _open_compare(self) -> None:
+        """Open the comparison dialog against the first peer / next-level point."""
+        try:
+            from expert_anything.core.map_context import siblings, next_level
+            cands = (siblings(self._asset, self._concept_id, max_n=1)
+                     + next_level(self._asset, self._concept_id, max_n=1))
+            target = cands[0]["id"] if cands else None
+        except Exception:
+            target = None
+        if target is None:
+            return
+        dlg = ConceptCompareDialog(self._asset, self._concept_id, target,
+                                   self._learner, self._teacher, self)
+        dlg.focus_requested.connect(self.focus_requested)
+        dlg.teach_requested.connect(self.teach_requested)
+        dlg.incorporate_requested.connect(self.incorporate_requested)
+        self._compare_dialog = dlg
+        dlg.show()
+
     def _on_neighbor_clicked(self, item: QListWidgetItem) -> None:
         other_id = item.data(Qt.ItemDataRole.UserRole) or ""
         if other_id:
             self.focus_requested.emit(other_id)
+
+    def _on_neighbor_activated(self, item: QListWidgetItem) -> None:
+        """Double-click a peer / next-level point → teach it directly."""
+        other_id = item.data(Qt.ItemDataRole.UserRole) or ""
+        c = self._asset.concept_by_id(other_id) if other_id else None
+        if c is not None:
+            self.teach_requested.emit(c.name)
+            self.accept()
+
+
+# --------------------------------------------------------------------------- #
+# ConceptCompareDialog
+# --------------------------------------------------------------------------- #
+class ConceptCompareDialog(QDialog):
+    """Side-by-side comparison of two concepts — the "information gain" the
+    map owes the reader: shared neighbours, relations unique to each side,
+    chapter, mastery gap and teacher-note differences."""
+
+    focus_requested = Signal(str)            # concept id
+    teach_requested = Signal(str)            # concept name
+    incorporate_requested = Signal(str, str)  # a_id, b_id (sink into teacher)
+
+    def __init__(self, asset: KnowledgeAsset, id_a: str, id_b: str,
+                 learner_state: dict, teacher: TeacherModel | None = None,
+                 parent=None):
+        super().__init__(parent)
+        self._asset = asset
+        self._learner = learner_state
+        self._teacher = teacher
+        self._id_a = id_a
+        self._id_b = id_b
+        self._cand_ids: list[str] = []
+
+        self.setWindowTitle(_t("compare_title"))
+        self.setMinimumSize(860, 620)
+        self.setStyleSheet("QDialog { background-color: white; }")
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 16, 20, 16)
+        root.setSpacing(8)
+
+        # --- selector row: A ⇄ [dropdown] --------------------------------
+        sel = QHBoxLayout()
+        sel.setSpacing(8)
+        a_name = self._name_of(id_a)
+        a_lbl = QLabel(a_name)
+        a_lbl.setStyleSheet("font-size: 15px; font-weight: bold; color: #0c3d5f;")
+        sel.addWidget(a_lbl)
+        sel.addWidget(QLabel("⇄"))
+        self._b_combo = QComboBox()
+        self._b_combo.setStyleSheet(
+            "QComboBox { border: 1px solid #B0BEC5; border-radius: 6px;"
+            "padding: 4px 10px; font-size: 13px; }"
+        )
+        self._populate_candidates()
+        sel.addWidget(self._b_combo, 1)
+        go_btn = QPushButton(_t("compare_select"))
+        go_btn.setStyleSheet(
+            "QPushButton { background-color: #00695C; color: white; border: none;"
+            "border-radius: 6px; padding: 6px 16px; font-size: 12.5px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #004D40; }"
+        )
+        go_btn.clicked.connect(self._on_switch)
+        sel.addWidget(go_btn)
+        root.addLayout(sel)
+
+        # --- scrollable comparison body ------------------------------------
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        root.addWidget(self._scroll, 1)
+        self._rebuild()
+
+    # -- internals -----------------------------------------------------------
+    def _name_of(self, cid: str) -> str:
+        c = self._asset.concept_by_id(cid)
+        return c.name if c else cid
+
+    def _populate_candidates(self) -> None:
+        """Candidates: the second concept first, then peers + next level."""
+        seen: list[str] = []
+        for cid in (self._id_b,):
+            if cid != self._id_a and cid not in seen:
+                seen.append(cid)
+        try:
+            from expert_anything.core.map_context import siblings, next_level
+            for item in (siblings(self._asset, self._id_a, max_n=12)
+                         + next_level(self._asset, self._id_a, max_n=12)):
+                cid = item["id"]
+                if cid != self._id_a and cid not in seen:
+                    seen.append(cid)
+        except Exception:
+            pass
+        self._cand_ids = seen
+        self._b_combo.clear()
+        for cid in seen:
+            c = self._asset.concept_by_id(cid)
+            label = c.name if c else cid
+            if c and getattr(c, "chapter", ""):
+                label += f"　·　{c.chapter[:22]}"
+            self._b_combo.addItem(label, cid)
+        if seen:
+            try:
+                self._b_combo.setCurrentIndex(
+                    seen.index(self._id_b) if self._id_b in seen else 0)
+            except ValueError:
+                self._b_combo.setCurrentIndex(0)
+
+    def _on_switch(self) -> None:
+        cid = self._b_combo.currentData()
+        if cid:
+            self._id_b = cid
+            self._rebuild()
+
+    def _on_incorporate(self) -> None:
+        """Emit the sink request once; the button then reports success so a
+        re-click on the same pair cannot double-sink (idempotent anyway)."""
+        self.incorporate_requested.emit(self._id_a, self._id_b)
+        self._incorporate_btn.setEnabled(False)
+        self._incorporate_btn.setText(_t("compare_incorporated"))
+
+    def _rebuild(self) -> None:
+        from expert_anything.core.map_context import compare_concepts
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(8)
+
+        try:
+            r = compare_concepts(self._asset, self._id_a, self._id_b,
+                                 teacher=self._teacher,
+                                 learner_state=self._learner)
+        except ValueError:
+            body = QLabel(_t("panel_not_exist"))
+            self._scroll.setWidget(body)
+            return
+
+        # similarity banner
+        sim_pct = f"{r['similarity']:.0%}"
+        sim_word = (_t("compare_sim_high") if r["similarity"] >= 0.6
+                    else _t("compare_sim_low"))
+        banner = QLabel(f"{_t('compare_similarity', pct=sim_pct)} · {sim_word}")
+        banner.setStyleSheet(
+            "background-color: #E0F2F1; color: #00695C; border-radius: 6px;"
+            "padding: 6px 10px; font-size: 12px; font-weight: bold;")
+        lay.addWidget(banner)
+
+        # side-by-side columns
+        cols = QHBoxLayout()
+        cols.setSpacing(12)
+        cols.addWidget(self._col(r["a"], _t("compare_definition"),
+                                 r["rel_only_a"], is_a=True), 1)
+        cols.addWidget(self._col(r["b"], _t("compare_definition"),
+                                 r["rel_only_b"], is_a=False), 1)
+        lay.addLayout(cols)
+
+        # evidence points
+        lay.addWidget(_sec_title(_t("compare_relations") + " · " + _t("compare_notes"), "#00695C"))
+        for p in r["points"]:
+            lbl = QLabel("• " + p)
+            lbl.setWordWrap(True)
+            lbl.setStyleSheet(
+                "font-size: 12.5px; color: #37474F; background-color: #F5F7F8;"
+                "border-radius: 6px; padding: 6px 8px;")
+            lay.addWidget(lbl)
+
+        # learning hint
+        hint = QLabel(r["learning_hint"])
+        hint.setWordWrap(True)
+        hint.setStyleSheet(
+            "font-size: 13px; color: #1B5E20; background-color: #E8F5E9;"
+            "border-radius: 6px; padding: 8px 10px; font-weight: bold;")
+        lay.addWidget(hint)
+
+        # actions
+        act = QHBoxLayout()
+        for cid, key in ((r["a"]["id"], "compare_learn_a"), (r["b"]["id"], "compare_learn_b")):
+            btn = QPushButton(_t("compare_teach", name=self._name_of(cid)))
+            btn.setStyleSheet(
+                "QPushButton { background-color: #1565C0; color: white; border: none;"
+                "border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #0D47A1; }")
+            btn.clicked.connect(
+                lambda checked=False, c=cid: self.teach_requested.emit(
+                    self._name_of(c)))
+            act.addWidget(btn)
+
+        # sink the comparison into the Teacher Model (bridging anchors +
+        # mastery gap → the weaker concept is pushed up the teaching order)
+        self._incorporate_btn = QPushButton(_t("compare_incorporate"))
+        self._incorporate_btn.setStyleSheet(
+            "QPushButton { background-color: white; color: #6D4C41;"
+            "border: 1px solid #BCAAA4; border-radius: 6px; padding: 6px 14px;"
+            "font-size: 12px; }"
+            "QPushButton:hover { background-color: #EFEBE9; }"
+            "QPushButton:disabled { color: #A1887F; border-color: #D7CCC8; }"
+        )
+        self._incorporate_btn.setToolTip(_t("compare_incorporate"))
+        self._incorporate_btn.clicked.connect(self._on_incorporate)
+        act.addWidget(self._incorporate_btn)
+        act.addStretch()
+        lay.addLayout(act)
+        lay.addStretch()
+        self._scroll.setWidget(body)
+
+    def _col(self, info: dict, def_title: str,
+             rel_only: list[str], is_a: bool) -> QWidget:
+        """One concept column: chapter, definition, unique relations, notes."""
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        lay.addWidget(QLabel(""))  # spacer keeps the two columns aligned
+
+        name = QLabel(info["name"])
+        name.setWordWrap(True)
+        name.setStyleSheet("font-size: 16px; font-weight: bold; color: #0c3d5f;")
+        lay.addWidget(name)
+
+        m = float(info.get("mastery", 0.0))
+        m_lbl = QLabel(_t("panel_mastery", m=m))
+        m_lbl.setStyleSheet(
+            f"background-color: {mastery_color(m)}; color: white;"
+            "padding: 2px 10px; border-radius: 9px; font-size: 11px; font-weight: bold;")
+        lay.addWidget(m_lbl)
+
+        ch = info.get("chapter", "")
+        if ch:
+            c_lbl = QLabel(_t("chapter_label", ch=ch))
+            c_lbl.setStyleSheet("font-size: 11.5px; color: #0284C7;")
+            lay.addWidget(c_lbl)
+
+        ev_n = int(info.get("evidence_count", 0))
+        ev_lbl = QLabel(_t("compare_evidence", n=ev_n))
+        ev_lbl.setStyleSheet("font-size: 11.5px; color: #2E7D32;")
+        lay.addWidget(ev_lbl)
+
+        # definition
+        if info.get("definition"):
+            d = QLabel(info["definition"])
+            d.setWordWrap(True)
+            d.setStyleSheet(
+                "font-size: 12.5px; color: #37474F; background-color: #F5F7F8;"
+                "border-radius: 6px; padding: 8px;")
+            lay.addWidget(d)
+
+        # unique relations (the high-signal part)
+        if rel_only:
+            lay.addWidget(_sec_title(
+                _t("compare_relations"), "#0284C7"))
+            for rr in rel_only[:4]:
+                lbl = QLabel("• " + rr)
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet("font-size: 12px; color: #0369A1;")
+                lay.addWidget(lbl)
+        lay.addStretch()
+        return w
 
 
 # --------------------------------------------------------------------------- #
@@ -1003,6 +1344,8 @@ class TeachResultView(QWidget):
     quiz_result = Signal(float)     # scored quiz (record into mastery)
     practice_requested = Signal()   # user asked for a hands-on task
     practice_submit = Signal(str)   # answer submitted (score via quiz_result)
+    harness_adopt_requested = Signal(dict)  # learner adopts an evolved HarnessSpec
+    harness_transfer_requested = Signal(dict)  # learner migrates a harness from another asset
 
     def __init__(self, result: dict, parent=None):
         super().__init__(parent)
@@ -1219,6 +1562,179 @@ class TeachResultView(QWidget):
                 "border-radius: 6px; padding: 8px;"
             )
             lay.addWidget(gp)
+
+        root.insertWidget(root.count() - 1, card)
+
+    # -- AutoHarness evolution suggestion --------------------------------------
+    def append_harness_suggestion(self, title: str, body: str,
+                                  candidate: dict,
+                                  source: str = "stuck",
+                                  extra: dict | None = None) -> None:
+        """Append an AutoHarness evolution suggestion card with an adopt button.
+
+        The candidate (a normalized HarnessSpec) was produced by the stuck
+        loop's ``evolve_for_stuck`` (source="stuck", amber card), by
+        ``evolve_for_regression`` (source="regression", violet card — the
+        regression signal points to a guard that may be backfiring, e.g.
+        budget_ok throttling explanations), or by ``evolve_joint`` when
+        multiple signal families fire together (source="joint", cyan card —
+        the fusion decision with its diagnosis; ``extra`` carries metadata
+        for the audit chain, e.g. {"_joint_reason": "stuck+regression"}).
+        Adopting any of them fires ``harness_adopt_requested`` so the window
+        can persist the spec and re-teach with its style.
+        """
+        if source == "joint":
+            bg, border, title_c, text_c, btn_bg, btn_hover = (
+                "#E0F7FA", "#4DD0E1", "#006064", "#00363D", "#00838F", "#006064")
+            btn_text = _t("harness_adopt_joint")
+        elif source == "regression":
+            bg, border, title_c, text_c, btn_bg, btn_hover = (
+                "#F3E5F5", "#CE93D8", "#4A148C", "#311B3A", "#6A1B9A", "#4A148C")
+            btn_text = _t("harness_adopt_regress")
+        else:
+            bg, border, title_c, text_c, btn_bg, btn_hover = (
+                "#FFF8E1", "#FFE082", "#E65100", "#4E342E", "#E65100", "#BF360C")
+            btn_text = _t("harness_adopt")
+        root = self.layout()
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame {{ background-color: {bg}; border: 1px solid {border};"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        lay.addWidget(_sec_title(title, title_c))
+        b = QLabel(body)
+        b.setWordWrap(True)
+        b.setStyleSheet(f"font-size: 12.5px; color: {text_c};")
+        lay.addWidget(b)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        btn = QPushButton(btn_text)
+        btn.setStyleSheet(
+            f"QPushButton {{ background-color: {btn_bg}; color: white;"
+            "border: none; border-radius: 6px; padding: 7px 16px;"
+            "font-size: 12.5px; font-weight: bold; }"
+            f"QPushButton:hover {{ background-color: {btn_hover}; }}"
+        )
+        btn.clicked.connect(
+            lambda checked=False, c=candidate, s=source, x=extra or {}:
+                self.harness_adopt_requested.emit(dict(c, _source=s, **x))
+        )
+        row.addWidget(btn)
+        row.addStretch()
+        lay.addLayout(row)
+
+        root.insertWidget(root.count() - 1, card)
+
+    def append_transfer_suggestion(self, title: str, body: str,
+                                   payload: dict) -> None:
+        """Append a cross-asset harness migration suggestion card.
+
+        Unlike the amber evolution card (``append_harness_suggestion``), this
+        light-blue card carries a *transfer payload* built by the window's
+        ``_find_transfer_candidates``::
+
+            {"source_asset_id", "source_title", "spec", "evaluation", "gain"}
+
+        Adopting it fires ``harness_transfer_requested`` with the whole payload
+        so the window can persist via ``adopt_harness_for_asset`` (audit trail
+        reason="transfer") and re-teach with the migrated style.
+        """
+        root = self.layout()
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #E3F2FD; border: 1px solid #90CAF9;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        lay.addWidget(_sec_title(title, "#0D47A1"))
+        b = QLabel(body)
+        b.setWordWrap(True)
+        b.setStyleSheet("font-size: 12.5px; color: #0D2B45;")
+        lay.addWidget(b)
+
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        btn = QPushButton(_t("harness_transfer_adopt"))
+        btn.setStyleSheet(
+            "QPushButton { background-color: #1565C0; color: white; border: none;"
+            "border-radius: 6px; padding: 7px 16px; font-size: 12.5px;"
+            "font-weight: bold; }"
+            "QPushButton:hover { background-color: #0D47A1; }"
+        )
+        btn.clicked.connect(
+            lambda checked=False, p=payload: self.harness_transfer_requested.emit(p)
+        )
+        row.addWidget(btn)
+        row.addStretch()
+        lay.addLayout(row)
+
+        root.insertWidget(root.count() - 1, card)
+
+    def append_harness_history(self, events: list[dict], limit: int = 5) -> None:
+        """Append an evolution history block (audit trail) to the teach area.
+
+        Events come from ``auto_harness.load_harness_history`` (append-only
+        audit chain). Only *new* events since the last call on this view are
+        rendered (dedup by count), capped at ``limit``, so repeated calls
+        (e.g. stuck branch + fresh teaching view) never duplicate lines.
+        """
+        if not events:
+            return
+        shown = getattr(self, "_harness_shown_count", 0)
+        new_events = events[shown:]
+        if not new_events:
+            return
+        self._harness_shown_count = len(events)
+
+        root = self.layout()
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #F5F5F5; border: 1px solid #E0E0E0;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+        lay.addWidget(_sec_title(_t("harness_history"), "#455A64"))
+
+        _reason_labels = {
+            "stuck": _t("harness_reason_stuck"),
+            "manual": _t("harness_reason_manual"),
+            "steady": _t("harness_reason_steady"),
+            "transfer": _t("harness_reason_transfer"),
+            "regression": _t("harness_reason_regression"),
+            "joint": _t("harness_reason_joint"),
+            "sessions": _t("harness_reason_sessions"),
+        }
+
+        def _fmt(reason: str) -> str:
+            # 联合演化 reason 是触发家族串（如 stuck+regression+sessions），
+            # 逐个家族本地化后拼接，保证审计链可读。
+            if reason in _reason_labels:
+                return _reason_labels[reason]
+            return "+".join(_reason_labels.get(p, p)
+                            for p in str(reason).split("+"))
+
+        for ev in new_events[-limit:]:
+            ts = ev.get("ts", "")
+            ts_show = ts[:16].replace("T", " ") if isinstance(ts, str) else ""
+            reason = _fmt(ev.get("reason", ""))
+            old = ev.get("old", "")
+            new = ev.get("new", "")
+            line = (f"{ts_show}  {reason}\n  {old}  →  {new}"
+                    if ts_show else f"{reason}\n  {old}  →  {new}")
+            b = QLabel(line)
+            b.setWordWrap(True)
+            b.setStyleSheet("font-size: 11.5px; color: #37474F;")
+            lay.addWidget(b)
 
         root.insertWidget(root.count() - 1, card)
 
@@ -1811,6 +2327,7 @@ class NodeDetailCard(QFrame):
     teach_requested = Signal(str)           # concept name
     full_detail_requested = Signal(str)     # concept id
     neighbor_clicked = Signal(str)          # concept id (roam)
+    compare_requested = Signal(str, str)    # concept_a_id, concept_b_id
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1916,6 +2433,11 @@ class NodeDetailCard(QFrame):
                 )
                 self._layout.addWidget(btn)
 
+        # peers & next level — the reader's "position sense": clicking a node
+        # must show what stands alongside it and where it leads, never a dead end
+        self._append_peers(asset, concept_id, learner_state)
+        self._append_next_level(asset, concept_id, learner_state)
+
         # first evidence
         if concept.evidence:
             self._layout.addWidget(_sec_title(_t("detail_evidence"), "#2E7D32"))
@@ -1966,6 +2488,99 @@ class NodeDetailCard(QFrame):
         full_btn.clicked.connect(
             lambda: self.full_detail_requested.emit(concept_id))
         btn_row.addWidget(full_btn)
+
+        # compare — only meaningful when a peer / next-level candidate exists
+        if self._compare_target(asset, concept_id):
+            cmp_btn = QPushButton(_t("detail_compare"))
+            cmp_btn.setStyleSheet(
+                "QPushButton { background-color: white; color: #00695C;"
+                "border: 1px solid #80CBC4; border-radius: 6px; padding: 6px 12px;"
+                "font-size: 12px; }"
+                "QPushButton:hover { background-color: #E0F2F1; }"
+            )
+            cmp_btn.clicked.connect(
+                lambda: self.compare_requested.emit(
+                    concept_id, self._compare_target(asset, concept_id)[0]))
+            btn_row.addWidget(cmp_btn)
+
         btn_row.addStretch()
         self._layout.addLayout(btn_row)
         self._layout.addStretch()
+
+    # -- peers / next level ----------------------------------------------------
+    @staticmethod
+    def _compare_target(asset, concept_id: str) -> list[str]:
+        try:
+            from expert_anything.core.map_context import siblings, next_level
+            cands = (siblings(asset, concept_id, max_n=1)
+                     + next_level(asset, concept_id, max_n=1))
+            return [c["id"] for c in cands][:1]
+        except Exception:
+            return []
+
+    def _pill(self, text: str, cid: str, name: str, color: str) -> QWidget:
+        """A roam pill + a small teach button: a peer / next-level point can be
+        *studied* in one click, not just roamed to (cognitive-map → lesson)."""
+        wrap = QWidget()
+        h = QHBoxLayout(wrap)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+        roam = QPushButton(text)
+        roam.setObjectName("pill_roam_btn")
+        roam.setStyleSheet(
+            f"QPushButton {{ background-color: {color}18; color: {color};"
+            f"border: 1px solid {color}55; border-radius: 6px; padding: 4px 10px;"
+            "font-size: 11.5px; text-align: left; }"
+            f"QPushButton:hover {{ background-color: {color}33; }}"
+        )
+        roam.setToolTip(_t("detail_pill_roam"))
+        roam.clicked.connect(
+            lambda checked=False, c=cid: self.neighbor_clicked.emit(c))
+        h.addWidget(roam, 1)
+        teach = QPushButton("▶")
+        teach.setObjectName("pill_teach_btn")
+        teach.setFixedWidth(30)
+        teach.setToolTip(_t("detail_pill_teach"))
+        teach.setStyleSheet(
+            f"QPushButton {{ background-color: {color}; color: white; border: none;"
+            "border-radius: 6px; padding: 4px 0; font-size: 11px; font-weight: bold; }"
+            f"QPushButton:hover {{ background-color: {color}BB; }}"
+        )
+        teach.clicked.connect(
+            lambda checked=False, n=name: self.teach_requested.emit(n))
+        h.addWidget(teach, 0)
+        return wrap
+
+    def _append_peers(self, asset, concept_id: str, learner_state: dict) -> None:
+        try:
+            from expert_anything.core.map_context import siblings
+            peers = siblings(asset, concept_id, max_n=5, learner_state=learner_state)
+        except Exception:
+            peers = []
+        self._layout.addWidget(_sec_title(_t("detail_siblings"), "#6D4C41"))
+        if not peers:
+            empty = QLabel(_t("detail_peers_empty"))
+            empty.setStyleSheet("font-size: 11px; color: #BDBDBD;")
+            self._layout.addWidget(empty)
+            return
+        for p in peers:
+            self._layout.addWidget(
+                self._pill(p["name"], p["id"], p["name"], "#6D4C41"))
+
+    def _append_next_level(self, asset, concept_id: str, learner_state: dict) -> None:
+        try:
+            from expert_anything.core.map_context import next_level
+            nxt = next_level(asset, concept_id, max_n=6, learner_state=learner_state)
+        except Exception:
+            nxt = []
+        self._layout.addWidget(_sec_title(_t("detail_next_level"), "#00695C"))
+        if not nxt:
+            empty = QLabel(_t("detail_next_empty"))
+            empty.setStyleSheet("font-size: 11px; color: #BDBDBD;")
+            self._layout.addWidget(empty)
+            return
+        for n in nxt:
+            arrow = "→" if n["dir"] == "out" else ("←" if n["dir"] == "in" else "→")
+            label = f"{arrow} {n['label']}　{n['name']}" if n["label"] else f"{arrow} {n['name']}"
+            self._layout.addWidget(
+                self._pill(label, n["id"], n["name"], "#00695C"))

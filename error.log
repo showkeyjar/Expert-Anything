@@ -1,6 +1,0 @@
-=== 2026-08-17T11:38:27.687047 ===
-Traceback (most recent call last):
-  File "D:\codes\Expert-Anything\.workbuddy\render_map.py", line 16, in <module>
-    win.on_asset_select()
-    ~~~~~~~~~~~~~~~~~~~^^
-TypeError: MainWindow.on_asset_select() missing 1 required positional argument: 'asset_id'

@@ -622,13 +622,123 @@ def incorporate_stuck_signal(
     return teacher
 
 
+def incorporate_comparison(
+    asset: KnowledgeAsset,
+    teacher: TeacherModel | None,
+    id_a: str,
+    id_b: str,
+    comparison: dict | None = None,
+    learner_state: dict | None = None,
+) -> TeacherModel:
+    """Closed-loop step: sink a two-concept comparison into the Teacher Model.
+
+    Cognitive-map comparisons (``map_context.compare_concepts``) currently
+    inform the *reader*; this makes them inform the *system* too, so the
+    comparison is not a one-off display. Two deterministic signals land:
+
+    - **shared neighbours** → written into BOTH concepts' ``connections`` as
+      bridging anchors (衔接锚点), so the system's own map of how concepts
+      hang together grows from comparison;
+    - **mastery gap ≥ 0.2** → a ``learner_gap`` anomaly pinned to the weaker
+      concept (plus a learner signal on it), which
+      ``anomaly_prioritized_path`` then walks ahead of the student — the
+      comparison literally re-orders teaching.
+
+    Idempotent: repeated calls on the same pair never duplicate entries
+    (exact-string dedup on connections / learner_signals / anomaly
+    description). Deterministic, no LLM; caller persists the teacher.
+    """
+    if teacher is None:
+        teacher = TeacherModel(
+            asset_id=asset.asset_id, status="fallback", method="lazy_init"
+        )
+    ca = asset.concept_by_id(id_a)
+    cb = asset.concept_by_id(id_b)
+    if ca is None or cb is None or id_a == id_b:
+        return teacher
+
+    if comparison is None:
+        from expert_anything.core.map_context import compare_concepts
+        try:
+            comparison = compare_concepts(
+                asset, id_a, id_b, teacher=teacher, learner_state=learner_state
+            )
+        except ValueError:
+            return teacher
+    if not isinstance(comparison, dict):
+        return teacher
+
+    a_info = comparison.get("a") or {}
+    b_info = comparison.get("b") or {}
+    shared = comparison.get("shared_neighbors") or []
+    na = teacher.concept_note_by_id(id_a)
+    if na is None:
+        na = ConceptNote(concept_id=id_a, name=ca.name)
+        teacher.concept_notes.append(na)
+    nb = teacher.concept_note_by_id(id_b)
+    if nb is None:
+        nb = ConceptNote(concept_id=id_b, name=cb.name)
+        teacher.concept_notes.append(nb)
+
+    # 1) shared neighbours → bridging anchors on both sides
+    if shared:
+        names = "、".join(str(x) for x in shared[:5])
+        for note, other_name in ((na, cb.name), (nb, ca.name)):
+            text = f"对比锚点：与「{other_name}」共享概念邻居：{names}"
+            if text not in note.connections:
+                note.connections.append(text)
+
+    # 2) mastery gap → learner_gap anomaly pinned to the weaker concept
+    ma = float(a_info.get("mastery", 0.0) or 0.0)
+    mb = float(b_info.get("mastery", 0.0) or 0.0)
+    gap = abs(ma - mb)
+    if gap >= 0.2:
+        low, high = (ca, cb) if ma <= mb else (cb, ca)
+        low_name, high_name = low.name, high.name
+        m_low, m_high = (ma, mb) if low is ca else (mb, ma)
+        signal = (
+            f"对比发现：对「{low_name}」的掌握度（{m_low:.0%}）低于"
+            f"「{high_name}」（{m_high:.0%}），优先补学「{low_name}」。"
+        )
+        note_low = na if low is ca else nb
+        if signal not in note_low.learner_signals:
+            note_low.learner_signals.append(signal)
+            note_low.learner_signals = note_low.learner_signals[-8:]
+        desc = (
+            f"对比「{ca.name}」与「{cb.name}」发现：学习者对「{low_name}」"
+            f"掌握度（{m_low:.0%}）明显低于「{high_name}」（{m_high:.0%}）。"
+            f"已建议优先补学并提入教学排序。"
+        )
+        if not any(a.kind == "learner_gap" and a.description == desc
+                   for a in teacher.anomalies):
+            teacher.anomalies.append(
+                Anomaly(
+                    id=_new_id("an"),
+                    kind="learner_gap",
+                    description=desc,
+                    location=low_name,
+                    severity="high" if gap >= 0.4 else "medium",
+                    status="surfaced_to_student",
+                    source="internal",
+                )
+            )
+
+    teacher.synthesized_at = datetime.now(timezone.utc).isoformat()
+    return teacher
+
+
 def anomaly_concept_ids(asset: KnowledgeAsset, teacher: TeacherModel | None) -> set[str]:
     """Concept ids that are touched by at least one open/investigating anomaly."""
     ids: set[str] = set()
     if not teacher:
         return ids
     for an in teacher.anomalies:
-        if an.status not in ("open", "investigating"):
+        # A learner gap may already be surfaced to the student while still
+        # requiring remediation. Keep it in the teaching loop until resolved;
+        # other surfaced anomalies remain informational.
+        actionable = an.status in ("open", "investigating")
+        surfaced_gap = an.kind == "learner_gap" and an.status == "surfaced_to_student"
+        if not (actionable or surfaced_gap):
             continue
         for c in asset.concepts:
             if c.name in an.description or c.name in (an.location or ""):

@@ -12,5 +12,9 @@ legacy_bak/
 pytest-cache-files-*/
 *.bak
 __pycache__/
+.venv/
 .workbuddy/
+
+# 运行时崩溃日志（调试临时产物，勿提交）
+error.log
 

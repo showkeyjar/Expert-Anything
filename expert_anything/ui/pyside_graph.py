@@ -37,6 +37,7 @@ from expert_anything.core.graph_viz import (
     _layered_layout,
     _radial_layout,
     _select_nodes,
+    hierarchy_neighbors,
 )
 from expert_anything.core.i18n import t as _t
 from expert_anything.core.learner import topic_clusters
@@ -216,6 +217,7 @@ class KnowledgeGraphView(QGraphicsView):
     """Interactive, living knowledge graph."""
 
     concept_clicked = Signal(str)          # double-click -> teach (concept name)
+    concept_drilldown = Signal(str)       # single-click -> focus and drill into children
     node_single_clicked = Signal(str)      # single-click on a node (concept id)
     view_changed = Signal()                # focus/full mode changed
 
@@ -233,6 +235,7 @@ class KnowledgeGraphView(QGraphicsView):
         self._grey_ids: set[str] = set()
         self._current_id: str | None = None
         self._focus_id: str | None = None
+        self._drill_path: list[str] = []
         self._nodes: list[tuple[str, str, str]] = []
         self._edges: list[tuple[str, str, str]] = []
         self._node_items: dict[str, QGraphicsPathItem] = {}
@@ -283,7 +286,31 @@ class KnowledgeGraphView(QGraphicsView):
         self._grey_ids = grey_ids or set()
         self._current_id = current_id
         self._focus_id = None
+        self._drill_path = []
         self.render_graph()
+
+    def drill_down(self, concept_id: str) -> bool:
+        """Move one level down, returning whether child concepts exist."""
+        if self._asset is None:
+            return False
+        _, children = hierarchy_neighbors(self._asset, concept_id)
+        if not children:
+            return False
+        if not self._drill_path or self._drill_path[-1] != concept_id:
+            self._drill_path.append(concept_id)
+        self.render_graph(concept_id)
+        return True
+
+    def drill_up(self) -> bool:
+        """Move to the parent level in the recorded drill path."""
+        if self._asset is None or not self._drill_path:
+            return False
+        self._drill_path.pop()
+        self.render_graph(self._drill_path[-1] if self._drill_path else None)
+        return True
+
+    def drill_path(self) -> list[str]:
+        return list(self._drill_path)
 
     def render_graph(self, focus_id: str | None = None) -> None:
         """(Re)render. focus=None -> full network with force-directed motion."""
@@ -450,6 +477,12 @@ class KnowledgeGraphView(QGraphicsView):
             if role == "focus":
                 fill = _hex(_FILL_FOCUS)
                 border, bwidth = _hex(_BORDER_FOCUS), 3
+            elif role == "child":
+                fill = _hex(_FILL_CONTEXT)
+                border, bwidth = _hex(_BORDER_FOCUS), 2
+            elif role == "parent":
+                fill = _hex(_FILL_CONTEXT)
+                border, bwidth = _hex(_BORDER_ANOMALY), 2
             elif role == "context":
                 fill = _hex(_FILL_CONTEXT)
                 border, bwidth = _hex(_BORDER_CONTEXT), 1
@@ -717,7 +750,7 @@ class KnowledgeGraphView(QGraphicsView):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            hit = self._item_concept(event.pos())
+            hit = self._item_concept(event.position().toPoint())
             if hit is not None:
                 self._drag_cid = hit[0]
                 self._drag_start = event.pos()
@@ -756,11 +789,11 @@ class KnowledgeGraphView(QGraphicsView):
         if self._drag_cid is not None:
             if not self._dragged:
                 cid = self._drag_cid
-                if self._focus_id == cid:
-                    self.reset_focus()
-                else:
-                    self.focus_concept(cid)
-                self.node_single_clicked.emit(cid)
+                # Focusing rebuilds the scene.  Doing that synchronously here can
+                # delete the clicked QGraphicsItem while Qt is still dispatching
+                # its release event, which may terminate the process.  Run the
+                # complete click action after event dispatch has unwound instead.
+                QTimer.singleShot(0, lambda concept_id=cid: self._handle_node_click(concept_id))
             else:
                 # after a drag, nudge the simulation to re-settle
                 if self._focus_id is None and self._physics:
@@ -771,6 +804,18 @@ class KnowledgeGraphView(QGraphicsView):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def _handle_node_click(self, concept_id: str) -> None:
+        # The timer may fire after an asset switch or another scene rebuild.
+        # Only handle concepts that still belong to the currently rendered map.
+        if concept_id not in self._node_items:
+            return
+        if self._focus_id == concept_id:
+            self.reset_focus()
+        else:
+            self.focus_concept(concept_id)
+        self.node_single_clicked.emit(concept_id)
+        self.concept_drilldown.emit(concept_id)
 
     def mouseDoubleClickEvent(self, event):
         hit = self._item_concept(event.pos())

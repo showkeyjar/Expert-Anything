@@ -12,6 +12,7 @@ Layers:
   llm   – real LLM tests (skipped without EXPERTANYTHING_LLM_API_KEY)
 """
 import argparse
+import importlib.util
 import os
 import sys
 import unittest
@@ -22,11 +23,23 @@ sys.path.insert(0, str(ROOT))
 
 LAYERS = {
     "core": ["tests.test_core", "tests.test_report", "tests.test_checks",
-             "tests.test_decoder"],
+             "tests.test_decoder", "tests.test_auto_harness",
+             "tests.test_map_context"],
     "data": ["tests.test_demo_data"],
     "ui": ["tests.test_ui"],
     "llm": ["tests.test_llm"],
 }
+
+# Optional layers must not make the whole runner unusable in a minimal
+# environment.  Keep the mapping explicit so adding a new layer remains safe.
+# The LLM client itself uses urllib/json from the standard library; its tests
+# only need the project's configured endpoint when they make live calls.
+LAYER_DEPENDENCIES = {"ui": "PySide6"}
+
+
+def layer_dependency_available(layer: str) -> bool:
+    dependency = LAYER_DEPENDENCIES.get(layer)
+    return dependency is None or importlib.util.find_spec(dependency) is not None
 
 
 def main() -> int:
@@ -38,18 +51,26 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.layer:
-        modules = LAYERS[args.layer]
+        selected_layers = [args.layer]
         label = args.layer
     elif args.llm:
-        modules = LAYERS["llm"]
+        selected_layers = ["llm"]
         label = "llm"
     else:
-        modules = []
-        for layer, mods in LAYERS.items():
-            if layer == "llm" and args.quick:
-                continue
-            modules.extend(mods)
+        selected_layers = [layer for layer in LAYERS
+                           if not (layer == "llm" and args.quick)]
         label = "quick" if args.quick else "full"
+
+    modules = []
+    for layer in selected_layers:
+        if not layer_dependency_available(layer):
+            print(f"-- skip {layer}: optional dependency unavailable")
+            continue
+        modules.extend(LAYERS[layer])
+
+    # Keep the runner's own regression tests in the repository test suite.
+    if "tests.test_runner" not in modules:
+        modules.append("tests.test_runner")
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 

@@ -27,6 +27,8 @@
 | P2 | 动手实践任务闭环（证明/构造/伪代码，生成→作答→严格评估→记入掌握度） |
 | 测试 | 套件扩展至 75 用例（quick ~9s，含主题/自测/实践回归） |
 | 测试 | 统一套件 run_tests.py：71 用例（core 30 / data 7 / ui 27 / llm 7），quick ~9s |
+| R15 | **认知地图信息增量**：点击概念不再孤点——`core/map_context.py`（同级要点 siblings：同章节优先/主题 cluster 兜底；下一级要点 next_level：关系邻居带方向+路径后继兜底；概念对比 compare_concepts：相似度/独有关系/共享邻居/章节/掌握度/教师笔记差异 → 差异点+学习建议）；UI：NodeDetailCard 与 ConceptDetailPanel 增同级/下一级区块（可点击游走）+ 对比按钮，新增 ConceptCompareDialog 双栏对比弹窗；图谱 focus 模式无关系/无路径时拉入同章节兄弟作 context（graph_viz._select_nodes） |
+| R16 | **地图→教学闭环（游走不设终点）**：同级/下一级要点 1 步开教（NodeDetailCard pill ▶ 按钮 + ConceptDetailPanel 列表双击 → `_start_teach_by_name`）；对比沉淀回教师模型（`teacher.incorporate_comparison`：共享邻居写入双方 connections 作对比锚点、掌握度差 ≥0.2 对弱方挂 learner_gap anomaly 进 anomaly_prioritized_path，幂等去重，纯函数无 LLM）——认知地图的"看到"真正变成"学到"，系统认知随读者游走同步加深 |
 
 ## 2. 当前架构（稳定基线）
 
@@ -40,6 +42,7 @@ expert_anything/
     learner.py             跨资产掌握度 + adaptive_path + due_for_review
     llm.py                 零依赖 OpenAI 兼容客户端
     graph_viz.py           布局算法 + PNG 渲染（力导向初始散布）
+    map_context.py         认知地图上下文：同级/下一级要点推导 + 概念对比（纯函数）
     i18n.py                三语键表 + t()/set_lang/save_lang
     parsers.py             txt/md/docx/epub/pdf/html 提取
     models.py/storage.py/config.py
@@ -88,7 +91,7 @@ legacy/                    Web 版 + Flet UI + PySide6 v1 存档
 ## 6. 测试与验证
 
 ```powershell
-python run_tests.py --quick   # 71 用例（无 LLM），~9s —— 每次改进后必跑
+python run_tests.py --quick   # 293 用例（无 LLM）—— 每次改进后必跑
 python run_tests.py           # 全量（含真实 LLM 端到端）
 python run_tests.py --layer ui|core|llm|data
 ```

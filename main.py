@@ -44,6 +44,7 @@ from expert_anything.core.teacher import (
     TeacherModel,
     anomaly_concept_ids,
     record_learner_question,
+    incorporate_comparison,
 )
 from expert_anything.core.storage import save_teacher
 from expert_anything.core.i18n import (
@@ -54,9 +55,11 @@ from expert_anything.core.i18n import (
     t as _t,
 )
 from expert_anything.core.report_html import build_html_report, localize_method
+from expert_anything.core import auto_harness as _ah
 from expert_anything.ui.pyside_graph import KnowledgeGraphView
 from expert_anything.ui.pyside_widgets import (
     ConceptDetailPanel,
+    ConceptCompareDialog,
     SourceTextView,
     PathLadderView,
     TeachResultView,
@@ -109,6 +112,7 @@ class ExtractWorker(QThread):
 
     finished = Signal(object)
     error = Signal(str)
+    progress = Signal(int, str)
 
     def __init__(self, raw, filename, llm_client):
         super().__init__()
@@ -119,19 +123,25 @@ class ExtractWorker(QThread):
     def run(self):
         try:
             from expert_anything.core.parsers import extract_from_bytes
+            self.progress.emit(10, _t("analyzing"))
             if isinstance(self.raw, str):
                 text = self.raw
             else:
                 text = extract_from_bytes(self.raw, self.filename)
+            self.progress.emit(30, _t("analyzing"))
             if not text.strip():
                 self.error.emit(_t("extract_failed_text"))
                 return
+            self.progress.emit(55, _t("extracting"))
             asset = extract_knowledge(
                 text,
                 self.filename,
                 llm=self.llm_client,
-                on_progress=lambda stage, current, total, msg: None
+                on_progress=lambda stage, current, total, msg: self.progress.emit(
+                    55 + int(25 * current / max(total, 1)), msg
+                )
             )
+            self.progress.emit(85, _t("extracted_x", n=len(asset.concepts)))
             self.finished.emit(asset)
         except Exception as e:
             self.error.emit(str(e))
@@ -166,15 +176,17 @@ class TeachWorker(QThread):
     finished = Signal(dict)
     error = Signal(str)
 
-    def __init__(self, tutor, concept, vary=0):
+    def __init__(self, tutor, concept, vary=0, style=None):
         super().__init__()
         self.tutor = tutor
         self.concept = concept
         self.vary = vary
+        self.style = style
 
     def run(self):
         try:
-            result = self.tutor.teach(self.concept, vary=self.vary)
+            result = self.tutor.teach(self.concept, vary=self.vary,
+                                      style=self.style)
             self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))
@@ -419,6 +431,15 @@ class MainWindow(QMainWindow):
         if learner_path.exists():
             with open(learner_path, encoding="utf-8") as f:
                 self.learner = json.load(f)
+
+        # Load per-asset AutoHarness states (adopted evolution candidates)
+        self._harness_specs = _ah.load_harness_state(
+            config.DATA_DIR / "harness_state.json"
+        )
+        # Load the evolution audit trail (append-only history in the same file)
+        self._harness_history = _ah.load_harness_history(
+            config.DATA_DIR / "harness_state.json"
+        )
         
         # Select first asset by default
         if self.assets:
@@ -1362,33 +1383,15 @@ class MainWindow(QMainWindow):
         assets_label.setStyleSheet("color: #90CAF9; font-size: 11px;")
         layout.addWidget(assets_label)
 
-        # Add asset buttons dynamically
+        # Keep assets in a dedicated container. Refreshing this container
+        # preserves every asset and never disturbs the surrounding sidebar.
+        self._asset_list_widget = QWidget()
+        self._asset_list_layout = QVBoxLayout(self._asset_list_widget)
+        self._asset_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._asset_list_layout.setSpacing(4)
+        layout.addWidget(self._asset_list_widget)
         self._asset_buttons = {}
-        for aid, data in self.assets.items():
-            title = data.get('title', aid)
-            btn = QPushButton(f"📚 {title[:25]}{'...' if len(title) > 25 else ''}")
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: transparent;
-                    color: #BBDEFB;
-                    text-align: left;
-                    padding: 8px 12px;
-                    border: none;
-                    border-radius: 4px;
-                    font-size: 12px;
-                }
-                QPushButton:hover {
-                    background-color: #283593;
-                }
-                QPushButton:checked {
-                    background-color: #3949AB;
-                }
-            """)
-            btn.setCheckable(True)
-            btn.setChecked(aid == self.current_asset_id)
-            btn.clicked.connect(lambda checked, a=aid: self.on_asset_select(a))
-            self._asset_buttons[aid] = btn
-            layout.addWidget(btn)
+        self._populate_asset_buttons()
 
         return sidebar
 
@@ -1608,6 +1611,7 @@ class MainWindow(QMainWindow):
         panel.teach_requested.connect(self._start_teach_by_name)
         panel.focus_requested.connect(self._focus_in_graph)
         panel.evidence_requested.connect(self._jump_to_evidence)
+        panel.incorporate_requested.connect(self._on_incorporate_comparison)
         self._concept_panel = panel  # keep a reference (prevent GC)
         panel.show()
 
@@ -1681,8 +1685,12 @@ class MainWindow(QMainWindow):
         vary = 1 if getattr(self, "_review_mode", False) else 0
         self._show_teaching_content(concept, vary=vary)
 
-    def _show_teaching_content(self, concept, vary=0):
-        """Show teaching content for a concept (vary>0 = fresh angle, review)."""
+    def _show_teaching_content(self, concept, vary=0, style=None):
+        """Show teaching content for a concept (vary>0 = fresh angle, review).
+
+        ``style`` passes an explicit tutor style (e.g. an adopted AutoHarness
+        evolution candidate) — Tutor.teach then skips its own stuck rotation.
+        """
         if not self.current_tutor:
             asset = self.get_asset()
             self.current_tutor = Tutor(asset, llm=self.llm_client)
@@ -1727,7 +1735,8 @@ class MainWindow(QMainWindow):
         
         # Run teaching in background
         self._teach_vary = vary
-        self._teach_worker = TeachWorker(self.current_tutor, concept, vary=vary)
+        self._teach_worker = TeachWorker(self.current_tutor, concept,
+                                         vary=vary, style=style)
         self._teach_worker.finished.connect(self._on_teach_finished)
         self._teach_worker.error.connect(self._on_teach_error)
         self._teach_worker.start()
@@ -1758,12 +1767,18 @@ class MainWindow(QMainWindow):
         view.quiz_result.connect(self._on_quiz_result)
         view.practice_requested.connect(self._on_practice_requested)
         view.practice_submit.connect(self._on_practice_submit)
+        view.harness_adopt_requested.connect(self._on_adopt_harness)
+        view.harness_transfer_requested.connect(self._on_transfer_harness)
         self._teach_lesson = result
         if view.answer_input is not None:
             self._teach_answer_input = view.answer_input
         self._teach_view = view
         self._teach_concept_now = result.get("concept", "")
         self._teach_result_area.setWidget(view)
+
+        # Evolution audit trail: every teaching view shows why the harness
+        # changed (reason) and how (old -> new), making the automation traceable
+        view.append_harness_history(getattr(self, "_harness_history", []))
 
         # related-concepts navigation (follow the knowledge network)
         asset = self.get_asset()
@@ -2012,6 +2027,101 @@ class MainWindow(QMainWindow):
                     )
                     save_teacher(asset.asset_id, teacher)
                     self.teacher_models[asset.asset_id] = teacher.to_dict()
+
+                    # AutoHarness: a stuck signal means the *harness strategy*
+                    # itself is stale (style rotation alone already failed).
+                    # Evolve the harness structure and surface the candidate
+                    # with a one-click adopt button. 三层信号（stuck 卡壳 /
+                    # regression 回归 / sessions 会话统计）由 detect_signals
+                    # 统一检测、_o2_target_fusion 仲裁（真实数据优先于假设），
+                    # evolve_joint 融合成一个决策：多信号并发 → 青色联合卡
+                    # （带可解释诊断）；单信号 → 保持原琥珀卡 / 紫色误伤卡。
+                    try:
+                        spec = self._harness_specs.get(asset.asset_id) or \
+                            _ah.fallback_harness(concept.name)
+                        sess = _ah.load_session_reports(
+                            config.DATA_DIR / "harness_state.json")
+                        jt = _ah.evolve_joint(
+                            spec, self.learner, reports=sess,
+                            concept_name=concept.name)
+                        jc = jt.get("candidates", [])
+                        if jt.get("evolved") and jc:
+                            fam = (jt.get("reason") or "").split("+")
+                            view = getattr(self, "_teach_view", None)
+                            diag = "\n".join(jt.get("diagnosis", []))
+                            if len(fam) >= 2:
+                                # 联合卡（青色）：多信号融合 + 可解释诊断
+                                body = _t("harness_joint_body",
+                                          concept=concept.name,
+                                          reason=jt["reason"],
+                                          summary=_ah.harness_summary(jc[0]),
+                                          diag=diag[:180])
+                                if view is not None:
+                                    view.append_harness_suggestion(
+                                        _t("harness_joint_title"), body,
+                                        jc[0], source="joint",
+                                        extra={"_joint_reason": jt["reason"]})
+                                    view.append_harness_history(
+                                        self._harness_history)
+                            elif "stuck" in fam:
+                                # 纯卡壳：琥珀卡（原行为不变）
+                                body = _t("harness_suggest_body",
+                                          concept=concept.name,
+                                          attempts=hit["attempts"],
+                                          summary=_ah.harness_summary(jc[0]))
+                                if view is not None:
+                                    view.append_harness_suggestion(
+                                        _t("harness_suggest_title"), body,
+                                        jc[0])
+                                    # 审计链：把既有演化历史一并展示，让自动化可追溯
+                                    view.append_harness_history(
+                                        self._harness_history)
+                            elif "regression" in fam:
+                                rt = jt["focused"]
+                                rbody = _t("harness_regress_body",
+                                           concept=concept.name,
+                                           before=rt["before_avg"],
+                                           after=rt["after_avg"],
+                                           attempts=rt["attempts"])
+                                if view is not None:
+                                    view.append_harness_suggestion(
+                                        _t("harness_regress_title"), rbody,
+                                        jc[0], source="regression")
+                                    view.append_harness_history(
+                                        self._harness_history)
+                            else:
+                                # 纯会话统计驱动（数据信号族）：青色数据卡
+                                body = _t("harness_joint_body",
+                                          concept=concept.name,
+                                          reason=jt["reason"],
+                                          summary=_ah.harness_summary(jc[0]),
+                                          diag=diag[:180])
+                                if view is not None:
+                                    view.append_harness_suggestion(
+                                        _t("harness_joint_title"), body,
+                                        jc[0], source="joint",
+                                        extra={"_joint_reason": jt["reason"]})
+                                    view.append_harness_history(
+                                        self._harness_history)
+                        # 跨资产迁移建议：其他资产上已演化/采纳的 harness 可能
+                        # 更适合当前卡壳资产 —— OFF(本地) vs ON(待迁移) 差分后
+                        # 推荐 migrate 才弹卡（方法论：差分优于绝对线对比）
+                        transfers = self._find_transfer_candidates(asset)
+                        if transfers:
+                            best = transfers[0]
+                            ev = best["evaluation"]
+                            diff = (ev.get("comparison") or {}).get("diff") or 0
+                            body = _t("harness_transfer_body",
+                                      source=best["source_title"],
+                                      name=ev.get("spec_name", "?"),
+                                      gain=round(diff, 2),
+                                      cost=ev.get("cost_diff", 0))
+                            self._teach_view.append_transfer_suggestion(
+                                _t("harness_transfer_title"), body, best)
+                            self._teach_view.append_harness_history(
+                                self._harness_history)
+                    except Exception:
+                        pass
             except Exception:
                 pass
             
@@ -2032,6 +2142,146 @@ class MainWindow(QMainWindow):
             self._refresh_all_views()
         else:
             QMessageBox.warning(self, _t("hint"), _t("start_teach_first"))
+
+    def _on_adopt_harness(self, candidate):
+        """Adopt an AutoHarness evolution candidate: persist + re-teach.
+
+        The candidate (a normalized HarnessSpec) comes from ``evolve_for_stuck``
+        (amber card), ``evolve_for_regression`` (violet card) or ``evolve_joint``
+        (cyan card). Persist it per-asset, then re-teach the current concept
+        with the candidate's style so the adopted strategy takes effect
+        immediately (explicit style makes Tutor.teach skip its own stuck
+        rotation).
+        """
+        try:
+            asset = self.get_asset()
+            if asset is None:
+                return
+            # 来源标签（stuck 演化卡 / regression 误伤卡 / joint 联合卡）由
+            # widget 在 emit 时附加在 _source 上（joint 卡还带 _joint_reason
+            # 触发家族串）；这里剥离后再持久化，不污染 HarnessSpec。
+            src = ""
+            joint_reason = ""
+            if isinstance(candidate, dict):
+                src = candidate.pop("_source", "")
+                joint_reason = candidate.pop("_joint_reason", "")
+            spec = candidate
+            old_spec = self._harness_specs.get(asset.asset_id)
+            self._harness_specs[asset.asset_id] = spec
+            _ah.save_harness_state(config.DATA_DIR / "harness_state.json",
+                                   self._harness_specs)
+            concept_now = getattr(self, "_teach_concept_now", "")
+            # Audit trail: log this adoption (append-only), so the evolution
+            # history block on the next teaching view includes it. reason:
+            # regression（误伤裁守卫，回归驱动）/ joint（联合演化，记录触发
+            # 家族串如 stuck+regression+sessions，历史块按家族拆分本地化）/
+            # manual（卡壳演化候选手动启用）
+            if src == "regression":
+                reason = "regression"
+            elif src == "joint":
+                reason = joint_reason or "joint"
+            else:
+                reason = "manual"
+            self._harness_history = _ah.record_harness_evolution(
+                config.DATA_DIR / "harness_state.json",
+                _ah.evolution_event(reason, old_spec, spec,
+                                    asset_id=asset.asset_id,
+                                    concept=concept_now))
+            QMessageBox.information(
+                self, _t("harness_suggest_title"),
+                _t("harness_adopted", name=spec.get("name", "?"),
+                   concept=concept_now),
+            )
+            style = spec.get("policy", {}).get("style")
+            concept = asset.concept_by_name(concept_now) if concept_now else None
+            if concept is not None and style:
+                self._show_teaching_content(concept, vary=1, style=style)
+        except Exception as exc:  # pragma: no cover - GUI path
+            QMessageBox.warning(self, _t("hint"), str(exc))
+
+    def _find_transfer_candidates(self, asset):
+        """Find harnesses worth migrating from *other* assets onto this one.
+
+        For every other asset that already has an adopted/evolved harness
+        (``_harness_specs``), run ``evaluate_transfer``: OFF = this asset's
+        current local harness, ON = the candidate from the source asset.
+        Only ``recommendation == "migrate"`` candidates are returned, sorted
+        by differential gain (best first) — a transfer is never free, so
+        noise/no-change results are filtered out here, not shown as cards.
+
+        Returns a list of payload dicts::
+            {"source_asset_id", "source_title", "spec", "evaluation", "gain"}
+        """
+        out: list[dict] = []
+        if asset is None:
+            return out
+        for src_aid, spec in self._harness_specs.items():
+            if src_aid == asset.asset_id:
+                continue
+            src_data = self.assets.get(src_aid)
+            if not src_data:
+                continue
+            src_asset = self.get_asset(src_aid)
+            if src_asset is None:
+                continue
+            ev = _ah.evaluate_transfer(
+                spec, src_asset, asset,
+                learner_state=self.learner,
+                local_spec=self._harness_specs.get(asset.asset_id),
+            )
+            if ev.get("recommendation") == "migrate":
+                diff = (ev.get("comparison") or {}).get("diff") or 0.0
+                out.append({
+                    "source_asset_id": src_aid,
+                    "source_title": src_data.get("title", src_aid),
+                    "spec": spec,
+                    "evaluation": ev,
+                    "gain": round(float(diff), 4),
+                })
+        out.sort(key=lambda x: x["gain"], reverse=True)
+        return out
+
+    def _on_transfer_harness(self, payload):
+        """Adopt a harness migrated from another asset (audit trail transfer).
+
+        ``payload`` is built by ``_find_transfer_candidates``: spec + source
+        asset id + the OFF/ON differential evaluation that justified the move.
+        Persistence goes through ``adopt_harness_for_asset`` (check_harness
+        gate + ``_history`` reason="transfer" with source_asset_id), then the
+        current concept is re-taught with the migrated style.
+        """
+        try:
+            asset = self.get_asset()
+            if asset is None:
+                return
+            spec = payload.get("spec") or {}
+            source_id = payload.get("source_asset_id", "")
+            concept_now = getattr(self, "_teach_concept_now", "")
+            path = config.DATA_DIR / "harness_state.json"
+            ok, _event = _ah.adopt_harness_for_asset(
+                path, asset.asset_id, spec,
+                source_asset_id=source_id, concept=concept_now)
+            if not ok:
+                QMessageBox.warning(self, _t("hint"),
+                                    _t("harness_none"))
+                return
+            # adopt_harness_for_asset already appended the transfer event;
+            # reload the audit chain so the history block stays consistent
+            self._harness_specs[asset.asset_id] = spec
+            self._harness_history = _ah.load_harness_history(path)
+            source_title = payload.get("source_title", source_id)
+            QMessageBox.information(
+                self, _t("harness_transfer_title"),
+                _t("harness_transfer_adopted",
+                   name=spec.get("name", "?"),
+                   source=source_title, concept=concept_now),
+            )
+            style = spec.get("policy", {}).get("style")
+            concept = asset.concept_by_name(concept_now) if concept_now else None
+            if concept is not None and style:
+                self._show_teaching_content(concept, vary=1, style=style)
+        except Exception as exc:  # pragma: no cover - GUI path
+            QMessageBox.warning(self, _t("hint"), str(exc))
 
     def save_learner_state(self):
         """Persist the in-memory learner model to disk (learner.json)."""
@@ -2079,6 +2329,7 @@ class MainWindow(QMainWindow):
         content_layout.addWidget(file_label)
 
         self._import_fname = QLineEdit("learning-note.md")
+        self._import_fname.textChanged.connect(self._update_import_ready_state)
         self._import_fname.setStyleSheet("""
             QLineEdit {
                 padding: 8px;
@@ -2096,6 +2347,7 @@ class MainWindow(QMainWindow):
 
         self._import_paste = QTextEdit()
         self._import_paste.setPlaceholderText(_t("paste_placeholder"))
+        self._import_paste.textChanged.connect(self._update_import_ready_state)
         self._import_paste.setMinimumHeight(200)
         self._import_paste.setStyleSheet("""
             QTextEdit {
@@ -2128,6 +2380,9 @@ class MainWindow(QMainWindow):
         btn_layout.addWidget(choose_btn)
 
         generate_btn = QPushButton(_t("start_analysis"))
+        self._analysis_btn = generate_btn
+        generate_btn.setEnabled(False)
+        generate_btn.setToolTip("请先选择文件或粘贴学习内容")
         generate_btn.setStyleSheet("""
             QPushButton {
                 background-color: #4CAF50;
@@ -2150,14 +2405,21 @@ class MainWindow(QMainWindow):
         # Progress
         self._import_progress = QProgressBar()
         self._import_progress.setMaximumHeight(20)
+        self._import_progress.setRange(0, 100)
         self._import_progress.setValue(0)
-        self._import_progress.setVisible(False)
+        self._import_progress.setFormat("%p%")
+        self._import_progress.setVisible(True)
         content_layout.addWidget(self._import_progress)
-        
-        # Status label
-        self._import_status_label = QLabel("")
+
+        # Status label must exist before readiness logic updates its text.
+        self._import_status_label = QLabel("请先选择文件或粘贴学习内容")
         self._import_status_label.setStyleSheet("color: #666; font-size: 12px; margin-top: 8px;")
         content_layout.addWidget(self._import_status_label)
+
+        # Keep the readiness state visible before analysis starts.  This
+        # prevents the import page from looking idle while the user is still
+        # preparing an asset.
+        self._update_import_ready_state()
         
         # LLM status
         llm_status = _t("llm_ready") if self.llm_client else _t("llm_not_ready")
@@ -2241,6 +2503,28 @@ class MainWindow(QMainWindow):
             )
             toolbar.addWidget(reset_btn)
 
+            back_btn = QPushButton("返回上层")
+            back_btn.setToolTip("返回上一个钻取位置")
+            back_btn.setStyleSheet(
+                "QPushButton { background-color: white; color: #1565C0;"
+                "border: 1px solid #BBDEFB; border-radius: 6px; padding: 5px 12px;"
+                "font-size: 12.5px; }"
+                "QPushButton:hover { background-color: #E3F2FD; }"
+            )
+            back_btn.clicked.connect(
+                lambda: self._graph_view.drill_up() if hasattr(self, "_graph_view") else None
+            )
+            toolbar.addWidget(back_btn)
+
+            # Drill-down is performed by clicking a concept in the graph.
+            # Keep only a passive breadcrumb here; navigation controls without
+            # a selected target make the interaction ambiguous.
+            self._map_drill_path = QLabel("点击节点查看其上下位概念")
+            self._map_drill_path.setStyleSheet(
+                "QLabel { color: #546E7A; font-size: 12px; padding: 4px 8px; }"
+            )
+            toolbar.addWidget(self._map_drill_path, 1)
+
             self._map_scope = QComboBox()
             self._map_scope.addItems([_t("scope_all"), _t("scope_current")])
             self._map_scope.setStyleSheet(
@@ -2271,6 +2555,7 @@ class MainWindow(QMainWindow):
             self._map_detail.teach_requested.connect(self._start_teach_by_name)
             self._map_detail.full_detail_requested.connect(self._open_concept_panel)
             self._map_detail.neighbor_clicked.connect(self._on_map_neighbor)
+            self._map_detail.compare_requested.connect(self._open_compare)
             map_splitter.addWidget(self._graph_view)
             map_splitter.addWidget(self._map_detail)
             map_splitter.setStretchFactor(0, 1)
@@ -2349,12 +2634,35 @@ class MainWindow(QMainWindow):
     def _on_map_scope(self, _idx: int) -> None:
         self._refresh_map_view()
 
+    def _update_map_drill_controls(self) -> None:
+        gv = getattr(self, "_graph_view", None)
+        if gv is None or not hasattr(self, "_map_drill_path"):
+            return
+        path = gv.drill_path()
+        asset = getattr(self, "_map_global_asset", None)
+        names = []
+        for cid in path:
+            c = asset.concept_by_id(cid) if asset is not None else None
+            names.append(c.name if c is not None else cid)
+        self._map_drill_path.setText(
+            "当前位置：" + (" > ".join(names) if names else "全部知识")
+            + "（点击节点继续钻取）"
+        )
+
     def _on_map_node_clicked(self, concept_id: str) -> None:
         """Graph single-click: focus + detail card; external nodes get an
         on-demand LLM explanation (decompress the compressed layer)."""
         gv = getattr(self, "_graph_view", None)
-        if gv is not None and gv._focus_id != concept_id:
-            gv.focus_concept(concept_id)
+        if gv is not None:
+            was_focused = gv._focus_id == concept_id
+            if was_focused:
+                # A later click on the focused node continues down one level.
+                gv.drill_down(concept_id)
+            else:
+                # The first click only focuses. Avoid rebuilding the scene
+                # twice inside one dispatched click callback.
+                gv.focus_concept(concept_id)
+            self._update_map_drill_controls()
         if str(concept_id).startswith("ext:"):
             self._explain_external(concept_id)
             return
@@ -2422,6 +2730,50 @@ class MainWindow(QMainWindow):
         if gv is not None:
             gv.focus_concept(concept_id)
         self._refresh_map_detail(concept_id)
+
+    def _open_compare(self, id_a: str, id_b: str) -> None:
+        """Open the two-concept comparison dialog (map sidebar entry)."""
+        asset = getattr(self, "_map_global_asset", None) or self.get_asset()
+        if asset is None:
+            return
+        teacher = None
+        td = self.teacher_models.get(self.current_asset_id)
+        if td:
+            try:
+                teacher = TeacherModel.from_dict(td)
+            except Exception:
+                teacher = None
+        dlg = ConceptCompareDialog(asset, id_a, id_b,
+                                   self.learner, teacher, self)
+        dlg.focus_requested.connect(self._focus_in_graph)
+        dlg.teach_requested.connect(self._start_teach_by_name)
+        dlg.incorporate_requested.connect(self._on_incorporate_comparison)
+        self._compare_dialog = dlg  # keep a reference (prevent GC)
+        dlg.show()
+
+    def _on_incorporate_comparison(self, id_a: str, id_b: str) -> None:
+        """Sink a map comparison into the Teacher Model and persist it.
+
+        Shared neighbours become bridging anchors on both concepts; a mastery
+        gap >= 0.2 raises a learner_gap anomaly pinned to the weaker concept,
+        which the anomaly-prioritized teaching path walks ahead of.
+        """
+        asset = getattr(self, "_map_global_asset", None) or self.get_asset()
+        if asset is None:
+            return
+        try:
+            teacher = None
+            td = self.teacher_models.get(self.current_asset_id)
+            if td:
+                teacher = TeacherModel.from_dict(td)
+            teacher = incorporate_comparison(
+                asset, teacher, id_a, id_b, learner_state=self.learner
+            )
+            save_teacher(self.current_asset_id, teacher)
+            self.teacher_models[self.current_asset_id] = teacher.to_dict()
+        except Exception:
+            # Sinking is best-effort; the reader already got the comparison.
+            pass
 
     def _build_source_view(self):
         """Build the source text view for reading the original material."""
@@ -2932,6 +3284,25 @@ class MainWindow(QMainWindow):
         )
         if file_path:
             self._import_fname.setText(file_path)
+            self._import_status_label.setText("文件已选择，正在开始分析…")
+            self._on_generate()
+
+    def _update_import_ready_state(self):
+        """Keep the import page explicit about whether analysis can start."""
+        if not hasattr(self, "_analysis_btn"):
+            return
+        fname = self._import_fname.text().strip()
+        has_file = bool(fname and Path(fname).exists())
+        has_paste = bool(self._import_paste.toPlainText().strip())
+        ready = has_file or has_paste
+        busy = bool(getattr(self, "_extract_worker", None) and self._extract_worker.isRunning())
+        busy = busy or bool(getattr(self, "_teacher_worker", None) and self._teacher_worker.isRunning())
+        self._analysis_btn.setEnabled(ready and not busy)
+        if not busy and self._import_progress.value() == 0:
+            self._import_status_label.setText(
+                "已准备好，可以开始分析" if ready else "请先选择文件或粘贴学习内容"
+            )
+            self._analysis_btn.setToolTip("点击开始分析" if ready else "请先选择文件或粘贴学习内容")
 
     def _on_generate(self):
         """Handle knowledge extraction with progress."""
@@ -2957,9 +3328,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, _t("error"), _t("empty_content"))
             return
         
-        # Show progress
+        # Show progress and lock the action until the background pipeline ends.
         self._import_progress.setVisible(True)
         self._import_progress.setValue(10)
+        self._analysis_btn.setEnabled(False)
+        self._analysis_btn.setToolTip("正在分析，请稍候")
         self._import_status_label.setText(_t("analyzing"))
         self._import_status_label.repaint()
         
@@ -3004,47 +3377,57 @@ class MainWindow(QMainWindow):
         
         # Save teacher model
         self.teacher_models[teacher.asset_id] = teacher.to_dict()
-        
+
+        # Switch current asset to the newly imported one
+        self.current_asset_id = teacher.asset_id
+
         # Save learner state
         self.save_learner_state()
-        
-        # Refresh asset list in sidebar
+
+        # Refresh the sidebar and every data view against the new asset.
         self._refresh_asset_list()
-        
+        self._rebuild_all_views()
+
         self._import_progress.setValue(100)
+        self._import_status_label.setText("分析完成，正在载入知识资产")
+        self._analysis_btn.setEnabled(False)
         QMessageBox.information(
             self,
             _t("import_success_title"),
             _t("import_done",
-               title=self.assets[self.current_asset_id]["title"],
-               c=len(self.assets[self.current_asset_id]["concepts"]),
-               r=len(self.assets[self.current_asset_id]["relations"]))
+               title=self.assets[teacher.asset_id]["title"],
+               c=len(self.assets[teacher.asset_id]["concepts"]),
+               r=len(self.assets[teacher.asset_id]["relations"]))
         )
+        # Land on the imported knowledge entities instead of leaving the user
+        # on an empty-looking import form.
+        self.content_stack.setCurrentIndex(1)
         # Switch to knowledge view
         self.on_nav_click("knowledge")
 
     def _on_extraction_error(self, error_msg):
         """Handle extraction error."""
-        self._import_progress.setVisible(False)
+        self._import_progress.setValue(0)
+        self._import_progress.setVisible(True)
+        self._import_status_label.setText("分析失败，请检查内容后重试")
+        self._update_import_ready_state()
         QMessageBox.critical(self, _t("error"), _t("import_failed", msg=error_msg))
 
-    def _refresh_asset_list(self):
-        """Refresh asset list in sidebar."""
-        # Find asset section
-        for child in self.findChildren(QPushButton):
-            if child.text().startswith("📚"):
-                child.deleteLater()
-
-        # Re-add asset buttons
-        sidebar = self.findChildren(QFrame)[0]  # Get sidebar
-        layout = sidebar.layout()
-        assets_label = QLabel(_t("assets_label"))
-        assets_label.setStyleSheet("color: #90CAF9; font-size: 11px;")
-        layout.addWidget(assets_label)
-
+    def _populate_asset_buttons(self):
+        """Render all known assets inside the stable sidebar container."""
+        if not hasattr(self, "_asset_list_layout"):
+            return
+        while self._asset_list_layout.count():
+            item = self._asset_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._asset_buttons = {}
         for aid, data in self.assets.items():
-            title = data.get('title', aid)
-            btn = QPushButton(f"📚 {title[:25]}{'...' if len(title) > 25 else ''}")
+            title = data.get("title") or data.get("source_name") or aid
+            count = len(data.get("concepts", []))
+            btn = QPushButton(f"📚 {title[:22]}{'...' if len(title) > 22 else ''}  · {count}")
+            btn.setToolTip(f"{title}\n{count} 个知识实体")
             btn.setStyleSheet("""
                 QPushButton {
                     background-color: transparent;
@@ -3055,15 +3438,18 @@ class MainWindow(QMainWindow):
                     border-radius: 4px;
                     font-size: 12px;
                 }
-                QPushButton:hover {
-                    background-color: #283593;
-                }
+                QPushButton:hover { background-color: #283593; }
+                QPushButton:checked { background-color: #3949AB; }
             """)
             btn.setCheckable(True)
             btn.setChecked(aid == self.current_asset_id)
             btn.clicked.connect(lambda checked, a=aid: self.on_asset_select(a))
             self._asset_buttons[aid] = btn
-            layout.addWidget(btn)
+            self._asset_list_layout.addWidget(btn)
+
+    def _refresh_asset_list(self):
+        """Refresh the dedicated asset list without altering sidebar structure."""
+        self._populate_asset_buttons()
 
     def _on_export_report(self):
         """Export learning report to file."""

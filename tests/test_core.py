@@ -27,6 +27,7 @@ from expert_anything.core.teacher import (
     TeacherModel,
     anomaly_concept_ids,
     build_teacher_model,
+    incorporate_comparison,
     record_learner_question,
 )
 from expert_anything.core.tutor import Tutor
@@ -375,6 +376,108 @@ class TestTeacher(unittest.TestCase):
             status="open"))
         ids = anomaly_concept_ids(self.asset, tm)
         self.assertIn(self.asset.concepts[0].id, ids)
+
+
+def _star_asset():
+    """hub → A, hub → B: A and B share the hub as a common neighbour."""
+    return KnowledgeAsset(
+        asset_id="star",
+        type="text",
+        title="Star",
+        source_name="star.md",
+        created_at="",
+        source_text="",
+        concepts=[
+            Concept(id="hub", name="H", definition="hub", evidence=["h"]),
+            Concept(id="a", name="A", definition="d", evidence=["a"]),
+            Concept(id="b", name="B", definition="d", evidence=["b"]),
+        ],
+        relations=[
+            Relation(id="r1", source="hub", target="a", label="连接"),
+            Relation(id="r2", source="hub", target="b", label="连接"),
+        ],
+        learning_path=["a", "hub", "b"],
+    )
+
+
+def _mastery_state(**pairs) -> dict:
+    return {"concepts": {f"k{i}": {"name": k, "mastery": v}
+                         for i, (k, v) in enumerate(pairs.items())}}
+
+
+class TestCompareIncorporate(unittest.TestCase):
+    """incorporate_comparison: map comparisons sink into the Teacher Model."""
+
+    def test_shared_neighbours_become_bridging_anchors(self):
+        asset = _star_asset()
+        tm = TeacherModel(asset_id="star")
+        tm = incorporate_comparison(asset, tm, "a", "b")
+        na = tm.concept_note_by_id("a")
+        nb = tm.concept_note_by_id("b")
+        self.assertTrue(any("对比锚点" in c and "H" in c for c in na.connections),
+                        "shared hub missing from A's connections")
+        self.assertTrue(any("对比锚点" in c and "H" in c for c in nb.connections),
+                        "shared hub missing from B's connections")
+        # no mastery state -> no gap anomaly
+        self.assertFalse([a for a in tm.anomalies if a.kind == "learner_gap"])
+
+    def test_mastery_gap_raises_anomaly_on_weaker_side(self):
+        asset = _star_asset()
+        tm = TeacherModel(asset_id="star")
+        ls = _mastery_state(A=0.3, B=0.8)  # gap 0.5 >= 0.4 -> high
+        tm = incorporate_comparison(asset, tm, "a", "b", learner_state=ls)
+        na = tm.concept_note_by_id("a")
+        self.assertTrue(any("对比发现" in s and "A" in s for s in na.learner_signals),
+                        "weaker side A should carry the learner signal")
+        gaps = [a for a in tm.anomalies if a.kind == "learner_gap"]
+        self.assertEqual(len(gaps), 1)
+        self.assertIn("A", gaps[0].location)
+        self.assertEqual(gaps[0].severity, "high")
+        # medium band: gap in [0.2, 0.4)
+        tm2 = TeacherModel(asset_id="star")
+        ls2 = _mastery_state(A=0.4, B=0.7)
+        tm2 = incorporate_comparison(asset, tm2, "a", "b", learner_state=ls2)
+        gap = [a for a in tm2.anomalies if a.kind == "learner_gap"][0]
+        self.assertEqual(gap.severity, "medium")
+
+    def test_idempotent_repeat_calls(self):
+        asset = _star_asset()
+        tm = TeacherModel(asset_id="star")
+        ls = _mastery_state(A=0.3, B=0.8)
+        tm = incorporate_comparison(asset, tm, "a", "b", learner_state=ls)
+        n_an = len(tm.anomalies)
+        tm = incorporate_comparison(asset, tm, "a", "b", learner_state=ls)
+        self.assertEqual(len(tm.anomalies), n_an)
+        self.assertEqual(len(tm.concept_note_by_id("a").learner_signals), 1)
+        self.assertEqual(len(tm.concept_note_by_id("a").connections), 1)
+
+    def test_no_gap_no_shared_no_change(self):
+        asset = _star_asset()
+        tm = TeacherModel(asset_id="star")
+        # all three have records -> the A/H gap is a real 0.05, not a
+        # "unlearned defaults to 0" artifact
+        ls = _mastery_state(A=0.6, B=0.7, H=0.65)
+        tm = incorporate_comparison(asset, tm, "a", "hub", learner_state=ls)
+        self.assertFalse([a for a in tm.anomalies if a.kind == "learner_gap"])
+        self.assertEqual(tm.concept_note_by_id("a").connections, [])
+        self.assertEqual(tm.concept_note_by_id("hub").connections, [])
+
+    def test_injected_comparison_skips_recompute(self):
+        asset = _star_asset()
+        tm = TeacherModel(asset_id="star")
+        comp = {"a": {"name": "A", "mastery": 0.2},
+                "b": {"name": "B", "mastery": 0.9},
+                "shared_neighbors": ["H"]}
+        tm = incorporate_comparison(asset, tm, "a", "b", comparison=comp)
+        self.assertTrue(any("对比锚点" in c for c in tm.concept_note_by_id("a").connections))
+        self.assertTrue(any(a.kind == "learner_gap" for a in tm.anomalies))
+
+    def test_bad_ids_are_ignored(self):
+        asset = _star_asset()
+        tm = TeacherModel(asset_id="star")
+        self.assertIs(incorporate_comparison(asset, tm, "a", "a"), tm)
+        self.assertIs(incorporate_comparison(asset, tm, "a", "nope"), tm)
+        self.assertEqual(tm.anomalies, [])
 
 
 # --------------------------------------------------------------------------- #

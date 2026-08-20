@@ -133,6 +133,36 @@ def _border_point(center: tuple[float, float], half: tuple[float, float], toward
     return (cx + dx * t, cy + dy * t)
 
 
+def hierarchy_neighbors(asset: KnowledgeAsset, concept_id: str) -> tuple[list[str], list[str]]:
+    """Return (parents, children) for a concept using decoded hierarchy edges."""
+    hierarchy_types = {
+        "contains", "包含", "包括", "涵盖", "下位概念", "parent-child",
+        "parent_child", "child", "subconcept", "sub-concept", "层级",
+        "上位-下位", "上位概念", "part-of", "has-part",
+    }
+
+    def is_hierarchy(relation) -> bool:
+        values = (getattr(relation, "type", ""), getattr(relation, "label", ""),
+                  getattr(relation, "relation_type", ""))
+        normalized = {str(v or "").strip().lower() for v in values}
+        return bool(normalized & hierarchy_types) or any(
+            any(token in value for token in ("子概念", "下位", "包含", "组成"))
+            for value in normalized
+        )
+
+    parents, children = [], []
+    for relation in asset.relations:
+        if not is_hierarchy(relation):
+            continue
+        if relation.target == concept_id and relation.source not in parents:
+            parents.append(relation.source)
+        elif relation.source == concept_id and relation.target not in children:
+            children.append(relation.target)
+    valid = {c.id for c in asset.concepts}
+    return ([cid for cid in parents if cid in valid],
+            [cid for cid in children if cid in valid])
+
+
 def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str]]]:
     """Return (nodes, edges).
 
@@ -166,24 +196,72 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
         return nodes, edges
 
     # --- focus mode --------------------------------------------------------
-    neighbor_ids: set[str] = set()
+    parent_ids, child_ids = hierarchy_neighbors(asset, focus_id)
+    neighbor_ids: set[str] = set(parent_ids + child_ids)
+    child_ids: list[str] = list(child_ids)
+    hierarchy_types = {
+        "contains", "包含", "包括", "涵盖", "下位概念", "parent-child",
+        "parent_child", "child", "subconcept", "sub-concept", "层级",
+        "上位-下位", "上位概念", "part-of", "has-part",
+    }
+
+    def _is_hierarchy_relation(relation) -> bool:
+        values = (
+            getattr(relation, "type", ""),
+            getattr(relation, "label", ""),
+            getattr(relation, "relation_type", ""),
+        )
+        normalized = {str(v or "").strip().lower() for v in values}
+        return bool(normalized & hierarchy_types) or any(
+            any(token in value for token in ("子概念", "下位", "包含", "组成"))
+            for value in normalized
+        )
+
     for r in asset.relations:
         if r.source == focus_id:
             neighbor_ids.add(r.target)
-        if r.target == focus_id:
+            # Outgoing hierarchy edges are the node's actual drill-down
+            # contents. Keep their order from the source asset for stable UI.
+            if _is_hierarchy_relation(r) and r.target not in child_ids:
+                child_ids.append(r.target)
+        elif r.target == focus_id:
             neighbor_ids.add(r.source)
+            if _is_hierarchy_relation(r) and r.source not in child_ids:
+                # Some decoders emit the hierarchy edge in the reverse
+                # direction. Keep the parent visible as context, but do not
+                # label it as a child.
+                pass
 
     roles: dict[str, str] = {focus_id: "focus"}
+    for cid in child_ids:
+        if cid in id_to_name and cid != focus_id:
+            roles[cid] = "child"
+
+    # A reverse hierarchy edge identifies an upper concept. It is kept in
+    # context and explicitly marked so the UI can offer an upward drill.
+    for r in asset.relations:
+        if r.target == focus_id and _is_hierarchy_relation(r):
+            if r.source in id_to_name and r.source != focus_id:
+                roles[r.source] = "parent"
     for n in neighbor_ids:
-        if n in id_to_name and n != focus_id:
+        if n in id_to_name and n != focus_id and n not in roles:
             roles[n] = "neighbor"
 
-    ego = [focus_id] + [n for n in neighbor_ids if n in id_to_name and n != focus_id]
+    # Preserve the semantic role assigned above: the generic neighbour pass
+    # must not downgrade children/parents.  The focused view is a drillable
+    # local subgraph, so every direct child remains visible and clickable.
+    ego = [focus_id] + [n for n in child_ids if n in id_to_name and n != focus_id]
+    ego += [n for n in neighbor_ids if n in id_to_name and n != focus_id and n not in ego]
 
     # If the concept has no relations, pull in learning-path neighbours as faint
     # context so its graph is not a lonely single box and still differs per concept.
+    # Last resort: same-chapter brothers — a click must always surface *some*
+    # alongside / next-level points (认知地图信息增量，永不孤点).
     context: list[str] = []
-    if len(ego) <= 1 and asset.learning_path:
+
+    def _path_context() -> None:
+        if not asset.learning_path:
+            return
         try:
             idx = asset.learning_path.index(focus_id)
         except ValueError:
@@ -192,9 +270,28 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
             for j in (idx - 1, idx + 1):
                 if 0 <= j < len(asset.learning_path):
                     c2 = asset.learning_path[j]
-                    if c2 in id_to_name and c2 not in roles:
+                    if c2 in id_to_name and c2 not in roles and c2 not in context:
                         context.append(c2)
                         roles[c2] = "context"
+
+    def _chapter_context() -> None:
+        fc = asset.concept_by_id(focus_id)
+        if fc is None or not getattr(fc, "chapter", ""):
+            return
+        for cc in asset.concepts:
+            if (cc.id != focus_id and cc.id in id_to_name
+                    and cc.id not in roles and cc.id not in context
+                    and getattr(cc, "chapter", "") == fc.chapter):
+                context.append(cc.id)
+                roles[cc.id] = "context"
+                if len(context) >= 3:
+                    return
+
+    # A focused map should provide a useful local neighborhood, not only the
+    # explicitly decoded hierarchy edges. Add same-chapter concepts and nearby
+    # learning-path concepts as context while keeping structural nodes primary.
+    _path_context()
+    _chapter_context()
 
     keep = ego + context
     nodes = [(cid, id_to_name[cid], roles.get(cid, "normal")) for cid in keep]
@@ -206,27 +303,29 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
     for c2 in context:
         edges.append((focus_id, c2, _t("graph_path_edge")))
     # if the ego network has almost no relation edges, add learning-path
-    # neighbours as faint context so the focused view is never a lone node
-    if len(edges) < 2 and asset.learning_path:
-        try:
-            idx = asset.learning_path.index(focus_id)
-        except ValueError:
-            idx = -1
-        if idx >= 0:
-            for j in (idx - 1, idx + 1):
-                if 0 <= j < len(asset.learning_path):
-                    c2 = asset.learning_path[j]
-                    if c2 in id_to_name and c2 not in roles:
-                        context.append(c2)
-                        roles[c2] = "context"
-                        edges.append((focus_id, c2, _t("graph_path_edge")))
+    # neighbours — or same-chapter brothers — as faint context so the focused
+    # view is never a lone node (context additions are kept inside `keep`
+    # above via the helper, so no dangling edges).
+    if len(edges) < 2:
+        _path_context()
+        _chapter_context()
+        for c2 in context:
+            if c2 in keep_set:
+                continue
+            keep.append(c2)
+            keep_set.add(c2)
+            nodes.append((c2, id_to_name[c2], "context"))
+            edges.append((focus_id, c2, _t("graph_path_edge")))
     return nodes, edges
 
 
 def _radial_layout(nodes, focus_id: str | None) -> tuple[dict[str, tuple[float, float]], int, int]:
     """Focus-centric layout. Returns (pos, width, height)."""
     focus = [n for n in nodes if n[2] == "focus"]
-    neighbors = [n for n in nodes if n[2] == "neighbor"]
+    # Structural drill nodes must participate in the radial layout too.
+    # Previously child/parent roles were rendered without a ring position,
+    # which made a drilled map appear nearly empty or collapse to 2-3 nodes.
+    neighbors = [n for n in nodes if n[2] in {"neighbor", "child", "parent"}]
     context = [n for n in nodes if n[2] == "context"]
 
     if not neighbors and not context:
