@@ -291,7 +291,7 @@ class TestTeachScenePipeline(unittest.TestCase):
     def test_llm_diagram_style_gets_scene(self):
         asset = _asset()
         tutor = Tutor(asset, llm=_FakeLLM([self.LESSON, self.SCENE_OK]))
-        lesson = tutor.teach(asset.concepts[0], style="图示")
+        lesson = tutor.teach(asset.concepts[0], style="diagram")
         self.assertIn("scene", lesson)
         v, spec = decoder.check_scene(lesson["scene"])
         self.assertTrue(bool(v), v.reason)
@@ -302,7 +302,7 @@ class TestTeachScenePipeline(unittest.TestCase):
     def test_llm_scene_rejected_falls_back_to_relation_graph(self):
         asset = _asset()
         tutor = Tutor(asset, llm=_FakeLLM([self.LESSON, self.SCENE_BAD, self.SCENE_BAD]))
-        lesson = tutor.teach(asset.concepts[0], style="图示")
+        lesson = tutor.teach(asset.concepts[0], style="diagram")
         # deterministic fallback: current node is the concept, neighbours linked
         scene = lesson["scene"]
         v, _ = decoder.check_scene(scene)
@@ -314,7 +314,7 @@ class TestTeachScenePipeline(unittest.TestCase):
     def test_no_llm_diagram_style_still_gets_scene(self):
         asset = _asset()
         tutor = Tutor(asset, llm=None)
-        lesson = tutor.teach(asset.concepts[0], style="图示")
+        lesson = tutor.teach(asset.concepts[0], style="diagram")
         self.assertIn("scene", lesson)
         v, _ = decoder.check_scene(lesson["scene"])
         self.assertTrue(bool(v), v.reason)
@@ -322,7 +322,7 @@ class TestTeachScenePipeline(unittest.TestCase):
     def test_other_styles_have_no_scene(self):
         asset = _asset()
         tutor = Tutor(asset, llm=None)
-        lesson = tutor.teach(asset.concepts[0], style="例子")
+        lesson = tutor.teach(asset.concepts[0], style="example")
         self.assertNotIn("scene", lesson)
 
 

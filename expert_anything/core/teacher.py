@@ -1,4 +1,4 @@
-"""Teacher Model — the system's own evolving understanding of an asset.
+"""Teacher Model - the system's own evolving understanding of an asset.
 
 This is the "self-learning" layer. It is deliberately distinct from the
 Learner Model (which tracks *what the student knows*). The Teacher Model
@@ -12,7 +12,7 @@ runs a self-learning pass that (1) enriches every concept with
 significance, prerequisites, common misconceptions and connections, and
 (2) scans the source + model for contradictions, undefined terms, logical
 gaps and surprising claims. The result is persisted and the teaching
-session navigates by it — surfacing "things the system is still unsure
+session navigates by it - surfacing "things the system is still unsure
 about" as explicit exploration tasks instead of pretending omniscience.
 
 External knowledge: when the source is thin, the model is allowed to bring
@@ -31,6 +31,10 @@ from uuid import uuid4
 
 from expert_anything.core.llm import LLMClient, Message, chat_json
 from expert_anything.core.models import KnowledgeAsset
+from expert_anything.core.prompt_registry import get_prompt
+from expert_anything.core import i18n
+
+_t = i18n.t
 
 
 def _new_id(prefix: str) -> str:
@@ -48,7 +52,7 @@ class ConceptNote:
     prerequisites: list[str] = field(default_factory=list)
     misconceptions: list[str] = field(default_factory=list)
     connections: list[str] = field(default_factory=list)
-    external_notes: list[str] = field(default_factory=list)  # 引入的外部补充，标注来源
+    external_notes: list[str] = field(default_factory=list)  # 引入的外部补充,标注来源
     external_concepts: list[str] = field(default_factory=list)  # LLM 压缩层的相关外部概念
     learner_signals: list[str] = field(default_factory=list)  # 学生真实作答中暴露的困惑/错点
     note: str = ""                  # 系统综合理解
@@ -196,55 +200,21 @@ def _parse_json(text: str) -> dict:
     return {}
 
 
-# --------------------------------------------------------------------------- #
-# LLM-driven self-learning pass
-# --------------------------------------------------------------------------- #
-_SYSTEM = (
-    "你是‘教学导航’系统的自我认知模块。你阅读已抽取的知识模型与原文，"
-    "产出比‘定义’更深一层的理解，并主动发现材料里值得警惕的异常。"
-    "规则：\n"
-    "1. 严格基于所给材料；只有在材料明显单薄、需要背景才能成立时，才引入公认的外部知识，"
-    "且必须放进 external_notes 并视为补充，不得混入主理解。\n"
-    "2. 异常检测要 conservative：只有真正矛盾/未定义/断点/明显反常才列入，不臆造。\n"
-    "3. 只输出 JSON，不要解释。"
-)
-
-_USER = (
-    "以下关于《{title}》的知识模型与原文片段。请：\n"
-    "(A) 对每个概念做深加工：significance(为什么重要)、prerequisites(前提)、"
-    "misconceptions(常见误解)、connections(与别的概念/外部领域的连接)、"
-    "external_concepts(1-2 个不在本书中、但与该概念密切相关的常见外部概念名，"
-    "用于知识图谱中的灰色锚点；若无则空数组)、"
-    "note(系统综合理解，1-2 句)；若材料单薄，把可靠的外部背景放进 external_notes。\n"
-    "(B) 扫描矛盾/未定义术语/逻辑断点/反常主张，逐条列出 anomaly："
-    "kind 取 contradiction|undefined_term|logical_gap|surprising_claim，"
-    "severity 取 low|medium|high，location 给原文片段或‘全局’。\n\n"
-    "概念列表：\n{concepts}\n\n"
-    "原文片段（前 4000 字）：\n{source}\n\n"
-    "输出 JSON：\n"
-    "{{\n"
-    '  "concept_notes": [{{"name":"概念名","significance":"","prerequisites":[],'
-    '"misconceptions":[],"connections":[],"external_notes":[],'
-    '"external_concepts":["外部概念1","外部概念2"],"note":""}}],\n'
-    '  "anomalies": [{{"kind":"","description":"","location":"","severity":""}}]\n'
-    "}}\n"
-    "要求 concept_notes 覆盖全部概念；anomalies 无则空数组。"
-)
-
-
 def _build_user_prompt(asset: KnowledgeAsset, concepts=None) -> str:
     concept_lines = []
     for c in (concepts if concepts is not None else asset.concepts):
-        ev = "；".join(c.evidence[:1]) if c.evidence else "（无证据）"
+        ev = ";".join(c.evidence[:1]) if c.evidence else "(无证据)"
         concept_lines.append(
-            f"- {c.name}：{c.definition or c.summary or '（无定义）'} ｜ 证据：{ev}"
+            f"- {c.name}:{c.definition or c.summary or '(无定义)'} | 证据:{ev}"
         )
-    concepts_block = "\n".join(concept_lines) if concept_lines else "（无概念）"
+    concepts_block = "\n".join(concept_lines) if concept_lines else "(无概念)"
     source_snippet = asset.source_text[:4000]
-    return _USER.format(
+    # Build the user prompt using the registry's teacher_user template
+    tmpl = get_prompt("teacher_user")
+    return tmpl.format(
         title=asset.title,
-        concepts=concepts_block,
-        source=source_snippet,
+        concept_list=concepts_block,
+        source_snippets=source_snippet,
     )
 
 
@@ -323,7 +293,7 @@ def _fallback(asset: KnowledgeAsset) -> TeacherModel:
             Anomaly(
                 id=_new_id("an"),
                 kind="needs_llm",
-                description="未配置 LLM（EXPERTANYTHING_LLM_API_KEY）。自我学习层（概念深加工与异常检测）无法运行。配置 key 后点击「重新自检」即可生成。",
+                description=_t("teacher_no_llm_anomaly"),
                 severity="info",
                 status="open",
                 source="internal",
@@ -342,10 +312,10 @@ def build_teacher_model(
     """
     if llm is None:
         if on_progress:
-            on_progress("selflearn", 0, 0, "未配置 LLM，跳过自我学习（可在认知导航页重新自检）")
+            on_progress("selflearn", 0, 0, _t("teacher_no_llm_skip"))
         return _fallback(asset)
     if on_progress:
-        on_progress("selflearn", 0, 0, "正在自我学习：深加工每个概念、扫描矛盾/未定义/反常…")
+        on_progress("selflearn", 0, 0, _t("teacher_self_learning"))
     try:
         # Batch the pass: ≤ BATCH concepts per LLM call so the output stays
         # well under the endpoint's limit (a 33-concept single call reliably
@@ -357,12 +327,12 @@ def build_teacher_model(
         for b in range(total_batches):
             chunk = asset.concepts[b * BATCH : (b + 1) * BATCH]
             try:
-                # NOTE: json_mode is deliberately OFF here — agnes-2.0-flash
+                # NOTE: json_mode is deliberately OFF here - agnes-2.0-flash
                 # returns empty bodies for json_object + long prompts. We parse
                 # the plain text response with the tolerant _parse_json instead.
                 content = llm.chat(
                     [
-                        Message("system", _SYSTEM),
+                        Message("system", get_prompt("teacher_system")),
                         Message("user", _build_user_prompt(asset, concepts=chunk)),
                     ],
                     temperature=0.3,
@@ -380,11 +350,11 @@ def build_teacher_model(
             if on_progress:
                 on_progress(
                     "selflearn", b + 1, total_batches,
-                    f"自我学习批次 {b + 1}/{total_batches}",
+                    _t("teacher_batch_progress", b=b + 1, t=total_batches),
                 )
         tm = _assemble(asset, merged_data, method="teacher_self_learn_v1")
         if on_progress:
-            on_progress("selflearn", 0, 0, f"自我学习完成：{len(tm.anomalies)} 条待解项")
+            on_progress("selflearn", 0, 0, _t("teacher_self_learning_done", n=len(tm.anomalies)))
         return tm
     except Exception:
         # Graceful degradation: never fail the import on a self-learn hiccup.
@@ -392,7 +362,7 @@ def build_teacher_model(
         tm.status = "failed"
         tm.method = "llm_failed_fallback_v1"
         if on_progress:
-            on_progress("selflearn", 0, 0, "自我学习调用失败，已降级（不影响导入）")
+            on_progress("selflearn", 0, 0, _t("teacher_self_learn_fail"))
         return tm
 
 
@@ -400,25 +370,25 @@ def build_teacher_model(
 # Closed-loop convergence: learner answers feed back into the Teacher Model
 # --------------------------------------------------------------------------- #
 _REFLECT_SYSTEM = (
-    "你是‘教学导航’系统的自我反思模块。系统已经对某个概念做了一轮深加工，"
-    "现在一名学习者提交了练习回答并被评估。你的任务是判断：这次学习者的回答，"
-    "是仅仅暴露了‘学习者个人的薄弱’，还是揭示了‘材料/讲解本身的隐患’。\n"
-    "只输出 JSON，不要解释。"
+    "你是'教学导航'系统的自我反思模块。系统已经对某个概念做了一轮深加工,"
+    "现在一名学习者提交了练习回答并被评估。你的任务是判断:这次学习者的回答,"
+    "是仅仅暴露了'学习者个人的薄弱',还是揭示了'材料/讲解本身的隐患'。\n"
+    "只输出 JSON,不要解释。"
 )
 
 _REFLECT_USER = (
-    "概念：{name}\n定义：{definition}\n\n"
-    "系统已有的常见误解预判：{miscon}\n系统已有的综合理解：{note}\n\n"
-    "学习者回答：{answer}\n评估得分：{score}\n导师反馈：{feedback}\n\n"
-    "请判断：\n"
-    "1. 若学习者的错误指向材料/讲解本身可被改进之处（如定义含糊、缺少前提、"
-    "容易产生的系统性误解未被覆盖），请在 anomaly 里给出一条系统级异常，"
-    "kind 取 contradiction|undefined_term|logical_gap|surprising_claim，"
-    "severity 取 low|medium|high（得分越低越可能 high），status 固定 open；"
+    "概念:{name}\n定义:{definition}\n\n"
+    "系统已有的常见误解预判:{miscon}\n系统已有的综合理解:{note}\n\n"
+    "学习者回答:{answer}\n评估得分:{score}\n导师反馈:{feedback}\n\n"
+    "请判断:\n"
+    "1. 若学习者的错误指向材料/讲解本身可被改进之处(如定义含糊、缺少前提、"
+    "容易产生的系统性误解未被覆盖),请在 anomaly 里给出一条系统级异常,"
+    "kind 取 contradiction|undefined_term|logical_gap|surprising_claim,"
+    "severity 取 low|medium|high(得分越低越可能 high),status 固定 open;"
     "否则 anomaly 为 null。\n"
-    "2. 用一句话写出这种错误模式的本质 misconceptions（用于补充到概念的常见误解里）；"
+    "2. 用一句话写出这种错误模式的本质 misconceptions(用于补充到概念的常见误解里);"
     "若现有预判已覆盖则填空串。\n\n"
-    "输出 JSON：\n"
+    "输出 JSON:\n"
     "{{\n"
     '  "anomaly": {{"kind":"","description":"","severity":""}} 或 null,\n'
     '  "misconception": ""\n'
@@ -437,19 +407,23 @@ def reflect_on_signal(
 ) -> dict:
     """LLM pass: turn a learner's answer into a (possibly) new system anomaly
     plus a refined misconception. Returns {anomaly: dict|None, misconception: str}."""
+    sys_prompt = get_prompt("teacher_reflect_system", default=None) or _REFLECT_SYSTEM
+    user_tmpl = get_prompt("teacher_reflect_user", default=None)
+    if user_tmpl is None:
+        user_tmpl = _REFLECT_USER
     content = llm.chat(
         [
-            Message("system", _REFLECT_SYSTEM),
+            Message("system", sys_prompt),
             Message(
                 "user",
-                _REFLECT_USER.format(
+                user_tmpl.format(
                     name=concept.name,
-                    definition=concept.definition or concept.summary or "（无定义）",
-                    miscon="；".join(note.misconceptions) or "（无）",
-                    note=note.note or "（无）",
-                    answer=answer.strip()[:600] or "（学习者未作答）",
+                    definition=concept.definition or concept.summary or "(无定义)",
+                    miscon=";".join(note.misconceptions) or "(无)",
+                    note=note.note or "(无)",
+                    answer=answer.strip()[:600] or "(学习者未作答)",
                     score=f"{score:.2f}",
-                    feedback=feedback or "（无）",
+                    feedback=feedback or "(无)",
                 ),
             ),
         ],
@@ -487,7 +461,7 @@ def incorporate_learner_signal(
 ) -> TeacherModel:
     """Closed-loop step: record a learner's answer as a signal in the Teacher
     Model. Always appends a `learner_gap` anomaly (so the loop is visible even
-    without LLM), and — if an LLM is available — runs a reflection that may
+    without LLM), and - if an LLM is available - runs a reflection that may
     promote it into a real system anomaly and refine the concept's
     misconceptions. Returns the (mutated) TeacherModel; caller persists it."""
     if teacher is None:
@@ -502,15 +476,15 @@ def incorporate_learner_signal(
 
     # 1) Always record the learner signal + a learner_gap anomaly (deterministic).
     snippet = answer.strip().replace("\n", " ")[:140]
-    note.learner_signals.append(f"学习者（得分 {score:.2f}）回答片段：{snippet}")
+    note.learner_signals.append(f"学习者(得分 {score:.2f})回答片段:{snippet}")
     sev = "high" if score < 0.4 else ("medium" if score < 0.6 else "low")
     teacher.anomalies.append(
         Anomaly(
             id=_new_id("an"),
             kind="learner_gap",
             description=(
-                f"学习者对「{cname}」掌握不足（评估得分 {score:.2f}）。"
-                f"其回答暴露出需要补习或澄清的点，已作为教学导航的待关注信号。"
+                f"学习者对「{cname}」掌握不足(评估得分 {score:.2f})。"
+                f"其回答暴露出需要补习或澄清的点,已作为教学导航的待关注信号。"
             ),
             location=cname,
             severity=sev,
@@ -567,7 +541,7 @@ def record_learner_question(
         note = ConceptNote(concept_id=concept_id, name=cname)
         teacher.concept_notes.append(note)
     snippet = question.strip().replace("\n", " ")[:140]
-    note.learner_signals.append(f"学习者追问：{snippet}")
+    note.learner_signals.append(f"学习者追问:{snippet}")
     note.learner_signals = note.learner_signals[-8:]
     teacher.synthesized_at = datetime.now(timezone.utc).isoformat()
     return teacher
@@ -586,7 +560,7 @@ def incorporate_stuck_signal(
     null results; here repeated low scores mean the *teaching strategy*
     must be re-ideated, not just retried. This records the situation as a
     visible ``learner_gap`` anomaly (kind stays compatible with existing
-    filters) so the Teacher Model — and the anomaly-prioritized path —
+    filters) so the Teacher Model - and the anomaly-prioritized path -
     keeps the concept in front of the learner while Tutor.teach rotates
     its style. Deterministic, no LLM; caller persists.
     """
@@ -599,8 +573,8 @@ def incorporate_stuck_signal(
         note = ConceptNote(concept_id=concept_id, name=cname)
         teacher.concept_notes.append(note)
     note.learner_signals.append(
-        f"卡壳信号：连续 {attempts} 次评估均未达标（平均 {avg_score:.2f}），"
-        f"当前教学策略可能不适合该学习者，已触发换角度重讲。"
+        f"卡壳信号:连续 {attempts} 次评估均未达标(平均 {avg_score:.2f}),"
+        f"当前教学策略可能不适合该学习者,已触发换角度重讲。"
     )
     note.learner_signals = note.learner_signals[-8:]
     teacher.anomalies.append(
@@ -608,8 +582,9 @@ def incorporate_stuck_signal(
             id=_new_id("an"),
             kind="learner_gap",
             description=(
-                f"学习者对「{cname}」连续 {attempts} 次评估未达标（平均得分 {avg_score:.2f}）。"
-                f"这不是单次失误而是系统性卡壳：教学将自动更换讲解风格（例子/图示/拆解步骤轮换），"
+                f"学习者对「{cname}」连续 {attempts} 次评估未达标(平均得分 {avg_score:.2f})。"
+                f"这不是单次失误而是系统性卡壳:教学将自动更换讲解风格"
+                f"({_t('style_example')}/{_t('style_diagram')}/{_t('style_steps')}轮换),"
                 f"并优先安排复习。"
             ),
             location=cname,
@@ -641,7 +616,7 @@ def incorporate_comparison(
       hang together grows from comparison;
     - **mastery gap ≥ 0.2** → a ``learner_gap`` anomaly pinned to the weaker
       concept (plus a learner signal on it), which
-      ``anomaly_prioritized_path`` then walks ahead of the student — the
+      ``anomaly_prioritized_path`` then walks ahead of the student - the
       comparison literally re-orders teaching.
 
     Idempotent: repeated calls on the same pair never duplicate entries
@@ -684,7 +659,7 @@ def incorporate_comparison(
     if shared:
         names = "、".join(str(x) for x in shared[:5])
         for note, other_name in ((na, cb.name), (nb, ca.name)):
-            text = f"对比锚点：与「{other_name}」共享概念邻居：{names}"
+            text = f"对比锚点:与「{other_name}」共享概念邻居:{names}"
             if text not in note.connections:
                 note.connections.append(text)
 
@@ -697,16 +672,16 @@ def incorporate_comparison(
         low_name, high_name = low.name, high.name
         m_low, m_high = (ma, mb) if low is ca else (mb, ma)
         signal = (
-            f"对比发现：对「{low_name}」的掌握度（{m_low:.0%}）低于"
-            f"「{high_name}」（{m_high:.0%}），优先补学「{low_name}」。"
+            f"对比发现:对「{low_name}」的掌握度({m_low:.0%})低于"
+            f"「{high_name}」({m_high:.0%}),优先补学「{low_name}」。"
         )
         note_low = na if low is ca else nb
         if signal not in note_low.learner_signals:
             note_low.learner_signals.append(signal)
             note_low.learner_signals = note_low.learner_signals[-8:]
         desc = (
-            f"对比「{ca.name}」与「{cb.name}」发现：学习者对「{low_name}」"
-            f"掌握度（{m_low:.0%}）明显低于「{high_name}」（{m_high:.0%}）。"
+            f"对比「{ca.name}」与「{cb.name}」发现:学习者对「{low_name}」"
+            f"掌握度({m_low:.0%})明显低于「{high_name}」({m_high:.0%})。"
             f"已建议优先补学并提入教学排序。"
         )
         if not any(a.kind == "learner_gap" and a.description == desc

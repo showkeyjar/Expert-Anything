@@ -177,7 +177,7 @@ if config.has_llm():
     print("ok: real-LLM extraction -> %d concepts, method=%s" % (len(a9.concepts), a9.method))
 
     c9 = a9.concepts[0]
-    lessons = {s: Tutor(a9, real_llm).teach(c9, style=s) for s in ["例子", "图示", "拆解步骤"]}
+    lessons = {s: Tutor(a9, real_llm).teach(c9, style=s) for s in ["example", "diagram", "steps"]}
     # The LLM must actually drive teaching, not the stub (stub example starts with
     # the literal "把" + concept name and never uses evidence-based metaphors).
     for s, les in lessons.items():
@@ -185,17 +185,17 @@ if config.has_llm():
         assert les["example"] and "把" + c9.name not in les["example"][:6], \
             "teach(%s) returned the deterministic stub, LLM not used!" % s
     assert len(lessons["拆解步骤"]["steps"]) >= 4, "拆解步骤 should yield >=4 steps"
-    v0 = Tutor(a9, real_llm).teach(c9, style="例子", vary=0)["example"]
-    v1 = Tutor(a9, real_llm).teach(c9, style="例子", vary=1)["example"]
+    v0 = Tutor(a9, real_llm).teach(c9, style="example", vary=0)["example"]
+    v1 = Tutor(a9, real_llm).teach(c9, style="example", vary=1)["example"]
     assert v0 != v1, "换一个例子 should produce a different example"
 
     # Requirement 4: examples/steps must differ ACROSS concepts, not just per vary.
     c9b = a9.concepts[1]
-    lesA = Tutor(a9, real_llm).teach(c9, style="例子")["example"]
-    lesB = Tutor(a9, real_llm).teach(c9b, style="例子")["example"]
+    lesA = Tutor(a9, real_llm).teach(c9, style="example")["example"]
+    lesB = Tutor(a9, real_llm).teach(c9b, style="example")["example"]
     assert lesA != lesB, "teach() example must differ across distinct concepts"
-    stA = Tutor(a9, real_llm).teach(c9, style="拆解步骤")["steps"]
-    stB = Tutor(a9, real_llm).teach(c9b, style="拆解步骤")["steps"]
+    stA = Tutor(a9, real_llm).teach(c9, style="steps")["steps"]
+    stB = Tutor(a9, real_llm).teach(c9b, style="steps")["steps"]
     assert stA != stB, "teach() steps must differ across distinct concepts"
     print("ok: 3 styles produce distinct LLM content; 换一个例子 varies; per-concept examples/steps differ; 拆解步骤 steps=%d"
           % len(lessons["拆解步骤"]["steps"]))

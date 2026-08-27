@@ -67,20 +67,46 @@ def _extract_docx(raw: bytes) -> str:
     return "\n\n".join(out)
 
 
-def _extract_pdf(raw: bytes) -> str:
+def _pdf_pages(raw: bytes) -> list[str]:
+    """Return normalized per-page text for a PDF (empty list on failure)."""
     try:
         from pypdf import PdfReader
+        import io
     except Exception:
-        return ""
+        return []
     try:
-        reader = PdfReader(__import__("io").BytesIO(raw))
+        reader = PdfReader(io.BytesIO(raw))
         pages = [(p.extract_text() or "") for p in reader.pages]
-        text = "\n\n".join(pages)
-        text = re.sub(r"[ \t]+", " ", text)
-        text = re.sub(r"\n{3,}", "\n\n", text)
-        return text.strip()
     except Exception:
-        return ""
+        return []
+    out: list[str] = []
+    for pg in pages:
+        pg = re.sub(r"[ \t]+", " ", pg)
+        pg = re.sub(r"\n{3,}", "\n\n", pg)
+        out.append(pg.strip())
+    return out
+
+
+def _extract_pdf(raw: bytes) -> str:
+    return "\n\n".join(_pdf_pages(raw)).strip()
+
+
+def pdf_page_offsets(raw: bytes) -> list[int]:
+    """Cumulative character offset of each page start in the joined PDF text.
+
+    page_offsets[i] is the index into source_text where page i begins, so a
+    SourceLocation with char_start >= page_offsets[i] and < page_offsets[i+1]
+    belongs to page i+1 (1-based). Empty list for non-PDF / parse failure.
+    """
+    pages = _pdf_pages(raw)
+    offsets: list[int] = []
+    pos = 0
+    for i, pg in enumerate(pages):
+        offsets.append(pos)
+        pos += len(pg)
+        if i < len(pages) - 1:
+            pos += len("\n\n")
+    return offsets
 
 
 def title_from(text: str, fallback: str) -> str:

@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 LAYERS = {
     "core": ["tests.test_core", "tests.test_report", "tests.test_checks",
              "tests.test_decoder", "tests.test_auto_harness",
-             "tests.test_map_context"],
+             "tests.test_map_context", "tests.test_prompt_templates"],
     "data": ["tests.test_demo_data"],
     "ui": ["tests.test_ui"],
     "llm": ["tests.test_llm"],

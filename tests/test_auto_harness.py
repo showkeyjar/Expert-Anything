@@ -243,7 +243,7 @@ class TestHarnessRun(unittest.TestCase):
         # asset 非空 + llm 提供 → _prov_teach 走 Tutor.teach（内置准入+降级）
         h = ah.build_harness(spec, asset=asset, llm=_FakeLLM([lesson]))
         traj, _ = h.run({"concept": _concept(), "goal": "x"})
-        self.assertIn("工作台", traj[0]["summary"])   # LLM 讲解进了轨迹
+        self.assertIn("记忆", traj[0]["summary"])   # LLM 讲解进了轨迹
 
 
 class TestEvolution(unittest.TestCase):

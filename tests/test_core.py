@@ -322,7 +322,7 @@ class TestTutor(unittest.TestCase):
         self.concept = self.asset.concepts[0]
 
     def test_teach_all_styles_return_complete_structure(self):
-        for style in ("例子", "图示", "拆解步骤"):
+        for style in ("example", "diagram", "steps"):
             r = self.tutor.teach(self.concept, style=style)
             for key in ("concept", "style", "explanation", "example", "steps", "practice", "evidence"):
                 self.assertIn(key, r, f"{style} missing {key}")
@@ -344,6 +344,21 @@ class TestTutor(unittest.TestCase):
     def test_followup_without_llm_returns_hint(self):
         r = self.tutor.follow_up(self.concept, "为什么？")
         self.assertIn("未接入 LLM", r)
+
+    def test_generate_practice_without_llm_returns_none(self):
+        r = self.tutor.generate_practice(self.concept)
+        self.assertIsNone(r)
+
+    def test_evaluate_practice_without_llm_returns_placeholder(self):
+        r = self.tutor.evaluate_practice(self.concept, "task desc", "learner answer")
+        self.assertIn("score", r)
+        self.assertIn("feedback", r)
+        self.assertEqual(r["score"], 0.5)
+        self.assertIn("未接入 LLM", r["feedback"])
+
+    def test_generate_quiz_without_llm_returns_none(self):
+        r = self.tutor.generate_quiz(self.concept)
+        self.assertIsNone(r)
 
 
 # --------------------------------------------------------------------------- #

@@ -226,8 +226,8 @@ class TestTeachAdmissionLoop(unittest.TestCase):
         self.assertNotIn("肯定", res["explanation"])
 
     def test_style_rotation_for_stuck_concept(self):
-        self.assertEqual(_next_style("例子"), "图示")
-        self.assertEqual(_next_style("拆解步骤"), "例子")
+        self.assertEqual(_next_style("example"), "diagram")
+        self.assertEqual(_next_style("steps"), "example")
 
 
 class TestCrossJudgeArbitration(unittest.TestCase):

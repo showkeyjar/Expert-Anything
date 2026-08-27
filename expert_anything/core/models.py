@@ -21,15 +21,18 @@ class SourceLocation:
 
     `char_start`/`char_end` index into ``KnowledgeAsset.source_text``; `line`
     is the 1-based line number derived from `char_start`; `chapter` mirrors the
-    concept's owning chapter for convenience. Lets the UI show a truthful
-    'source location' (e.g. ``line 42, Ch.3``) and jump straight to the passage.
-    Independent of LLM: computed from grounded evidence in either extraction path.
+    concept's owning chapter for convenience; `page` is the 1-based page number
+    (PDF only, `None` for other formats) derived from `char_start` and the
+    per-page character offsets recorded at parse time. Lets the UI show a
+    truthful 'source location' (e.g. ``p. 5, line 42, Ch.3``) and jump straight
+    to the passage. Independent of LLM: computed from grounded evidence.
     """
     char_start: int = -1
     char_end: int = -1
     chapter: str = ""
     snippet: str = ""
     line: int = 0
+    page: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -38,6 +41,7 @@ class SourceLocation:
             "chapter": self.chapter,
             "snippet": self.snippet,
             "line": self.line,
+            "page": self.page,
         }
 
     @classmethod
@@ -50,6 +54,7 @@ class SourceLocation:
             chapter=d.get("chapter", ""),
             snippet=d.get("snippet", ""),
             line=int(d.get("line", 0)),
+            page=d.get("page"),
         )
 
 

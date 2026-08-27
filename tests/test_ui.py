@@ -3,6 +3,7 @@
 These run against a temp copy of the demo data so the real data is never
 touched. No LLM calls (deterministic teach paths only).
 """
+
 import os
 import sys
 import unittest
@@ -15,11 +16,18 @@ from tests.util import ensure_demo, load_main_window, prepare_app
 prepare_app()
 ensure_demo()
 
-from PySide6.QtWidgets import QDialog, QFrame, QLabel, QProgressBar, QPushButton, QTableWidget
+from PySide6.QtWidgets import (
+    QDialog,
+    QFrame,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QTableWidget,
+)
 
 from main import MainWindow
 from expert_anything.ui.pyside_graph import KnowledgeGraphView
-from expert_anything.ui.pyside_widgets import (
+from expert_anything.ui.widgets import (
     ConceptDetailPanel,
     MasteryDistributionBar,
     PathLadderView,
@@ -91,6 +99,7 @@ class TestGraph(unittest.TestCase):
         self.win.on_nav_click("teach")  # make the teach view visible
         asset = self.win.get_asset()
         from expert_anything.core.tutor import Tutor
+
         self.win.current_tutor = Tutor(asset, llm=None)
         concept = asset.concepts[0]
         self.win._show_teaching_content(concept)
@@ -171,20 +180,32 @@ class TestTeacherView(unittest.TestCase):
 
 class TestDirtyPayloads(unittest.TestCase):
     def test_null_payload(self):
-        view = TeachResultView({
-            "concept": "X", "style": "图示",
-            "explanation": None, "example": None,
-            "steps": None, "practice": None, "evidence": None,
-        })
+        view = TeachResultView(
+            {
+                "concept": "X",
+                "style": "图示",
+                "explanation": None,
+                "example": None,
+                "steps": None,
+                "practice": None,
+                "evidence": None,
+            }
+        )
         view.show()
         self.assertIsNotNone(view.grab())
 
     def test_weird_types(self):
-        view = TeachResultView({
-            "concept": "X", "style": "拆解步骤",
-            "explanation": 123, "example": ["a", "b"],
-            "steps": "s1\ns2", "practice": "", "evidence": [None, "ok"],
-        })
+        view = TeachResultView(
+            {
+                "concept": "X",
+                "style": "拆解步骤",
+                "explanation": 123,
+                "example": ["a", "b"],
+                "steps": "s1\ns2",
+                "practice": "",
+                "evidence": [None, "ok"],
+            }
+        )
         view.show()
         self.assertIsNotNone(view.grab())
 
@@ -207,8 +228,11 @@ class TestHarnessSuggestionUI(unittest.TestCase):
     def test_suggestion_card_renders_and_emits(self):
         view = TeachResultView({"concept": "X", "style": "例子"})
         view.show()
-        candidate = {"name": "evolved-1", "tools": ["teach", "scene", "quiz"],
-                     "policy": {"style": "图示"}}
+        candidate = {
+            "name": "evolved-1",
+            "tools": ["teach", "scene", "quiz"],
+            "policy": {"style": "图示"},
+        }
         received = []
         view.harness_adopt_requested.connect(received.append)
         view.append_harness_suggestion("建议", "摘要", candidate)
@@ -216,8 +240,10 @@ class TestHarnessSuggestionUI(unittest.TestCase):
         # find the adopt button and click it -> signal carries the candidate
         from PySide6.QtWidgets import QPushButton
         from expert_anything.core.i18n import t as _t
-        buttons = [b for b in view.findChildren(QPushButton)
-                   if b.text() == _t("harness_adopt")]
+
+        buttons = [
+            b for b in view.findChildren(QPushButton) if b.text() == _t("harness_adopt")
+        ]
         self.assertEqual(len(buttons), 1)
         buttons[0].click()
         self.assertEqual(len(received), 1)
@@ -226,35 +252,44 @@ class TestHarnessSuggestionUI(unittest.TestCase):
     def test_adopt_persists_and_retaches(self):
         import main as main_module
         from unittest import mock
+
         win = self.win
         asset = win.get_asset()
         if asset is None or not asset.concepts:
             self.skipTest("no asset loaded")
         concept = asset.concepts[0]
         win._teach_concept_now = concept.name
-        candidate = {"name": "evolved-x", "mode": "fast",
-                     "tools": ["teach", "quiz"],
-                     "policy": {"style": "图示", "guard_ids": ["budget_ok"]},
-                     "loop": {"max_steps": 4},
-                     "evaluation": {"metric": "learning_gain", "threshold": 0.6},
-                     "meta": {"budget_cost": 50, "sandbox": "local"}}
+        candidate = {
+            "name": "evolved-x",
+            "mode": "fast",
+            "tools": ["teach", "quiz"],
+            "policy": {"style": "图示", "guard_ids": ["budget_ok"]},
+            "loop": {"max_steps": 4},
+            "evaluation": {"metric": "learning_gain", "threshold": 0.6},
+            "meta": {"budget_cost": 50, "sandbox": "local"},
+        }
         before = dict(win._harness_specs)
         hist_before = getattr(win, "_harness_history", [])
         try:
-            with mock.patch.object(main_module._ah, "save_harness_state") as save_mock, \
-                 mock.patch.object(main_module._ah, "record_harness_evolution") as rec_mock, \
-                 mock.patch.object(main_module.QMessageBox, "information") as info_mock, \
-                 mock.patch.object(win, "_show_teaching_content") as teach_mock:
+            with (
+                mock.patch.object(main_module._ah, "save_harness_state") as save_mock,
+                mock.patch.object(
+                    main_module._ah, "record_harness_evolution"
+                ) as rec_mock,
+                mock.patch.object(main_module.QMessageBox, "information") as info_mock,
+                mock.patch.object(win, "_show_teaching_content") as teach_mock,
+            ):
                 win._on_adopt_harness(candidate)
             save_mock.assert_called_once()
-            rec_mock.assert_called_once()   # 审计链：采纳必须落一条演化事件
+            rec_mock.assert_called_once()  # 审计链：采纳必须落一条演化事件
             info_mock.assert_called_once()
             teach_mock.assert_called_once()
             kw = teach_mock.call_args.kwargs
-            self.assertEqual(kw.get("vary"), 1)       # fresh-angle re-teach
-            self.assertEqual(kw.get("style"), "图示")   # candidate style applied
-            self.assertEqual(win._harness_specs.get(asset.asset_id, {}).get("name"),
-                             "evolved-x")
+            self.assertEqual(kw.get("vary"), 1)  # fresh-angle re-teach
+            self.assertEqual(kw.get("style"), "图示")  # candidate style applied
+            self.assertEqual(
+                win._harness_specs.get(asset.asset_id, {}).get("name"), "evolved-x"
+            )
         finally:
             win._harness_specs.clear()
             win._harness_specs.update(before)
@@ -265,18 +300,29 @@ class TestHarnessSuggestionUI(unittest.TestCase):
         view = TeachResultView({"concept": "X", "style": "例子"})
         view.show()
         events = [
-            {"ts": "2026-08-18T13:55:00", "reason": "stuck", "old": "o1",
-             "new": "n1", "spec_name": "h1"},
-            {"ts": "2026-08-18T14:00:00", "reason": "manual", "old": "n1",
-             "new": "n2", "spec_name": "h2"},
+            {
+                "ts": "2026-08-18T13:55:00",
+                "reason": "stuck",
+                "old": "o1",
+                "new": "n1",
+                "spec_name": "h1",
+            },
+            {
+                "ts": "2026-08-18T14:00:00",
+                "reason": "manual",
+                "old": "n1",
+                "new": "n2",
+                "spec_name": "h2",
+            },
         ]
         view.append_harness_history(events[:1])
-        view.append_harness_history(events)   # 第二次只渲染新增事件
-        view.append_harness_history(events)   # 第三次无新增 → 不渲染
+        view.append_harness_history(events)  # 第二次只渲染新增事件
+        view.append_harness_history(events)  # 第三次无新增 → 不渲染
         self.assertEqual(view._harness_shown_count, 2)  # 去重计数正确
         self.assertIsNotNone(view.grab())
         from PySide6.QtWidgets import QLabel
         from expert_anything.core.i18n import t as _t
+
         texts = " ".join(l.text() for l in view.findChildren(QLabel))
         self.assertIn(_t("harness_history"), texts)
         self.assertIn(_t("harness_reason_stuck"), texts)
@@ -295,20 +341,29 @@ class TestHarnessSuggestionUI(unittest.TestCase):
         # 回归演化卡：独立按钮文案 + emit 时携带 _source="regression"
         view = TeachResultView({"concept": "X", "style": "例子"})
         view.show()
-        candidate = {"name": "trim-guard", "tools": ["teach", "quiz"],
-                     "policy": {"style": "图示"}}
+        candidate = {
+            "name": "trim-guard",
+            "tools": ["teach", "quiz"],
+            "policy": {"style": "图示"},
+        }
         received = []
         view.harness_adopt_requested.connect(received.append)
-        view.append_harness_suggestion("回归建议", "回归正文", candidate,
-                                       source="regression")
+        view.append_harness_suggestion(
+            "回归建议", "回归正文", candidate, source="regression"
+        )
         self.assertIsNotNone(view.grab())
         from PySide6.QtWidgets import QPushButton
         from expert_anything.core.i18n import t as _t
-        buttons = [b for b in view.findChildren(QPushButton)
-                   if b.text() == _t("harness_adopt_regress")]
-        self.assertEqual(len(buttons), 1)          # 回归卡用专属按钮文案
-        amber = [b for b in view.findChildren(QPushButton)
-                 if b.text() == _t("harness_adopt")]
+
+        buttons = [
+            b
+            for b in view.findChildren(QPushButton)
+            if b.text() == _t("harness_adopt_regress")
+        ]
+        self.assertEqual(len(buttons), 1)  # 回归卡用专属按钮文案
+        amber = [
+            b for b in view.findChildren(QPushButton) if b.text() == _t("harness_adopt")
+        ]
         self.assertEqual(len(amber), 0)
         buttons[0].click()
         self.assertEqual(len(received), 1)
@@ -320,29 +375,38 @@ class TestHarnessSuggestionUI(unittest.TestCase):
         # 审计链 reason="regression"（区别于 stuck 卡的 manual）
         import main as main_module
         from unittest import mock
+
         win = self.win
         asset = win.get_asset()
         if asset is None or not asset.concepts:
             self.skipTest("no asset loaded")
         concept = asset.concepts[0]
         win._teach_concept_now = concept.name
-        candidate = {"_source": "regression", "name": "trim-guard",
-                     "mode": "fast", "tools": ["teach", "quiz"],
-                     "policy": {"style": "图示", "guard_ids": ["no_definition_copy"]},
-                     "loop": {"max_steps": 4},
-                     "evaluation": {"metric": "learning_gain", "threshold": 0.6},
-                     "meta": {"budget_cost": 50, "sandbox": "local"}}
+        candidate = {
+            "_source": "regression",
+            "name": "trim-guard",
+            "mode": "fast",
+            "tools": ["teach", "quiz"],
+            "policy": {"style": "图示", "guard_ids": ["no_definition_copy"]},
+            "loop": {"max_steps": 4},
+            "evaluation": {"metric": "learning_gain", "threshold": 0.6},
+            "meta": {"budget_cost": 50, "sandbox": "local"},
+        }
         before = dict(win._harness_specs)
         hist_before = getattr(win, "_harness_history", [])
         try:
-            with mock.patch.object(main_module._ah, "save_harness_state") as save_mock, \
-                 mock.patch.object(main_module._ah, "record_harness_evolution") as rec_mock, \
-                 mock.patch.object(main_module.QMessageBox, "information") as info_mock, \
-                 mock.patch.object(win, "_show_teaching_content") as teach_mock:
+            with (
+                mock.patch.object(main_module._ah, "save_harness_state") as save_mock,
+                mock.patch.object(
+                    main_module._ah, "record_harness_evolution"
+                ) as rec_mock,
+                mock.patch.object(main_module.QMessageBox, "information") as info_mock,
+                mock.patch.object(win, "_show_teaching_content") as teach_mock,
+            ):
                 win._on_adopt_harness(candidate)
             rec_mock.assert_called_once()
             ev = rec_mock.call_args.args[1]
-            self.assertEqual(ev["reason"], "regression")   # 审计链标注回归来源
+            self.assertEqual(ev["reason"], "regression")  # 审计链标注回归来源
             # 持久化 spec 不含 _source 内部标记
             saved = save_mock.call_args.args[1][asset.asset_id]
             self.assertNotIn("_source", saved)
@@ -356,27 +420,38 @@ class TestHarnessSuggestionUI(unittest.TestCase):
             win._harness_specs.update(before)
             win._harness_history = hist_before
 
-
     def test_joint_card_renders_and_emits(self):
         # 联合演化卡（青色）：专属按钮文案 + emit 携带 _source="joint" 与
         # _joint_reason 触发家族串（供审计链记录，不污染 HarnessSpec）
         view = TeachResultView({"concept": "X", "style": "例子"})
         view.show()
-        candidate = {"name": "joint-plan", "tools": ["teach", "quiz"],
-                     "policy": {"style": "图示"}}
+        candidate = {
+            "name": "joint-plan",
+            "tools": ["teach", "quiz"],
+            "policy": {"style": "图示"},
+        }
         received = []
         view.harness_adopt_requested.connect(received.append)
         view.append_harness_suggestion(
-            "联合建议", "联合正文", candidate, source="joint",
-            extra={"_joint_reason": "stuck+regression"})
+            "联合建议",
+            "联合正文",
+            candidate,
+            source="joint",
+            extra={"_joint_reason": "stuck+regression"},
+        )
         self.assertIsNotNone(view.grab())
         from PySide6.QtWidgets import QPushButton
         from expert_anything.core.i18n import t as _t
-        buttons = [b for b in view.findChildren(QPushButton)
-                   if b.text() == _t("harness_adopt_joint")]
-        self.assertEqual(len(buttons), 1)          # 联合卡用专属按钮文案
-        amber = [b for b in view.findChildren(QPushButton)
-                 if b.text() == _t("harness_adopt")]
+
+        buttons = [
+            b
+            for b in view.findChildren(QPushButton)
+            if b.text() == _t("harness_adopt_joint")
+        ]
+        self.assertEqual(len(buttons), 1)  # 联合卡用专属按钮文案
+        amber = [
+            b for b in view.findChildren(QPushButton) if b.text() == _t("harness_adopt")
+        ]
         self.assertEqual(len(amber), 0)
         buttons[0].click()
         self.assertEqual(len(received), 1)
@@ -389,26 +464,35 @@ class TestHarnessSuggestionUI(unittest.TestCase):
         # 触发家族串（stuck+regression+sessions），历史块可拆分本地化
         import main as main_module
         from unittest import mock
+
         win = self.win
         asset = win.get_asset()
         if asset is None or not asset.concepts:
             self.skipTest("no asset loaded")
         concept = asset.concepts[0]
         win._teach_concept_now = concept.name
-        candidate = {"_source": "joint", "_joint_reason": "stuck+regression+sessions",
-                     "name": "joint-plan", "mode": "fast",
-                     "tools": ["teach", "quiz"],
-                     "policy": {"style": "图示", "guard_ids": ["no_definition_copy"]},
-                     "loop": {"max_steps": 4},
-                     "evaluation": {"metric": "learning_gain", "threshold": 0.6},
-                     "meta": {"budget_cost": 50, "sandbox": "local"}}
+        candidate = {
+            "_source": "joint",
+            "_joint_reason": "stuck+regression+sessions",
+            "name": "joint-plan",
+            "mode": "fast",
+            "tools": ["teach", "quiz"],
+            "policy": {"style": "图示", "guard_ids": ["no_definition_copy"]},
+            "loop": {"max_steps": 4},
+            "evaluation": {"metric": "learning_gain", "threshold": 0.6},
+            "meta": {"budget_cost": 50, "sandbox": "local"},
+        }
         before = dict(win._harness_specs)
         hist_before = getattr(win, "_harness_history", [])
         try:
-            with mock.patch.object(main_module._ah, "save_harness_state") as save_mock, \
-                 mock.patch.object(main_module._ah, "record_harness_evolution") as rec_mock, \
-                 mock.patch.object(main_module.QMessageBox, "information") as info_mock, \
-                 mock.patch.object(win, "_show_teaching_content") as teach_mock:
+            with (
+                mock.patch.object(main_module._ah, "save_harness_state") as save_mock,
+                mock.patch.object(
+                    main_module._ah, "record_harness_evolution"
+                ) as rec_mock,
+                mock.patch.object(main_module.QMessageBox, "information") as info_mock,
+                mock.patch.object(win, "_show_teaching_content") as teach_mock,
+            ):
                 win._on_adopt_harness(candidate)
             rec_mock.assert_called_once()
             ev = rec_mock.call_args.args[1]
@@ -431,17 +515,29 @@ class TestHarnessSuggestionUI(unittest.TestCase):
         # 保证审计链可读（stuck+regression+sessions → 三语标签拼接）
         view = TeachResultView({"concept": "X", "style": "例子"})
         view.show()
-        events = [{"ts": "2026-08-18T14:05:00", "reason": "stuck+regression+sessions",
-                   "old": "o1", "new": "n1", "spec_name": "h1"}]
+        events = [
+            {
+                "ts": "2026-08-18T14:05:00",
+                "reason": "stuck+regression+sessions",
+                "old": "o1",
+                "new": "n1",
+                "spec_name": "h1",
+            }
+        ]
         view.append_harness_history(events)
         self.assertEqual(view._harness_shown_count, 1)
         self.assertIsNotNone(view.grab())
         from PySide6.QtWidgets import QLabel
         from expert_anything.core.i18n import t as _t
+
         texts = " ".join(l.text() for l in view.findChildren(QLabel))
-        expect = "+".join([_t("harness_reason_stuck"),
-                           _t("harness_reason_regression"),
-                           _t("harness_reason_sessions")])
+        expect = "+".join(
+            [
+                _t("harness_reason_stuck"),
+                _t("harness_reason_regression"),
+                _t("harness_reason_sessions"),
+            ]
+        )
         self.assertIn(expect, texts)
         self.assertIn("o1", texts)
 
@@ -492,6 +588,7 @@ class TestRegressionsRound9(unittest.TestCase):
     def test_single_click_defers_scene_rebuild_and_emits_once(self):
         gv = self.win._graph_view
         from PySide6.QtWidgets import QApplication
+
         QApplication.instance().processEvents()
         clicked = []
         gv.node_single_clicked.connect(clicked.append)
@@ -504,9 +601,14 @@ class TestRegressionsRound9(unittest.TestCase):
         gv._dragged = False
         from PySide6.QtCore import Qt
         from PySide6.QtTest import QTest
+
         pos = gv.viewport().rect().center()
-        QTest.mouseRelease(gv.viewport(), Qt.MouseButton.LeftButton,
-                           Qt.KeyboardModifier.NoModifier, pos)
+        QTest.mouseRelease(
+            gv.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            pos,
+        )
         # Scene-changing click work must not run inside mouseReleaseEvent.
         self.assertEqual(clicked, [])
         QTest.qWait(20)
@@ -577,7 +679,8 @@ class TestRegressionsRound9(unittest.TestCase):
         QApplication.instance().processEvents()
 
         self.assertGreater(
-            len(gv._node_items), 0,
+            len(gv._node_items),
+            0,
             "_node_items should be rebuilt after set_asset",
         )
 
@@ -589,8 +692,10 @@ class TestRegressionsRound9(unittest.TestCase):
         gv._dragged = False
         pos = gv.viewport().rect().center()
         QTest.mouseRelease(
-            gv.viewport(), Qt.MouseButton.LeftButton,
-            Qt.KeyboardModifier.NoModifier, pos,
+            gv.viewport(),
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+            pos,
         )
         self.assertEqual(clicked, [])
         QTest.qWait(20)
@@ -613,15 +718,20 @@ class TestLivingGraph(unittest.TestCase):
 
     def test_nodes_move(self):
         import time
+
         pos0 = {c: self.gv._node_items[c].pos() for c in self.gv._node_items}
         deadline = time.time() + 1.2
         while time.time() < deadline:
             app = self.gv.scene().views()[0]
             from PySide6.QtWidgets import QApplication
+
             QApplication.processEvents()
             time.sleep(0.02)
-        moved = sum(1 for c in pos0
-                    if (self.gv._node_items[c].pos() - pos0[c]).manhattanLength() > 1)
+        moved = sum(
+            1
+            for c in pos0
+            if (self.gv._node_items[c].pos() - pos0[c]).manhattanLength() > 1
+        )
         self.assertGreater(moved, 0)
 
     def test_focus_sleeps_physics(self):
@@ -634,7 +744,9 @@ class TestLivingGraph(unittest.TestCase):
 
     def test_teach_mini_header(self):
         self.win.content_stack.setCurrentIndex(4)
-        labels = [l.text() for l in self.win.content_stack.widget(4).findChildren(QLabel)]
+        labels = [
+            l.text() for l in self.win.content_stack.widget(4).findChildren(QLabel)
+        ]
         self.assertTrue(any("选择概念 · 学习 · 答题 · 追问" in t for t in labels))
 
 
@@ -648,6 +760,7 @@ class TestI18n(unittest.TestCase):
 
     def _nav_texts(self):
         from PySide6.QtWidgets import QPushButton
+
         return [b.text() for b in self.win._sidebar.findChildren(QPushButton)]
 
     def test_default_chinese(self):
@@ -655,6 +768,7 @@ class TestI18n(unittest.TestCase):
 
     def test_switch_to_english(self):
         from expert_anything.core import i18n
+
         self.win._lang_combo.setCurrentIndex(self.win._lang_combo.findData("en"))
         texts = self._nav_texts()
         self.assertTrue(any("Tutor" in t for t in texts))
@@ -664,6 +778,7 @@ class TestI18n(unittest.TestCase):
 
     def test_switch_to_japanese(self):
         from expert_anything.core import i18n
+
         self.win._lang_combo.setCurrentIndex(self.win._lang_combo.findData("ja"))
         texts = self._nav_texts()
         self.assertTrue(any("学習セッション" in t for t in texts))
@@ -681,12 +796,16 @@ class TestLearningFeatures(unittest.TestCase):
 
     def test_topic_cards_in_knowledge_view(self):
         from PySide6.QtWidgets import QPushButton
+
         self.win.content_stack.setCurrentIndex(1)
-        btns = [b.text() for b in self.win.content_stack.widget(1).findChildren(QPushButton)]
+        btns = [
+            b.text() for b in self.win.content_stack.widget(1).findChildren(QPushButton)
+        ]
         self.assertTrue(any("学习主题" in t or "Learn topic" in t for t in btns))
 
     def test_start_topic_opens_teach(self):
         from expert_anything.core.learner import topic_clusters
+
         asset = self.win.get_asset()
         clusters = topic_clusters(asset)
         big = [c for c in clusters if c["size"] >= 2]
@@ -696,19 +815,30 @@ class TestLearningFeatures(unittest.TestCase):
 
     def test_quiz_card_and_recording(self):
         from expert_anything.core.tutor import Tutor
+
         asset = self.win.get_asset()
         tutor = Tutor(asset, llm=None)
         # deterministic path: quiz generation requires LLM -> skip generation,
         # but scoring logic and UI card must work
-        quiz = {"type": "true_false", "question": "1+1=2?", "correct": True,
-                "explanation": "arithmetic"}
+        quiz = {
+            "type": "true_false",
+            "question": "1+1=2?",
+            "correct": True,
+            "explanation": "arithmetic",
+        }
         self.win._teach_concept_now = asset.concepts[0].name
         self.win.on_nav_click("teach")
-        self.win._display_teach_result({
-            "concept": asset.concepts[0].name, "style": "例子",
-            "explanation": "x", "example": "", "steps": [], "practice": "",
-            "evidence": [],
-        })
+        self.win._display_teach_result(
+            {
+                "concept": asset.concepts[0].name,
+                "style": "例子",
+                "explanation": "x",
+                "example": "",
+                "steps": [],
+                "practice": "",
+                "evidence": [],
+            }
+        )
         tv = self.win._teach_view
         tv.show_quiz(quiz)
         before = len(self.win.learner.get("history", []))
@@ -718,11 +848,17 @@ class TestLearningFeatures(unittest.TestCase):
     def test_practice_card_renders(self):
         task = {"task": "证明 1+1=2", "hint": "用皮亚诺公理", "reference": ["定义后继"]}
         self.win.on_nav_click("teach")
-        self.win._display_teach_result({
-            "concept": "x", "style": "例子",
-            "explanation": "x", "example": "", "steps": [], "practice": "",
-            "evidence": [],
-        })
+        self.win._display_teach_result(
+            {
+                "concept": "x",
+                "style": "例子",
+                "explanation": "x",
+                "example": "",
+                "steps": [],
+                "practice": "",
+                "evidence": [],
+            }
+        )
         tv = self.win._teach_view
         tv.show_practice(task)
         tv.show_practice_result({"score": 0.8, "feedback": "好", "reference": "要点"})
@@ -740,11 +876,18 @@ class TestTransferSuggestionUI(unittest.TestCase):
         view = TeachResultView({"concept": "X", "style": "例子"})
         view.show()
         payload = {
-            "source_asset_id": "src", "source_title": "源书",
-            "spec": {"name": "migrated-1", "tools": ["teach", "quiz"],
-                     "policy": {"style": "图示"}},
-            "evaluation": {"spec_name": "migrated-1", "cost_diff": 6,
-                           "comparison": {"diff": 0.46}},
+            "source_asset_id": "src",
+            "source_title": "源书",
+            "spec": {
+                "name": "migrated-1",
+                "tools": ["teach", "quiz"],
+                "policy": {"style": "图示"},
+            },
+            "evaluation": {
+                "spec_name": "migrated-1",
+                "cost_diff": 6,
+                "comparison": {"diff": 0.46},
+            },
             "gain": 0.46,
         }
         received = []
@@ -752,8 +895,12 @@ class TestTransferSuggestionUI(unittest.TestCase):
         view.append_transfer_suggestion("迁移建议", "正文", payload)
         self.assertIsNotNone(view.grab())
         from expert_anything.core.i18n import t as _t
-        buttons = [b for b in view.findChildren(QPushButton)
-                   if b.text() == _t("harness_transfer_adopt")]
+
+        buttons = [
+            b
+            for b in view.findChildren(QPushButton)
+            if b.text() == _t("harness_transfer_adopt")
+        ]
         self.assertEqual(len(buttons), 1)
         buttons[0].click()
         self.assertEqual(len(received), 1)
@@ -764,6 +911,7 @@ class TestTransferSuggestionUI(unittest.TestCase):
     def test_transfer_adopt_persists_and_retaches(self):
         import main as main_module
         from unittest import mock
+
         win = self.win
         asset = win.get_asset()
         if asset is None or not asset.concepts:
@@ -771,43 +919,62 @@ class TestTransferSuggestionUI(unittest.TestCase):
         concept = asset.concepts[0]
         win._teach_concept_now = concept.name
         payload = {
-            "source_asset_id": "src-a", "source_title": "源书",
-            "spec": {"name": "migrated-x", "mode": "fast",
-                     "tools": ["teach", "quiz"],
-                     "policy": {"style": "图示", "guard_ids": ["budget_ok"]},
-                     "loop": {"max_steps": 4},
-                     "evaluation": {"metric": "learning_gain", "threshold": 0.6},
-                     "meta": {"budget_cost": 50, "sandbox": "local"}},
+            "source_asset_id": "src-a",
+            "source_title": "源书",
+            "spec": {
+                "name": "migrated-x",
+                "mode": "fast",
+                "tools": ["teach", "quiz"],
+                "policy": {"style": "图示", "guard_ids": ["budget_ok"]},
+                "loop": {"max_steps": 4},
+                "evaluation": {"metric": "learning_gain", "threshold": 0.6},
+                "meta": {"budget_cost": 50, "sandbox": "local"},
+            },
             "evaluation": {"spec_name": "migrated-x"},
             "gain": 0.4,
         }
         before = dict(win._harness_specs)
         hist_before = getattr(win, "_harness_history", [])
-        fake_event = {"reason": "transfer", "ts": "2026-08-18T14:00:00",
-                      "old": "o", "new": "n", "spec_name": "migrated-x"}
+        fake_event = {
+            "reason": "transfer",
+            "ts": "2026-08-18T14:00:00",
+            "old": "o",
+            "new": "n",
+            "spec_name": "migrated-x",
+        }
         try:
-            with mock.patch.object(main_module._ah, "adopt_harness_for_asset",
-                                   return_value=(True, fake_event)) as adopt_mock, \
-                 mock.patch.object(main_module._ah, "load_harness_history",
-                                   return_value=hist_before + [fake_event]) as load_mock, \
-                 mock.patch.object(main_module.QMessageBox, "information") as info_mock, \
-                 mock.patch.object(win, "_show_teaching_content") as teach_mock:
+            with (
+                mock.patch.object(
+                    main_module._ah,
+                    "adopt_harness_for_asset",
+                    return_value=(True, fake_event),
+                ) as adopt_mock,
+                mock.patch.object(
+                    main_module._ah,
+                    "load_harness_history",
+                    return_value=hist_before + [fake_event],
+                ) as load_mock,
+                mock.patch.object(main_module.QMessageBox, "information") as info_mock,
+                mock.patch.object(win, "_show_teaching_content") as teach_mock,
+            ):
                 win._on_transfer_harness(payload)
             adopt_mock.assert_called_once()
             args, kw = adopt_mock.call_args
-            self.assertEqual(str(args[0]),
-                             str(main_module.config.DATA_DIR / "harness_state.json"))
-            self.assertEqual(args[1], asset.asset_id)      # target = current asset
+            self.assertEqual(
+                str(args[0]), str(main_module.config.DATA_DIR / "harness_state.json")
+            )
+            self.assertEqual(args[1], asset.asset_id)  # target = current asset
             self.assertEqual(kw.get("source_asset_id"), "src-a")
             self.assertEqual(kw.get("concept"), concept.name)
             load_mock.assert_called_once()
             info_mock.assert_called_once()
             teach_mock.assert_called_once()
             kw2 = teach_mock.call_args.kwargs
-            self.assertEqual(kw2.get("vary"), 1)          # fresh-angle re-teach
-            self.assertEqual(kw2.get("style"), "图示")      # migrated style applied
-            self.assertEqual(win._harness_specs.get(asset.asset_id, {}).get("name"),
-                             "migrated-x")
+            self.assertEqual(kw2.get("vary"), 1)  # fresh-angle re-teach
+            self.assertEqual(kw2.get("style"), "图示")  # migrated style applied
+            self.assertEqual(
+                win._harness_specs.get(asset.asset_id, {}).get("name"), "migrated-x"
+            )
         finally:
             win._harness_specs.clear()
             win._harness_specs.update(before)
@@ -816,22 +983,27 @@ class TestTransferSuggestionUI(unittest.TestCase):
     def test_find_transfer_candidates_filters_and_sorts(self):
         import main as main_module
         from unittest import mock
+
         win = self.win
         asset = win.get_asset()
         if asset is None:
             self.skipTest("no asset loaded")
-        specs = {"mig1": {"name": "h1"}, "mig2": {"name": "h2"},
-                 "keep": {"name": "h3"}}
+        specs = {"mig1": {"name": "h1"}, "mig2": {"name": "h2"}, "keep": {"name": "h3"}}
         for aid in specs:
             if aid not in win.assets:
                 win.assets[aid] = dict(win.assets[asset.asset_id])
 
         def fake_eval(spec, src_asset, target_asset, **kw):
-            ev = {"comparison": {"diff": 0.3}, "spec_name": spec["name"],
-                  "cost_diff": 2, "recommendation": "migrate"}
+            ev = {
+                "comparison": {"diff": 0.3},
+                "spec_name": spec["name"],
+                "cost_diff": 2,
+                "recommendation": "migrate",
+            }
             if src_asset.asset_id == "keep":
-                ev.update({"recommendation": "keep_local",
-                           "comparison": {"diff": -0.2}})
+                ev.update(
+                    {"recommendation": "keep_local", "comparison": {"diff": -0.2}}
+                )
             if src_asset.asset_id == "mig2":
                 ev["comparison"] = {"diff": 0.6}
             return ev
@@ -840,13 +1012,15 @@ class TestTransferSuggestionUI(unittest.TestCase):
         try:
             for aid, spec in specs.items():
                 win._harness_specs[aid] = spec
-            with mock.patch.object(main_module._ah, "evaluate_transfer",
-                                   side_effect=fake_eval):
+            with mock.patch.object(
+                main_module._ah, "evaluate_transfer", side_effect=fake_eval
+            ):
                 out = win._find_transfer_candidates(asset)
             # 只保留 migrate，按差分收益降序；keep_local/无 harness 被过滤
             self.assertEqual([c["source_asset_id"] for c in out], ["mig2", "mig1"])
-            self.assertEqual([c["evaluation"]["recommendation"] for c in out],
-                             ["migrate", "migrate"])
+            self.assertEqual(
+                [c["evaluation"]["recommendation"] for c in out], ["migrate", "migrate"]
+            )
             self.assertEqual(out[0]["gain"], 0.6)
             self.assertEqual(out[1]["gain"], 0.3)
         finally:
@@ -866,15 +1040,25 @@ class TestTransferSuggestionUI(unittest.TestCase):
         src_aid = next(a for a in win.assets if a != asset.asset_id)
         # 源 harness：多一个计分槽位 practice（覆盖度 2 vs 本地 fallback 的 1），
         # 预算充足 → 覆盖度差分 +1 且成本可接受 → migrate
-        fast = {"name": "fast-transfer", "mode": "fast",
-                "tools": ["teach", "scene", "quiz", "practice"],
-                "policy": {"teach_styles": ["图示"],
-                           "guard_ids": ["no_definition_copy", "budget_ok"],
-                           "retry": 1, "fallback": "deterministic"},
-                "loop": {"max_steps": 4},
-                "evaluation": {"metric": "learning_gain", "threshold": 0.6},
-                "meta": {"budget_cost": 200, "sandbox": "local",
-                         "lang": "zh-CN", "note": "x"}}
+        fast = {
+            "name": "fast-transfer",
+            "mode": "fast",
+            "tools": ["teach", "scene", "quiz", "practice"],
+            "policy": {
+                "teach_styles": ["图示"],
+                "guard_ids": ["no_definition_copy", "budget_ok"],
+                "retry": 1,
+                "fallback": "deterministic",
+            },
+            "loop": {"max_steps": 4},
+            "evaluation": {"metric": "learning_gain", "threshold": 0.6},
+            "meta": {
+                "budget_cost": 200,
+                "sandbox": "local",
+                "lang": "zh-CN",
+                "note": "x",
+            },
+        }
         specs_before = dict(win._harness_specs)
         try:
             win._harness_specs[src_aid] = fast
@@ -905,8 +1089,9 @@ class TestMapContextUI(unittest.TestCase):
         return asset, cid
 
     def test_card_renders_peers_and_next(self):
-        from expert_anything.ui.pyside_widgets import NodeDetailCard
+        from expert_anything.ui.widgets import NodeDetailCard
         from expert_anything.core.map_context import siblings, next_level
+
         asset, cid = self._asset_and_concept()
         card = NodeDetailCard()
         card.set_concept(asset, cid, self.win.learner)
@@ -914,23 +1099,34 @@ class TestMapContextUI(unittest.TestCase):
         peers = siblings(asset, cid, max_n=5)
         nxt = next_level(asset, cid, max_n=6)
         for p in peers[:3]:
-            self.assertTrue(any(p["name"] in t for t in texts),
-                            f"peer {p['name']} missing from card")
+            self.assertTrue(
+                any(p["name"] in t for t in texts),
+                f"peer {p['name']} missing from card",
+            )
         for n in nxt[:3]:
-            self.assertTrue(any(n["name"] in t for t in texts),
-                            f"next-level {n['name']} missing from card")
+            self.assertTrue(
+                any(n["name"] in t for t in texts),
+                f"next-level {n['name']} missing from card",
+            )
         card.close()
 
     def test_card_compare_emits(self):
-        from expert_anything.ui.pyside_widgets import NodeDetailCard
+        from expert_anything.ui.widgets import NodeDetailCard
         from expert_anything.core.i18n import t as _t
+
         asset, cid = self._asset_and_concept()
         card = NodeDetailCard()
         card.set_concept(asset, cid, self.win.learner)
         emitted = []
         card.compare_requested.connect(lambda a, b: emitted.append((a, b)))
-        btn = next((b for b in card.findChildren(QPushButton)
-                    if b.text() == _t("detail_compare")), None)
+        btn = next(
+            (
+                b
+                for b in card.findChildren(QPushButton)
+                if b.text() == _t("detail_compare")
+            ),
+            None,
+        )
         if btn is None:
             card.close()
             self.skipTest("no compare target for this concept")
@@ -942,7 +1138,8 @@ class TestMapContextUI(unittest.TestCase):
         card.close()
 
     def test_compare_dialog_builds_and_switches(self):
-        from expert_anything.ui.pyside_widgets import ConceptCompareDialog
+        from expert_anything.ui.widgets import ConceptCompareDialog
+
         asset, cid = self._asset_and_concept()
         other = next((c.id for c in asset.concepts if c.id != cid), None)
         if other is None:
@@ -950,8 +1147,12 @@ class TestMapContextUI(unittest.TestCase):
         dlg = ConceptCompareDialog(asset, cid, other, self.win.learner, None)
         dlg.show()
         self.assertGreaterEqual(len(dlg._cand_ids), 1)
-        self.assertTrue(any(l.text().startswith("•") or "相似度" in l.text()
-                            for l in dlg.findChildren(QLabel)))
+        self.assertTrue(
+            any(
+                l.text().startswith("•") or "相似度" in l.text()
+                for l in dlg.findChildren(QLabel)
+            )
+        )
         # switch the comparison target -> body rebuilds, id_b changes
         if len(dlg._cand_ids) > 1:
             idx = 1 if dlg._b_combo.currentIndex() == 0 else 0
@@ -965,23 +1166,27 @@ class TestMapContextUI(unittest.TestCase):
         panel = ConceptDetailPanel(asset, cid, self.win.learner, None)
         panel.show()
         from expert_anything.core.i18n import t as _t
+
         btns = [b.text() for b in panel.findChildren(QPushButton)]
         self.assertTrue(any(_t("detail_compare_with") in b for b in btns))
         panel.close()
 
     def test_card_pill_teach_emits(self):
         """A peer/next-level pill carries a one-click teach button."""
-        from expert_anything.ui.pyside_widgets import NodeDetailCard
+        from expert_anything.ui.widgets import NodeDetailCard
         from expert_anything.core.map_context import siblings, next_level
+
         asset, cid = self._asset_and_concept()
         card = NodeDetailCard()
         card.set_concept(asset, cid, self.win.learner)
         emitted = []
         card.teach_requested.connect(lambda n: emitted.append(n))
-        teach_btns = [b for b in card.findChildren(QPushButton)
-                      if b.objectName() == "pill_teach_btn"]
-        cands = (siblings(asset, cid, max_n=5)
-                 + next_level(asset, cid, max_n=6))
+        teach_btns = [
+            b
+            for b in card.findChildren(QPushButton)
+            if b.objectName() == "pill_teach_btn"
+        ]
+        cands = siblings(asset, cid, max_n=5) + next_level(asset, cid, max_n=6)
         card.close()
         if not teach_btns or not cands:
             self.skipTest("no peer/next-level pill for this concept")
@@ -994,13 +1199,13 @@ class TestMapContextUI(unittest.TestCase):
         from expert_anything.core.map_context import siblings, next_level
         from PySide6.QtWidgets import QListWidget
         from PySide6.QtCore import Qt
+
         asset, cid = self._asset_and_concept()
         panel = ConceptDetailPanel(asset, cid, self.win.learner, None)
         panel.show()
         emitted = []
         panel.teach_requested.connect(lambda n: emitted.append(n))
-        cands = (siblings(asset, cid, max_n=6)
-                 + next_level(asset, cid, max_n=8))
+        cands = siblings(asset, cid, max_n=6) + next_level(asset, cid, max_n=8)
         if not cands:
             panel.close()
             self.skipTest("no candidates")
@@ -1027,8 +1232,9 @@ class TestMapContextUI(unittest.TestCase):
 
     def test_compare_dialog_incorporate_button(self):
         """Sinking a comparison emits (a, b) and confirms on the button."""
-        from expert_anything.ui.pyside_widgets import ConceptCompareDialog
+        from expert_anything.ui.widgets import ConceptCompareDialog
         from expert_anything.core.i18n import t as _t
+
         asset, cid = self._asset_and_concept()
         other = next((c.id for c in asset.concepts if c.id != cid), None)
         if other is None:
@@ -1037,8 +1243,14 @@ class TestMapContextUI(unittest.TestCase):
         dlg.show()
         emitted = []
         dlg.incorporate_requested.connect(lambda a, b: emitted.append((a, b)))
-        btn = next((b for b in dlg.findChildren(QPushButton)
-                    if b.text() == _t("compare_incorporate")), None)
+        btn = next(
+            (
+                b
+                for b in dlg.findChildren(QPushButton)
+                if b.text() == _t("compare_incorporate")
+            ),
+            None,
+        )
         self.assertIsNotNone(btn, "incorporate button missing")
         btn.click()
         self.assertEqual(len(emitted), 1)
@@ -1050,3 +1262,59 @@ class TestMapContextUI(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class TestImportExperience(unittest.TestCase):
+    """First-run import flow: clear state, duplicate-submit guard and recovery."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+        cls.win.show()
+
+    def setUp(self):
+        self.view = self.win.content_stack.widget(0)
+        self.view._extract_worker = None
+        self.view._teacher_worker = None
+        self.view._import_progress.setValue(0)
+        self.view._import_paste.setPlainText("一段可用于分析的学习材料。")
+        self.view._update_ready()
+
+    def test_import_view_explains_first_run_path_and_llm_effect(self):
+        labels = " ".join(label.text() for label in self.view.findChildren(QLabel))
+        self.assertIn("导入", labels)
+        self.assertIn("知识", labels)
+        if self.win.llm_client is None:
+            self.assertIn("确定性", labels)
+            self.assertIn("配置", labels)
+
+    def test_busy_state_blocks_duplicate_submission(self):
+        from unittest import mock
+
+        worker = mock.Mock()
+        worker.isRunning.return_value = True
+        self.view._extract_worker = worker
+        with mock.patch("expert_anything.ui.views.import_view.ExtractWorker") as ctor:
+            self.view._on_generate()
+        ctor.assert_not_called()
+        self.assertFalse(self.view._analysis_btn.isEnabled())
+
+    def test_failure_keeps_inline_error_and_exposes_retry(self):
+        from unittest import mock
+
+        with mock.patch("PySide6.QtWidgets.QMessageBox.critical"):
+            self.view._on_extraction_error("认证失败")
+        self.assertIn("认证失败", self.view._import_status_label.text())
+        self.assertTrue(self.view._analysis_btn.isEnabled())
+        self.assertIn("重试", self.view._analysis_btn.text())
+
+    def test_pipeline_reports_distinct_stages(self):
+        from unittest import mock
+
+        asset = self.win.get_asset()
+        with mock.patch("expert_anything.ui.views.import_view.register_asset"), \
+             mock.patch("expert_anything.ui.views.import_view.TeacherWorker") as worker_cls:
+            worker_cls.return_value.isRunning.return_value = False
+            self.view._on_extraction_finished(asset)
+        self.assertGreaterEqual(self.view._import_progress.value(), 80)
+        self.assertIn("教师", self.view._import_status_label.text())

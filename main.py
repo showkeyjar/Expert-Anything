@@ -1,2217 +1,691 @@
-"""ExpertAnything desktop application (PySide6).
-
-Personal Learning OS: knowledge assets -> knowledge model -> learning loop.
-Built on the ExpertAnything core engine (expert_anything/core).
 """
-import json
-import math
-import os
+ExpertAnything main entry point.
+
+All top-level window logic lives here. View construction is delegated to the
+`ui.views` package so that each view is a standalone module. The ViewManager
+wires cross-view signals without them having to know about each other.
+
+File layout after refactoring:
+  expert_anything/core/      — knowledge engine (LLM-free logic)
+  expert_anything/ui/
+      __init__.py
+      pyside_graph.py         — KnowledgeGraphView (QGraphicsView)
+      pyside_widgets.py       — reusable widgets (ConceptDetailPanel, etc.)
+      widgets/                — new modular widgets
+          shared.py            — KnowledgeCard, StatCard
+          teach_widgets.py     — TeachResultView, answer/practice/quiz widgets
+          source_widgets.py    — SourceTextView
+          map_widgets.py       — NodeDetailCard, MapLegend
+          trend_chart.py       — TrendChartView, MasteryDistributionBar
+      views/                  — one file per view
+          import_view.py
+          knowledge_view.py
+          concept_map_view.py
+          source_view.py
+          teach_view.py
+          learner_view.py
+          teacher_view.py
+      view_manager.py         — content stack orchestration + signal routing
+  main.py                    — MainWindow, state, entry point
+  app.py                     — thin bootstrap
+"""
+
+from __future__ import annotations
+
+import logging
 import sys
+import traceback
+import uuid
 from pathlib import Path
-from datetime import datetime
 
+from PySide6.QtCore import (
+    QLibraryInfo,
+    QLocale,
+    QObject,
+    QTranslator,
+    Qt,
+    Signal,
+    Slot,
+)
+from PySide6.QtGui import QFont, QIcon, QPalette
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QScrollArea, QFrame, QStackedWidget,
-    QTextEdit, QFileDialog, QMessageBox, QListWidget, QListWidgetItem,
-    QProgressBar, QLineEdit, QTabWidget, QComboBox, QSplitter,
-    QTableWidget, QTableWidgetItem,
-    QTreeWidget, QTreeWidgetItem,
-    QGroupBox, QFormLayout, QCheckBox, QTextBrowser,
-    QGraphicsView, QGraphicsScene, QGraphicsEllipseItem, QGraphicsLineItem,
-    QGraphicsTextItem,
+    QApplication,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QStackedWidget,
+    QStyleFactory,
+    QVBoxLayout,
+    QWidget,
 )
-from PySide6.QtCore import Qt, Signal, QThread, QObject, QTimer, QRectF, QPointF
-from PySide6.QtGui import QFont, QIcon, QPen, QColor, QPainter, QAction
 
-# Add project root to path
-sys_path = str(Path(__file__).parent)
-if sys_path not in sys.path:
-    sys.path.insert(0, sys_path)
-
-from expert_anything.core.learner import (
-    adaptive_path, normalize, register_asset, record_evaluation,
-    mark_completed, due_for_review, topic_clusters, concept_density,
-    load as load_learner, save as save_learner,
-)
-from expert_anything.core.extraction import extract_knowledge
-from expert_anything.core.teacher import build_teacher_model, TeacherModel
-from expert_anything.core.tutor import Tutor
-from expert_anything.core.llm import LLMClient, LLMNotConfigured
-from expert_anything.core.models import KnowledgeAsset, Concept, Relation, Chapter
 from expert_anything.core import config
+from expert_anything.core.extraction import extract_knowledge
+from expert_anything.core.i18n import (
+    LANGS,
+    get_lang,
+    set_lang,
+    save_lang,
+    t as _t,
+)
+from expert_anything.core.learner import (
+    adaptive_path,
+    due_for_review,
+    normalize,
+    record_evaluation,
+    register_asset,
+    topic_clusters,
+    concept_density,
+    stuck_concepts,
+)
+from expert_anything.core.llm import LLMClient, LLMNotConfigured
+from expert_anything.core.models import (
+    Concept,
+    KnowledgeAsset,
+    Relation,
+    SourceLocation,
+    Chapter,
+)
+from expert_anything.core.report_html import build_html_report, localize_method
+from expert_anything.core.storage import (
+    delete_asset,
+    load_learner,
+    save_learner,
+    save_teacher,
+    load_teacher,
+)
 from expert_anything.core.teacher import (
     TeacherModel,
     anomaly_concept_ids,
-    record_learner_question,
     incorporate_comparison,
+    incorporate_stuck_signal,
+    record_learner_question,
+    build_teacher_model,
 )
-from expert_anything.core.storage import save_teacher
-from expert_anything.core.i18n import (
-    LANGS as _LANGS,
-    get_lang as _get_lang,
-    set_lang as _set_lang,
-    save_lang as _save_lang,
-    t as _t,
-)
-from expert_anything.core.report_html import build_html_report, localize_method
 from expert_anything.core import auto_harness as _ah
 from expert_anything.ui.pyside_graph import KnowledgeGraphView
-from expert_anything.ui.pyside_widgets import (
+from expert_anything.ui.widgets import (
     ConceptDetailPanel,
     ConceptCompareDialog,
-    SourceTextView,
     PathLadderView,
-    TeachResultView,
-    TrendChartView,
-    MasteryDistributionBar,
+    SourceTextView,
     NodeDetailCard,
     MapLegend,
+    TrendChartView,
 )
+from expert_anything.ui.views import (
+    ImportView,
+    KnowledgeView,
+    ConceptMapView,
+    SourceView,
+    TeachView,
+    LearnerView,
+    TeacherView,
+)
+from expert_anything.ui.view_manager import ViewManager
+
+
+# ---------------------------------------------------------------------------
+# Global exception hook
+# ---------------------------------------------------------------------------
+
 
 def _install_excepthook():
-    """Never die silently: log + show a dialog on uncaught exceptions."""
-    import traceback as _tb
-    from datetime import datetime as _dt
+    """Write uncaught exceptions to error.log and show a message box."""
+    log_path = Path(__file__).parent / "error.log"
+    _orig = sys.excepthook
 
-    def _hook(exc_type, exc, tb):
-        msg = "".join(_tb.format_exception(exc_type, exc, tb))
+    def hook(typ, value, tb):
+        tb_text = "".join(traceback.format_exception(typ, value, tb))
         try:
-            log = Path(__file__).resolve().parent / "error.log"
-            log.write_text(
-                f"=== {_dt.now().isoformat()} ===\n{msg}", encoding="utf-8"
-            )
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(
-                None, _t("app_error"),
-                _t("app_error_body", exc=exc, log=log.name),
-            )
+            log_path.write_text(tb_text, encoding="utf-8")
         except Exception:
             pass
-        sys.__excepthook__(exc_type, exc, tb)
+        _orig(typ, value, tb)
+        QMessageBox.critical(
+            None,
+            _t("fatal_error"),
+            _t("fatal_error_body", msg=f"{value}\n\n{tb_text[-600:]}"),
+        )
 
-    sys.excepthook = _hook
+    sys.excepthook = hook
 
 
-_install_excepthook()
+# ---------------------------------------------------------------------------
+# Progress signal (used by workers and UI)
+# ---------------------------------------------------------------------------
 
-# Thread-safe progress signal
+
 class ProgressSignal(QObject):
-    updated = Signal(str, int, int, str)
+    valueChanged = Signal(int)
+    textChanged = Signal(str)
+
 
 progress_signal = ProgressSignal()
 
 
-class ExtractWorker(QThread):
-    """Background thread for knowledge extraction.
-
-    Accepts raw file bytes (or utf-8 text) + filename; text extraction
-    (pdf/epub/docx/md/txt/html) runs via core.parsers so binary formats
-    are handled without blocking the UI thread.
-    """
-
-    finished = Signal(object)
-    error = Signal(str)
-    progress = Signal(int, str)
-
-    def __init__(self, raw, filename, llm_client):
-        super().__init__()
-        self.raw = raw
-        self.filename = filename
-        self.llm_client = llm_client
-
-    def run(self):
-        try:
-            from expert_anything.core.parsers import extract_from_bytes
-            self.progress.emit(10, _t("analyzing"))
-            if isinstance(self.raw, str):
-                text = self.raw
-            else:
-                text = extract_from_bytes(self.raw, self.filename)
-            self.progress.emit(30, _t("analyzing"))
-            if not text.strip():
-                self.error.emit(_t("extract_failed_text"))
-                return
-            self.progress.emit(55, _t("extracting"))
-            asset = extract_knowledge(
-                text,
-                self.filename,
-                llm=self.llm_client,
-                on_progress=lambda stage, current, total, msg: self.progress.emit(
-                    55 + int(25 * current / max(total, 1)), msg
-                )
-            )
-            self.progress.emit(85, _t("extracted_x", n=len(asset.concepts)))
-            self.finished.emit(asset)
-        except Exception as e:
-            self.error.emit(str(e))
+# ---------------------------------------------------------------------------
+# Shared worker references (cleared on _rebuild_all_views)
+# ---------------------------------------------------------------------------
 
 
-class TeacherWorker(QThread):
-    """Background thread for teacher model building."""
-    
-    finished = Signal(object)
-    error = Signal(str)
-    
-    def __init__(self, asset, llm_client):
-        super().__init__()
-        self.asset = asset
-        self.llm_client = llm_client
-    
-    def run(self):
-        try:
-            teacher = build_teacher_model(
-                self.asset,
-                llm=self.llm_client,
-                on_progress=lambda stage, current, total, msg: None
-            )
-            self.finished.emit(teacher)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-class TeachWorker(QThread):
-    """Background thread for teaching session."""
-
-    finished = Signal(dict)
-    error = Signal(str)
-
-    def __init__(self, tutor, concept, vary=0, style=None):
-        super().__init__()
-        self.tutor = tutor
-        self.concept = concept
-        self.vary = vary
-        self.style = style
-
-    def run(self):
-        try:
-            result = self.tutor.teach(self.concept, vary=self.vary,
-                                      style=self.style)
-            self.finished.emit(result)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-class FollowUpWorker(QThread):
-    """Background thread for grounded follow-up answers."""
-
-    finished = Signal(str, str)  # question, answer
-    error = Signal(str)
-
-    def __init__(self, tutor, concept, question, lesson, history):
-        super().__init__()
-        self.tutor = tutor
-        self.concept = concept
-        self.question = question
-        self.lesson = lesson
-        self.history = history
-
-    def run(self):
-        try:
-            answer = self.tutor.follow_up(
-                self.concept, self.question,
-                lesson=self.lesson, history=self.history,
-            )
-            self.finished.emit(self.question, answer)
-        except Exception as e:
-            self.error.emit(str(e))
-
-
-class KnowledgeCard(QFrame):
-    """A card widget displaying a knowledge concept with mastery status."""
-
-    clicked = Signal(str)
-
-    def __init__(self, concept_name, mastery=0.0, tags=None, is_top=False, parent=None):
-        super().__init__(parent)
-        self.concept_name = concept_name
-        self.mastery = mastery
-        self.tags = tags or []
-        self.is_top = is_top
-        self.setup_ui()
-        self.apply_style()
-
-    def setup_ui(self):
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(8)
-
-        # Title row
-        title_row = QHBoxLayout()
-        title_row.setSpacing(8)
-
-        title_label = QLabel(self.concept_name)
-        font = QFont("Segoe UI", 12, QFont.Weight.Bold)
-        title_label.setFont(font)
-        title_row.addWidget(title_label)
-
-        # Tags
-        for tag in self.tags[:2]:
-            tag_label = QLabel(tag)
-            tag_label.setStyleSheet("""
-                QLabel {
-                    background-color: #E3F2FD;
-                    color: #1565C0;
-                    padding: 2px 8px;
-                    border-radius: 4px;
-                    font-size: 10px;
-                }
-            """)
-            title_row.addWidget(tag_label)
-        title_row.addStretch()
-        layout.addLayout(title_row)
-
-        # Mastery indicator: colour dot + percent (no horizontal bar)
-        dot_row = QHBoxLayout()
-        dot_row.setSpacing(6)
-        dot = QLabel("●")
-        dot.setStyleSheet(f"color: {self._get_mastery_hex()}; font-size: 12px;")
-        dot_row.addWidget(dot)
-        pct = QLabel(f"{self.mastery:.0%}")
-        pct.setStyleSheet("color: #616161; font-size: 12px; font-weight: bold;")
-        dot_row.addWidget(pct)
-        dot_row.addStretch()
-        layout.addLayout(dot_row)
-
-        # Action button
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        learn_btn = QPushButton(_t("panel_teach"))
-        learn_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1565C0;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 16px;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #0D47A1;
-            }
-        """)
-        learn_btn.clicked.connect(lambda: self.clicked.emit(self.concept_name))
-        btn_row.addWidget(learn_btn)
-        layout.addLayout(btn_row)
-
-    def apply_style(self):
-        if self.is_top:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: #E3F2FD;
-                    border: 2px solid #1565C0;
-                    border-radius: 12px;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: white;
-                    border: 1px solid #E0E0E0;
-                    border-radius: 8px;
-                }
-                QFrame:hover {
-                    border: 1px solid #90CAF9;
-                }
-            """)
-
-    def _get_mastery_color(self):
-        if self.mastery >= 0.6:
-            return "background-color: #4CAF50;"
-        elif self.mastery >= 0.3:
-            return "background-color: #FF9800;"
-        else:
-            return "background-color: #F44336;"
-
-    def _get_mastery_hex(self):
-        if self.mastery >= 0.6:
-            return "#4CAF50"
-        elif self.mastery >= 0.3:
-            return "#FF9800"
-        else:
-            return "#F44336"
-
-    def mousePressEvent(self, event):
-        self.clicked.emit(self.concept_name)
-        super().mousePressEvent(event)
-
-
-class StatCard(QFrame):
-    """Dashboard statistic card."""
-
-    def __init__(self, icon, label, value, color, parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 12, 16, 12)
-        layout.setSpacing(4)
-
-        # Icon circle
-        icon_circle = QFrame(self)
-        icon_circle.setFixedSize(32, 32)
-        icon_circle.setStyleSheet(f"background-color: {color}20; border-radius: 16px;")
-        icon_layout = QVBoxLayout(icon_circle)
-        icon_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        icon_label = QLabel(icon)
-        icon_label.setStyleSheet(f"color: {color}; font-size: 16px;")
-        icon_layout.addWidget(icon_label)
-
-        header = QHBoxLayout()
-        header.addWidget(icon_circle)
-        header.addWidget(QLabel(label))
-        header.addStretch()
-        layout.addLayout(header)
-
-        value_widget = QLabel(str(value))
-        value_widget.setStyleSheet(f"color: {color}; font-size: 24px; font-weight: bold;")
-        layout.addWidget(value_widget)
-        layout.addStretch()
-
-        self.setStyleSheet("""
-            QFrame {
-                background-color: white;
-                border: 1px solid #E0E0E0;
-                border-radius: 10px;
-            }
-        """)
+# ---------------------------------------------------------------------------
+# MainWindow
+# ---------------------------------------------------------------------------
 
 
 class MainWindow(QMainWindow):
-    """Main application window with full functionality."""
+    # ---- constructor --------------------------------------------------------
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle(f"ExpertAnything · {_t('app_tagline')}")
+        self.setWindowTitle("ExpertAnything")
         self.setMinimumSize(1100, 760)
         self.resize(1200, 800)
-        self.setStyleSheet(self._get_stylesheet())
-        
-        # Load real data
-        self.assets = {}
-        self.teacher_models = {}
-        self.learner = {}
-        self.current_asset_id = None
-        self.llm_client = None
-        self.current_tutor = None
+
+        # Application state
+        self.assets: dict = {}  # asset_id -> metadata dict
+        self.teacher_models: dict = {}  # asset_id -> TeacherModel.to_dict()
+        self.learner = {}  # learner state dict
+        self.current_asset_id: str | None = None
+        self.llm_client: LLMClient | None = None
+
+        # Per-view widget refs that need clearing on rebuild
+        self._concept_panel: ConceptDetailPanel | None = None
+        self._teach_graph: KnowledgeGraphView | None = None
+        self._dash_graph: KnowledgeGraphView | None = None
+        self._graph_view: KnowledgeGraphView | None = None
+        self._source_view_widget: SourceTextView | None = None
+        self._map_detail: NodeDetailCard | None = None
+        self._path_ladder: PathLadderView | None = None
+        self._teach_answer_input: QWidget | None = None
+
+        # AutoHarness state
+        self._harness_specs: dict = {}
+        self._harness_history: list = []
+
+        # View manager
+        self._view_manager: ViewManager | None = None
+
         self.load_data()
         self.init_llm()
-        
         self.setup_ui()
 
+    # ---- LLM ----------------------------------------------------------------
+
     def init_llm(self):
-        """Initialize LLM client if configured."""
-        try:
-            if config.has_llm():
+        if config.has_llm():
+            try:
                 self.llm_client = LLMClient.from_config(
                     config.LLM_API_KEY,
                     config.LLM_BASE_URL,
                     config.LLM_MODEL,
                 )
-        except LLMNotConfigured:
-            self.llm_client = None
+            except LLMNotConfigured:
+                self.llm_client = None
+
+    # ---- data loading --------------------------------------------------------
 
     def load_data(self):
-        """Load real data from ExpertAnything core."""
-        # Load assets (data dir comes from config, override via EXPERTANYTHING_DATA_DIR)
-        asset_dir = config.DATA_DIR / "assets"
-        if asset_dir.exists():
-            for fname in asset_dir.glob("*.json"):
-                if not fname.name.startswith("teacher_"):
-                    with open(fname, encoding="utf-8") as f:
-                        aid = fname.stem
-                        self.assets[aid] = json.load(f)
-        
-        # Load teacher models
-        for fname in asset_dir.glob("teacher_*.json"):
-            aid = fname.stem.removeprefix("teacher_")
-            with open(fname, encoding="utf-8") as f:
-                self.teacher_models[aid] = json.load(f)
-        
-        # Load learner
-        learner_path = config.DATA_DIR / "learner.json"
-        if learner_path.exists():
-            with open(learner_path, encoding="utf-8") as f:
-                self.learner = json.load(f)
+        assets_dir = config.DATA_DIR / "assets"
+        if assets_dir.exists():
+            for fpath in sorted(assets_dir.glob("*.json")):
+                if fpath.name.startswith("teacher_"):
+                    continue
+                try:
+                    data = __import__("json").loads(fpath.read_text(encoding="utf-8"))
+                    aid = data.get("asset_id", fpath.stem)
+                    self.assets[aid] = data
+                except Exception:
+                    pass
 
-        # Load per-asset AutoHarness states (adopted evolution candidates)
-        self._harness_specs = _ah.load_harness_state(
-            config.DATA_DIR / "harness_state.json"
-        )
-        # Load the evolution audit trail (append-only history in the same file)
+        # Teacher models
+        if assets_dir.exists():
+            for fpath in sorted(assets_dir.glob("teacher_*.json")):
+                try:
+                    data = __import__("json").loads(fpath.read_text(encoding="utf-8"))
+                    aid = data.get("asset_id", fpath.stem.replace("teacher_", ""))
+                    self.teacher_models[aid] = data
+                except Exception:
+                    pass
+
+        # Learner
+        learner_path = config.LEARNER_FILE
+        if learner_path.exists():
+            try:
+                self.learner = load_learner()
+            except Exception:
+                self.learner = {
+                    "profile": {},
+                    "assets": {},
+                    "concepts": {},
+                    "history": [],
+                }
+
+        # AutoHarness
+        harness_state = config.DATA_DIR / "harness_state.json"
+        self._harness_specs = _ah.load_harness_state(harness_state)
         self._harness_history = _ah.load_harness_history(
-            config.DATA_DIR / "harness_state.json"
+            config.DATA_DIR / "harness_history.json"
         )
-        
-        # Select first asset by default
-        if self.assets:
+
+        if self.assets and not self.current_asset_id:
             self.current_asset_id = next(iter(self.assets))
 
-    def get_asset(self, asset_id=None):
-        """Build a KnowledgeAsset object from the loaded JSON data."""
-        aid = asset_id or self.current_asset_id
-        if not aid or aid not in self.assets:
-            return None
-        data = self.assets[aid]
-        return KnowledgeAsset(
-            asset_id=aid,
-            type=data.get("type", "text"),
-            title=data.get("title", aid),
-            source_name=data.get("source_name", aid),
-            created_at=data.get("created_at", ""),
-            source_text=data.get("source_text", ""),
-            chapters=[Chapter.from_dict(c) for c in data.get("chapters", [])],
-            concepts=[Concept.from_dict(c) for c in data.get("concepts", [])],
-            relations=[Relation.from_dict(r) for r in data.get("relations", [])],
-            learning_path=data.get(
-                "learning_path",
-                [c["id"] for c in data.get("concepts", [])],
-            ),
-            method=data.get("method", "unknown"),
-        )
+    # ---- UI setup ------------------------------------------------------------
 
-    def get_adaptive_path(self, asset_id):
-        """Compute adaptive learning path for an asset."""
-        if asset_id not in self.assets:
-            return []
-        
-        data = self.assets[asset_id]
-        asset = KnowledgeAsset(
-            asset_id=asset_id,
-            type=data.get("type", "text"),
-            title=data.get("title", asset_id),
-            source_name=data.get("source_name", asset_id),
-            created_at=data.get("created_at", ""),
-            concepts=[Concept.from_dict(c) for c in data.get("concepts", [])],
-            relations=[Relation.from_dict(r) for r in data.get("relations", [])],
-            learning_path=data.get("learning_path", [c["id"] for c in data.get("concepts", [])])
-        )
-        
-        return adaptive_path(asset, self.learner)
-
-    def setup_ui(self):
-        central = QWidget()
-        self.setCentralWidget(central)
-        main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(0)
-
-        # Top function bar (always visible): asset + progress + quick actions
-        self._main_layout = main_layout
-        self.topbar = self._build_topbar()
-        main_layout.addWidget(self.topbar)
-
-        # Body: navigation sidebar + content stack
-        body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
-        body.setSpacing(0)
-        self._body_layout = body
-
-        # Sidebar (navigation area)
-        self._sidebar = self._build_sidebar()
-        body.addWidget(self._sidebar)
-
-        # Content area (display area) with stacked views
-        self.content_stack = QStackedWidget()
-        
-        # Build all views
-        self.import_view = self._build_import_view()
-        self.knowledge_view = self._build_knowledge_view()
-        self.concept_map_view = self._build_concept_map_view()
-        self.source_view = self._build_source_view()
-        self.teach_view = self._build_teach_view()
-        self.learner_view = self._build_learner_view()
-        self.teacher_view = self._build_teacher_view()
-        
-        for view in [
-            self.import_view,
-            self.knowledge_view,
-            self.concept_map_view,
-            self.source_view,
-            self.teach_view,
-            self.learner_view,
-            self.teacher_view,
-        ]:
-            self.content_stack.addWidget(view)
-
-        body.addWidget(self.content_stack, 1)
-        main_layout.addLayout(body, 1)
-        self._update_topbar()
-
-    # --- focused "Learn" home -------------------------------------------
-    def _concept_mastery(self, concept) -> float:
-        return float(
-            self.learner.get("concepts", {})
-            .get(normalize(concept.name), {})
-            .get("mastery", 0.0)
-        )
-
-    def _next_concept(self):
-        """Return (next Concept, mastery) to learn, skipping completed ones."""
-        asset = self.get_asset()
-        if asset is None:
-            return None, 0.0
-        completed = set(
-            self.learner.get("assets", {})
-            .get(self.current_asset_id, {})
-            .get("completed", [])
-        )
-        path = self.get_adaptive_path(self.current_asset_id) if self.current_asset_id else []
-        for it in path:
-            cid = it.get("cid")
-            if cid in completed:
-                continue
-            c = asset.concept_by_id(cid)
-            if c is not None:
-                return c, self._concept_mastery(c)
-        for c in asset.concepts:
-            if c.id not in completed:
-                return c, self._concept_mastery(c)
-        if asset.concepts:
-            return asset.concepts[0], self._concept_mastery(asset.concepts[0])
-        return None, 0.0
-
-    def _build_browse_drawer(self) -> QWidget:
-        """Heavy, rarely-needed overview: stats + full TOC + clusters + ladder +
-        graph. Hidden by default on the Learn home; shown only on demand."""
-        drawer = QWidget()
-        dlayout = QVBoxLayout(drawer)
-        dlayout.setContentsMargins(0, 0, 0, 0)
-        dlayout.setSpacing(16)
-
-        # Dashboard stats
-        stats_layout = QHBoxLayout()
-        stats_layout.setSpacing(12)
-        stats = self._compute_stats()
-        for card in [
-            ("📚", _t("stat_total"), stats['total'], "#1565C0"),
-            ("✓", _t("legend_mastered"), stats['mastered'], "#4CAF50"),
-            ("↗", _t("legend_learning"), stats['learning'], "#FF9800"),
-            ("○", _t("stat_unstudied"), stats['unstudied'], "#9E9E9E"),
-            ("⚠", _t("stat_anomaly"), stats['anomalies'], "#F44336"),
-        ]:
-            stats_layout.addWidget(StatCard(*card))
-        stats_layout.addStretch()
-        dlayout.addLayout(stats_layout)
-        # Chapter table of contents + topic clusters (structure map, P0-1/P1-3)
-        asset = self.get_asset()
-        if asset is not None:
-            toc_card = QFrame()
-            toc_card.setStyleSheet(
-                "QFrame { background-color: white; border: 1px solid #E0E0E0;"
-                "border-radius: 10px; }"
-            )
-            toc_lay = QVBoxLayout(toc_card)
-            toc_lay.setContentsMargins(16, 12, 16, 12)
-            toc_lay.setSpacing(6)
-
-            toc_title = QLabel(_t("toc_title"))
-            toc_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
-            toc_lay.addWidget(toc_title)
-
-            toc_hint = QLabel(_t("toc_hint"))
-            toc_hint.setStyleSheet("font-size: 11px; color: #9E9E9E;")
-            toc_lay.addWidget(toc_hint)
-
-            self._toc_tree = QTreeWidget()
-            self._toc_tree.setHeaderHidden(True)
-            self._toc_tree.setMaximumHeight(240)
-            self._toc_tree.setStyleSheet(
-                "QTreeWidget { background-color: #FAFAFA; border: 1px solid #E0E0E0;"
-                "border-radius: 6px; font-size: 12.5px; }"
-                "QTreeWidget::item { padding: 3px; }"
-            )
-            by_ch = {}
-            for c in asset.concepts:
-                by_ch.setdefault(c.chapter or "", []).append(c)
-            ordered = []
-            seen = set()
-            for ch in asset.chapters:
-                if ch.title in by_ch and ch.title not in seen:
-                    ordered.append(ch.title)
-                    seen.add(ch.title)
-            for k in by_ch:
-                if k and k not in seen:
-                    ordered.append(k)
-                    seen.add(k)
-            for ch_title in ordered:
-                top = QTreeWidgetItem([ch_title])
-                top.setData(0, Qt.ItemDataRole.UserRole, ("chapter", ch_title))
-                for c in by_ch[ch_title][:25]:
-                    child = QTreeWidgetItem([f"  {c.name}"])
-                    child.setData(0, Qt.ItemDataRole.UserRole, ("concept", c.id))
-                    top.addChild(child)
-                self._toc_tree.addTopLevelItem(top)
-            unassigned = [c for k, lst in by_ch.items() if not k for c in lst]
-            if unassigned:
-                top = QTreeWidgetItem([_t("toc_other")])
-                top.setData(0, Qt.ItemDataRole.UserRole, ("chapter", ""))
-                for c in unassigned[:20]:
-                    child = QTreeWidgetItem([f"  {c.name}"])
-                    child.setData(0, Qt.ItemDataRole.UserRole, ("concept", c.id))
-                    top.addChild(child)
-                self._toc_tree.addTopLevelItem(top)
-            if self._toc_tree.topLevelItemCount() == 0:
-                self._toc_tree.addTopLevelItem(QTreeWidgetItem([_t("chapter_empty")]))
-            self._toc_tree.itemClicked.connect(self._on_toc_clicked)
-            toc_lay.addWidget(self._toc_tree)
-            dlayout.addWidget(toc_card)
-
-            # Topic clusters (P1-3)
-            clusters = topic_clusters(asset)
-            big = [c for c in clusters if c["size"] >= 2][:8]
-            if big:
-                topic_card = QFrame()
-                topic_card.setStyleSheet(
-                    "QFrame { background-color: white; border: 1px solid #E0E0E0;"
-                    "border-radius: 10px; }"
-                )
-                tp_lay = QVBoxLayout(topic_card)
-                tp_lay.setContentsMargins(16, 12, 16, 12)
-                tp_lay.setSpacing(6)
-                tp_title = QLabel(_t("topics_title"))
-                tp_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
-                tp_lay.addWidget(tp_title)
-                tp_hint = QLabel(_t("topics_hint"))
-                tp_hint.setWordWrap(True)
-                tp_hint.setStyleSheet("font-size: 11px; color: #9E9E9E;")
-                tp_lay.addWidget(tp_hint)
-                for cl in big:
-                    row = QHBoxLayout()
-                    row.setSpacing(8)
-                    name_lbl = QLabel(f"{cl['name']}  ·  {_t('topic_size', n=cl['size'])}")
-                    name_lbl.setStyleSheet(
-                        "font-size: 12.5px; font-weight: bold; color: #0c4a6e;"
-                        "background-color: #E8F0F8; border-radius: 6px; padding: 4px 10px;"
-                    )
-                    row.addWidget(name_lbl)
-                    for cid in cl["concept_ids"][:5]:
-                        c = asset.concept_by_id(cid)
-                        if c:
-                            chip = QLabel(c.name)
-                            chip.setStyleSheet(
-                                "background-color: #F3E5F5; color: #6A1B9A;"
-                                "border-radius: 10px; padding: 2px 8px; font-size: 10.5px;"
-                            )
-                            row.addWidget(chip)
-                    row.addStretch()
-                    learn_btn = QPushButton(_t("learn_topic"))
-                    learn_btn.setStyleSheet(
-                        "QPushButton { background-color: white; color: #6A1B9A;"
-                        "border: 1px solid #CE93D8; border-radius: 6px; padding: 3px 10px;"
-                        "font-size: 11px; }"
-                        "QPushButton:hover { background-color: #F3E5F5; }"
-                    )
-                    learn_btn.clicked.connect(
-                        lambda checked, cid=cl["id"]: self._start_topic(cid))
-                    row.addWidget(learn_btn)
-                    tp_lay.addLayout(row)
-                dlayout.addWidget(topic_card)
-
-
-        # Concept cards from adaptive path
-        cards_container = QWidget()
-        cards_layout = QVBoxLayout(cards_container)
-        cards_layout.setContentsMargins(0, 0, 0, 0)
-        cards_layout.setSpacing(8)
-
-        section_title = QLabel(_t("section_recommend"))
-        section_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1565C0; padding: 4px 0;")
-        cards_layout.addWidget(section_title)
-
-        # Adaptive path ladder (ranked, with status chips + density badges)
-        self._path_ladder = PathLadderView()
-        self._path_ladder.concept_clicked.connect(self._open_concept_panel)
-        if self.current_asset_id:
-            path_items = self.get_adaptive_path(self.current_asset_id)
-            entry = self.learner.get('assets', {}).get(self.current_asset_id, {})
-            completed = set(entry.get('completed', []))
-            # knowledge-density marking (importance x novelty)
-            try:
-                density = concept_density(asset, self.learner)
-                for it in path_items:
-                    it["badge"] = density.get(it.get("cid", ""), {}).get("badge", "")
-            except Exception:
-                pass
-            self._path_ladder.set_items(path_items, completed=completed)
-        cards_layout.addWidget(self._path_ladder)
-
-        cards_layout.addStretch()
-        dlayout.addWidget(cards_container)
-
-        # Live concept graph (embedded dashboard view)
-        graph_container = QWidget()
-        graph_layout = QVBoxLayout(graph_container)
-        graph_layout.setContentsMargins(0, 0, 0, 0)
-        graph_layout.setSpacing(8)
-
-        graph_title = QLabel(_t("section_graph"))
-        graph_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1565C0; padding: 4px 0;")
-        graph_layout.addWidget(graph_title)
-
-        self._dash_graph = KnowledgeGraphView()
-        self._dash_graph.setMinimumHeight(300)
-        self._dash_graph.setStyleSheet(
-            "QGraphicsView { background-color: white; border: 1px solid #E0E0E0;"
-            "border-radius: 8px; }"
-        )
-        graph_layout.addWidget(self._dash_graph)
-
-        if self.current_asset_id:
-            asset = self.get_asset()
-            if asset is not None:
-                data = self.assets[self.current_asset_id]
-                mastery_map = {}
-                for c in asset.concepts:
-                    norm_name = normalize(c.name)
-                    mastery_map[c.id] = (
-                        self.learner.get('concepts', {}).get(norm_name, {}).get('mastery', 0.0)
-                    )
-                anomaly_ids = set()
-                td = self.teacher_models.get(self.current_asset_id)
-                if td:
-                    try:
-                        anomaly_ids = anomaly_concept_ids(
-                            asset, TeacherModel.from_dict(td)
-                        )
-                    except Exception:
-                        anomaly_ids = set()
-                items = self.get_adaptive_path(self.current_asset_id)
-                current_id = items[0].get('cid') if items else None
-                self._dash_graph.set_asset(
-                    asset,
-                    mastery_map=mastery_map,
-                    anomaly_ids=anomaly_ids,
-                    current_id=current_id,
-                )
-                self._dash_graph.concept_clicked.connect(self.on_card_click)
-
-        dlayout.addWidget(graph_container)
-        dlayout.addStretch()
-        return drawer
-
-    def _build_knowledge_view(self):
-        """Build the knowledge model view with adaptive learning path."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Header
-        header = self._view_header(
-            _t("nav_knowledge"),
-            self._get_asset_subtitle(),
-        )
-        layout.addWidget(header)
-
-        # Fallback (deterministic) extraction warning banner
-        cur_asset = self.get_asset()
-        if cur_asset is not None:
-            mlow = (cur_asset.method or "").lower()
-            if "fallback" in mlow or "failed" in mlow or "deterministic" in mlow:
-                warn = QLabel(_t("dash_fallback_warn", method=localize_method(cur_asset.method)))
-                warn.setWordWrap(True)
-                warn.setStyleSheet(
-                    "background-color:#FFF4E5; color:#8A4B00; border:1px solid #FFD28A;"
-                    "border-radius:8px; padding:10px 14px; font-size:13px; margin:0 16px;"
-                )
-                layout.addWidget(warn)
-
-        # Scrollable content
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        scroll_content = QWidget()
-        scroll_layout = QVBoxLayout(scroll_content)
-        scroll_layout.setContentsMargins(20, 16, 20, 20)
-        scroll_layout.setSpacing(16)
-
-        # ---- Detailed knowledge model (secondary view; the cognitive map is the home) ----
-        drawer = self._build_browse_drawer()
-        scroll_layout.addWidget(drawer)
-
-        scroll_layout.addStretch()
-
-        scroll.setWidget(scroll_content)
-        layout.addWidget(scroll)
-
-        return widget
-
-    def _build_learner_view(self):
-        """Build the learner model view showing all concepts."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Header
-        header = self._view_header(
-            _t("nav_learner"),
-            _t("learner_subtitle", n=len(self.learner.get('concepts', {}))),
-        )
-        layout.addWidget(header)
-
-        # Learning-gain stat cards
-        stats = self._compute_stats()
-        due = due_for_review(self.learner)
-        stat_row = QHBoxLayout()
-        stat_row.setSpacing(12)
-        stat_row.addWidget(StatCard("✓", _t("stat_mastered"), stats["mastered"], "#2E7D32"))
-        stat_row.addWidget(StatCard("◐", _t("stat_learning"), stats["learning"], "#B45309"))
-        stat_row.addWidget(StatCard("⏰", _t("stat_due"), len(due), "#C62828"))
-        stat_row.addWidget(StatCard("🧠", _t("stat_cross"), len(self.learner.get('concepts', {})), "#0284C7"))
-        stat_row.addStretch()
-        layout.addLayout(stat_row)
-
-        # Learning overview: plain-language narrative + mastery distribution
-        concepts_all = self.learner.get('concepts', {})
-        total_c = len(concepts_all)
-        mastered_c = sum(1 for v in concepts_all.values() if float(v.get('mastery', 0)) >= 0.6)
-        learning_c = sum(1 for v in concepts_all.values() if 0.3 <= float(v.get('mastery', 0)) < 0.6)
-        weak_c = sum(1 for v in concepts_all.values() if 0 < float(v.get('mastery', 0)) < 0.3)
-        unstudied_c = sum(1 for v in concepts_all.values() if float(v.get('mastery', 0)) == 0)
-        avg_c = (sum(float(v.get('mastery', 0)) for v in concepts_all.values()) / total_c) if total_c else 0
-
-        weak_names = sorted(
-            (v.get('name', k) for k, v in concepts_all.items()
-             if 0 < float(v.get('mastery', 0)) < 0.6),
-            key=lambda n: float(next(
-                (v.get('mastery', 0) for k2, v in concepts_all.items() if v.get('name') == n), 0)),
-        )[:3]
-
-        summary = _t("overview_summary", total=total_c, m=mastered_c, pct=mastered_c / total_c, avg=avg_c)
-        if due:
-            summary += _t("overview_due", n=len(due), first=due[0]["name"])
-        if weak_names:
-            summary += _t("overview_weak", names="、".join(weak_names))
-        elif total_c and mastered_c == total_c:
-            summary += _t("overview_all")
-
-        overview = QFrame()
-        overview.setStyleSheet(
-            "QFrame { background-color: white; border: 1px solid #E0E0E0;"
-            "border-radius: 10px; }"
-        )
-        ov_lay = QVBoxLayout(overview)
-        ov_lay.setContentsMargins(16, 12, 16, 12)
-        ov_lay.setSpacing(6)
-
-        ov_title = QLabel(_t("overview_title"))
-        ov_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
-        ov_lay.addWidget(ov_title)
-
-        sum_lbl = QLabel(summary)
-        sum_lbl.setWordWrap(True)
-        sum_lbl.setStyleSheet("font-size: 13px; color: #37474F;")
-        ov_lay.addWidget(sum_lbl)
-
-        dist = MasteryDistributionBar({
-            "mastered": mastered_c, "learning": learning_c,
-            "weak": weak_c, "unstudied": unstudied_c,
-        })
-        ov_lay.addWidget(dist)
-
-        leg_row = QHBoxLayout()
-        leg_row.setSpacing(6)
-        for color, text in [
-            ("#4CAF50", f"{_t('legend_mastered')} {mastered_c}"),
-            ("#FF9800", f"{_t('legend_learning')} {learning_c}"),
-            ("#F44336", f"{_t('legend_weak')} {weak_c}"),
-            ("#BDBDBD", f"{_t('legend_unstudied')} {unstudied_c}"),
-        ]:
-            dot = QLabel("●")
-            dot.setStyleSheet(f"color: {color}; font-size: 10px;")
-            t = QLabel(text)
-            t.setStyleSheet("color: #757575; font-size: 11px;")
-            leg_row.addWidget(dot)
-            leg_row.addWidget(t)
-        leg_row.addStretch()
-        ov_lay.addLayout(leg_row)
-        layout.addWidget(overview)
-
-        # Tab widget for concepts and history
-        tabs = QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #E0E0E0; border-radius: 4px; }
-            QTabBar::tab { background: white; padding: 8px 16px; margin-right: 2px; }
-            QTabBar::tab:selected { background: #E8F5E9; color: #2E7D32; }
-        """)
-
-        # Concepts tab
-        concepts_widget = QWidget()
-        concepts_layout = QVBoxLayout(concepts_widget)
-        concepts_layout.setContentsMargins(20, 16, 20, 20)
-        concepts_layout.setSpacing(8)
-
-        # Review queue (spacing-effect based)
-        due = due_for_review(self.learner)
-        if due:
-            due_title = QLabel(_t("due_title", n=len(due)))
-            due_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #C62828; padding: 4px 0;")
-            concepts_layout.addWidget(due_title)
-            for d in due:
-                card = KnowledgeCard(
-                    concept_name=d['name'],
-                    mastery=d['mastery'],
-                    tags=[_t("due_days", d=d["days_since"])],
-                    is_top=False,
-                )
-                card.clicked.connect(
-                    lambda e, n=d['name']: self._start_teach_by_name(n, review=True)
-                )
-                concepts_layout.addWidget(card)
-            due_hint = QLabel(_t("due_hint"))
-            due_hint.setStyleSheet("font-size: 11px; color: #9E9E9E;")
-            concepts_layout.addWidget(due_hint)
-
-        section_title = QLabel(_t("all_concepts"))
-        section_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32; padding: 4px 0;")
-        concepts_layout.addWidget(section_title)
-
-        # group concepts by their first source asset
-        groups = {}
-        for key, rec in self.learner.get('concepts', {}).items():
-            srcs = rec.get('sources', [])
-            gid = srcs[0] if srcs else '?'
-            groups.setdefault(gid, []).append(rec)
-
-        for gid, items in groups.items():
-            g_title = (
-                self.assets.get(gid, {}).get('title', _t('group_unknown'))
-                if gid != '?' else _t('group_other')
-            )
-            g_label = QLabel(_t("group_fmt", title=g_title, n=len(items)))
-            g_label.setStyleSheet(
-                "font-size: 12.5px; font-weight: bold; color: #0c4a6e;"
-                "background-color: #E8F0F8; border-radius: 4px; padding: 4px 8px; margin-top: 6px;"
-            )
-            concepts_layout.addWidget(g_label)
-
-            for i, concept in enumerate(sorted(items, key=lambda x: x.get('mastery', 0))):
-                name = concept.get('name', concept.get('key', '?'))
-                mastery = concept.get('mastery', 0)
-                sources = concept.get('sources', [])
-                tags = []
-                if mastery < 0.3:
-                    tags.append(_t("legend_weak"))
-                if len(sources) > 1:
-                    tags.append(_t("tag_cross"))
-
-                card = KnowledgeCard(
-                    concept_name=name,
-                    mastery=mastery,
-                    tags=tags,
-                    is_top=(i == 0 and mastery == 0)
-                )
-                card.clicked.connect(self._open_concept_panel_by_name)
-                concepts_layout.addWidget(card)
-
-        concepts_layout.addStretch()
-        tabs.addTab(concepts_widget, _t("tab_concepts"))
-
-        # History tab
-        history_widget = QWidget()
-        history_layout = QVBoxLayout(history_widget)
-        history_layout.setContentsMargins(20, 16, 20, 20)
-
-        history_title = QLabel(_t("history_title"))
-        history_title.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32; padding: 4px 0;")
-        history_layout.addWidget(history_title)
-
-        # Learning-gain trend (recent evaluation scores, time order)
-        trend = TrendChartView()
-        hist_series = self.learner.get('history', [])
-        trend_items = [
-            {"label": h.get('concept', '?'), "score": float(h.get('score', 0))}
-            for h in reversed(hist_series[-12:])
-        ]
-        trend.set_data(trend_items)
-        trend.setStyleSheet("background-color: white; border: 1px solid #E0E0E0; border-radius: 8px;")
-        history_layout.addWidget(trend)
-
-        history_table = QTableWidget()
-        history_table.setColumnCount(4)
-        history_table.setHorizontalHeaderLabels([_t("history_col_time"), _t("history_col_concept"), _t("history_col_score"), _t("history_col_feedback")])
-        history_table.horizontalHeader().setStretchLastSection(True)
-        history_table.verticalHeader().setVisible(False)
-        history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        history_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        history_table.setStyleSheet("""
-            QTableWidget {
-                background-color: white;
-                border: 1px solid #E0E0E0;
-                border-radius: 8px;
-                font-size: 12px;
-            }
-            QTableWidget::item { padding: 6px; border-bottom: 1px solid #F0F0F0; }
-            QHeaderView::section {
-                background-color: #E8F5E9; color: #2E7D32;
-                border: none; padding: 6px; font-weight: bold;
-            }
-        """)
-
-        history = self.learner.get('history', [])
-        history_table.setRowCount(len(history))
-        for row, h in enumerate(history):
-            at = h.get('at', '')[:19]
-            score = float(h.get('score', 0))
-            concept = h.get('concept', '?')
-            feedback = h.get('feedback', '')[:80]
-
-            at_item = QTableWidgetItem(at)
-            con_item = QTableWidgetItem(concept)
-            score_item = QTableWidgetItem(f"{score:.2f}")
-            if score >= 0.6:
-                score_item.setForeground(QColor("#2E7D32"))
-            elif score >= 0.3:
-                score_item.setForeground(QColor("#B45309"))
-            else:
-                score_item.setForeground(QColor("#C62828"))
-            fb_item = QTableWidgetItem(feedback)
-
-            history_table.setItem(row, 0, at_item)
-            history_table.setItem(row, 1, con_item)
-            history_table.setItem(row, 2, score_item)
-            history_table.setItem(row, 3, fb_item)
-
-        history_table.setColumnWidth(0, 170)
-        history_table.setColumnWidth(1, 190)
-        history_table.setColumnWidth(2, 60)
-        if not history:
-            history_table.setRowCount(1)
-            empty = QTableWidgetItem(_t("history_empty"))
-            history_table.setSpan(0, 0, 1, 4)
-            history_table.setItem(0, 0, empty)
-
-        history_layout.addWidget(history_table)
-
-        # Export button
-        export_btn = QPushButton(_t("export_report"))
-        export_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 13px;
-            }
-            QPushButton:hover { background-color: #388E3C; }
-        """)
-        export_btn.clicked.connect(self._on_export_report)
-        history_layout.addWidget(export_btn)
-
-        export_html_btn = QPushButton(_t("export_html"))
-        export_html_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1565C0;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 13px;
-            }
-            QPushButton:hover { background-color: #0D47A1; }
-        """)
-        export_html_btn.clicked.connect(self._on_export_report_html)
-        history_layout.addWidget(export_html_btn)
-
-        history_layout.addStretch()
-
-        tabs.addTab(history_widget, _t("tab_history"))
-
-        layout.addWidget(tabs)
-
-        return widget
-
-    def _get_asset_subtitle(self):
-        """Get asset subtitle string."""
+    def _get_asset_subtitle(self) -> str:
+        """Return a concise summary for the currently selected asset."""
         if self.current_asset_id and self.current_asset_id in self.assets:
             data = self.assets[self.current_asset_id]
-            title = data.get('title', self.current_asset_id)
-            method = localize_method(data.get('method', 'llm_extraction_chunked_v1'))
-            concepts = len(data.get('concepts', []))
+            title = data.get("title", self.current_asset_id)
+            method = data.get("method", "llm_extraction_chunked_v1")
+            concepts = len(data.get("concepts", []))
             return _t("dash_subtitle", title=title, concepts=concepts, method=method)
         return _t("dash_loading")
 
-    def _compute_stats(self):
-        """Compute dashboard statistics."""
-        if not self.current_asset_id or self.current_asset_id not in self.assets:
-            return {'total': 0, 'mastered': 0, 'learning': 0, 'unstudied': 0, 'anomalies': 0}
-        
-        data = self.assets[self.current_asset_id]
-        concepts = data.get('concepts', [])
-        total = len(concepts)
-        
-        # Count by mastery level
-        mastered = 0
-        learning = 0
-        unstudied = 0
-        
-        for c in concepts:
-            norm_name = normalize(c.get('name', ''))
-            learner_rec = self.learner.get('concepts', {}).get(norm_name, {})
-            m = learner_rec.get('mastery', 0)
-            if m >= 0.6:
-                mastered += 1
-            elif m >= 0.3:
-                learning += 1
-            else:
-                unstudied += 1
-        
-        return {
-            'total': total,
-            'mastered': mastered,
-            'learning': learning,
-            'unstudied': unstudied,
-            'anomalies': 0
-        }
+    def setup_ui(self):
+        # Language
+        lang = get_lang()
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyle(QStyleFactory.create("Fusion"))
+        self.setFont(QFont("Segoe UI", 10))
 
-    def _view_header(self, title, subtitle="") -> QFrame:
-        """Compact unified view header: one row (title + subtitle inline)."""
-        header = QFrame()
-        header.setStyleSheet(
-            "background-color: white; border-bottom: 2px solid #1565C0;"
-        )
-        lay = QHBoxLayout(header)
-        lay.setContentsMargins(20, 7, 20, 7)
-        lay.setSpacing(10)
-        t = QLabel(str(title))
-        t.setStyleSheet("font-size: 16px; font-weight: bold; color: #1F2933;")
-        lay.addWidget(t)
-        if subtitle:
-            s = QLabel(str(subtitle))
-            s.setStyleSheet("color: #6B7A90; font-size: 11.5px;")
-            lay.addWidget(s)
-        lay.addStretch()
-        return header
+        # Central layout
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QHBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-    def _build_topbar(self) -> QFrame:
-        """Always-visible function bar: current asset, progress, quick actions."""
-        bar = QFrame()
-        bar.setStyleSheet(
-            "background-color: white; border-bottom: 1px solid #E0E0E0;"
-        )
-        lay = QHBoxLayout(bar)
-        lay.setContentsMargins(16, 8, 16, 8)
-        lay.setSpacing(12)
+        # Sidebar
+        self._sidebar = self._build_sidebar()
+        root.addWidget(self._sidebar)
 
-        self._topbar_asset = QLabel(_t("topbar_no_asset"))
-        self._topbar_asset.setStyleSheet(
-            "font-size: 13.5px; font-weight: bold; color: #1F2933;"
-        )
-        lay.addWidget(self._topbar_asset)
+        # Main area: topbar + content stack (7 pages)
+        main_area = QWidget()
+        main_layout = QVBoxLayout(main_area)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+        self._topbar = self._build_topbar()
+        self.topbar = self._topbar
+        main_layout.addWidget(self._topbar)
+        self.content_stack = QStackedWidget()
+        main_layout.addWidget(self.content_stack, 1)
+        root.addWidget(main_area, 1)
 
-        self._topbar_progress = QLabel("")
-        self._topbar_progress.setStyleSheet("font-size: 12px; color: #6B7A90;")
-        lay.addWidget(self._topbar_progress)
-        lay.addStretch()
+        # Build all 7 views
+        self._build_import_view()
+        self._build_knowledge_view()
+        self._build_concept_map_view()
+        self._build_source_view()
+        self._build_teach_view()
+        self._build_learner_view()
+        self._build_teacher_view()
+        # View constructors may trigger nested Qt layout ownership changes;
+        # publish the final live graph after the complete view tree exists.
+        self._dash_graph = self._knowledge_view._dash_graph
 
-        # language switcher
-        self._lang_combo = QComboBox()
-        self._lang_combo.setStyleSheet(
-            "QComboBox { border: 1px solid #BDBDBD; border-radius: 6px;"
-            "padding: 4px 8px; font-size: 12px; background-color: white; }"
-        )
-        for code, name in _LANGS.items():
-            self._lang_combo.addItem(name, code)
-        idx = self._lang_combo.findData(_get_lang())
-        if idx >= 0:
-            self._lang_combo.setCurrentIndex(idx)
-        self._lang_combo.currentIndexChanged.connect(self._apply_language)
-        lay.addWidget(self._lang_combo)
-
-        for key, view_name in [
-            ("quick_teach", "teach"),
-            ("quick_map", "concept_map"),
-            ("quick_source", "source"),
-        ]:
-            btn = QPushButton(_t(key))
-            btn.setStyleSheet(
-                "QPushButton { background-color: white; color: #1565C0;"
-                "border: 1px solid #BBDEFB; border-radius: 6px; padding: 6px 14px;"
-                "font-size: 12.5px; }"
-                "QPushButton:hover { background-color: #E3F2FD; }"
-            )
-            btn.clicked.connect(lambda checked, v=view_name: self.on_nav_click(v))
-            lay.addWidget(btn)
-        return bar
-
-    def _update_topbar(self) -> None:
-        """Refresh the top bar after asset/learner changes."""
-        if not self.current_asset_id or self.current_asset_id not in self.assets:
-            self._topbar_asset.setText(_t("topbar_no_asset"))
-            self._topbar_progress.setText("")
-            return
-        data = self.assets[self.current_asset_id]
-        title = data.get("title", self.current_asset_id)
-        self._topbar_asset.setText(f"📚 {title}")
-        stats = self._compute_stats()
-        due = due_for_review(self.learner)
-        self._topbar_progress.setText(_t(
-            "topbar_progress",
-            m=stats["mastered"], t=stats["total"],
-            l=stats["learning"], r=len(due),
-        ))
-
-    def _apply_language(self) -> None:
-        """Switch UI language and rebuild everything."""
-        code = self._lang_combo.currentData()
-        if not code or code == _get_lang():
-            return
-        _set_lang(code)
-        _save_lang()
-
-        # rebuild topbar
-        new_bar = self._build_topbar()
-        self._main_layout.replaceWidget(self.topbar, new_bar)
-        self.topbar.deleteLater()
-        self.topbar = new_bar
-
-        # rebuild sidebar
-        new_sb = self._build_sidebar()
-        self._body_layout.replaceWidget(self._sidebar, new_sb)
-        self._sidebar.deleteLater()
-        self._sidebar = new_sb
-
-        # rebuild all views
-        self._rebuild_all_views()
-
-    def _on_source_search(self) -> None:
-        """Highlight all occurrences of the term in the source reader."""
-        sv = getattr(self, "_source_view_widget", None)
-        if sv is None:
-            return
-        term = self._source_search.text().strip()
-        n = sv.search_all(term) if term else 0
-        if n:
-            self._source_search_status.setText(_t("search_hits", n=n))
-        else:
-            self._source_search_status.setText(_t("search_none"))
-
-    def _start_topic(self, hub_cid: str) -> None:
-        """Start learning a topic: pick the first unlearned concept in the
-        cluster (learning-path order) and open the teach view."""
-        asset = self.get_asset()
-        if asset is None:
-            return
-        # find the cluster containing the hub
-        for cl in topic_clusters(asset):
-            if cl["id"] == hub_cid:
-                order = [c for c in asset.learning_path if c in cl["concept_ids"]]
-                order += [c for c in cl["concept_ids"] if c not in order]
-                target = None
-                for cid in order:
-                    if cid not in self.learner.get("assets", {}).get(
-                            self.current_asset_id, {}).get("completed", []):
-                        target = asset.concept_by_id(cid)
-                        break
-                if target is None and order:
-                    target = asset.concept_by_id(order[0])
-                if target is not None:
-                    self._start_teach_by_name(target.name)
-                return
-
-    def _on_toc_clicked(self, item) -> None:
-        """TOC click: chapter -> locate in source; concept -> open panel."""
-        kind, payload = item.data(0, Qt.ItemDataRole.UserRole) or ("", "")
-        if kind == "chapter":
-            self.on_nav_click("source")
-            sv = getattr(self, "_source_view_widget", None)
-            if sv is not None:
-                sv.scroll_to_text(payload)
-        elif kind == "concept":
-            self._open_concept_panel(payload)
-
-    def _build_sidebar(self):
-        sidebar = QFrame()
-        sidebar.setFixedWidth(220)
-        sidebar.setStyleSheet("background-color: #1A237E;")
-
-        layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(16, 20, 16, 16)
-        layout.setSpacing(12)
-
-        logo = QLabel("ExpertAnything")
-        logo.setStyleSheet("color: white; font-size: 16px; font-weight: bold;")
-        layout.addWidget(logo)
-
-        layout.addStretch()
-
-        # Primary navigation — the cognitive map is the home; learning happens on the map
-        primary = [("concept_map", "nav_map"), ("teach", "nav_teach"), ("import", "nav_import")]
-
-        def add_nav(view_name, key, muted=False):
-            btn = QPushButton(_t(key))
-            if muted:
-                btn.setStyleSheet(
-                    "QPushButton { background-color: transparent; color: #7986CB;"
-                    "text-align: left; padding: 8px 12px; border: none;"
-                    "border-radius: 6px; font-size: 12.5px; }"
-                    "QPushButton:hover { background-color: #283593; color: white; }"
-                )
-            else:
-                btn.setStyleSheet(
-                    "QPushButton { background-color: transparent; color: #E3F2FD;"
-                    "text-align: left; padding: 10px 12px; border: none;"
-                    "border-radius: 6px; font-size: 13.5px; font-weight: bold; }"
-                    "QPushButton:hover { background-color: #283593; color: white; }"
-                )
-            btn.clicked.connect(lambda checked, v=view_name: self.on_nav_click(v))
-            layout.addWidget(btn)
-
-        for view_name, key in primary:
-            add_nav(view_name, key, muted=False)
-
-        # Muted "explore" group — meta views, secondary to learning
-        explore_label = QLabel(_t("explore_group"))
-        explore_label.setStyleSheet(
-            "color: #5C6BC0; font-size: 10.5px; letter-spacing: 1px; padding: 6px 12px 0;"
-        )
-        layout.addWidget(explore_label)
-
-        for view_name, key in [
-            ("knowledge", "nav_knowledge"),
-            ("source", "nav_source"),
-            ("learner", "nav_learner"),
-            ("teacher", "nav_teacher"),
-        ]:
-            add_nav(view_name, key, muted=True)
-
-        layout.addStretch()
-
-        assets_label = QLabel(_t("assets_label"))
-        assets_label.setStyleSheet("color: #90CAF9; font-size: 11px;")
-        layout.addWidget(assets_label)
-
-        # Keep assets in a dedicated container. Refreshing this container
-        # preserves every asset and never disturbs the surrounding sidebar.
-        self._asset_list_widget = QWidget()
-        self._asset_list_layout = QVBoxLayout(self._asset_list_widget)
-        self._asset_list_layout.setContentsMargins(0, 0, 0, 0)
-        self._asset_list_layout.setSpacing(4)
-        layout.addWidget(self._asset_list_widget)
-        self._asset_buttons = {}
-        self._populate_asset_buttons()
-
-        return sidebar
-
-    def on_nav_click(self, view_name):
-        """Handle navigation between views."""
-        view_map = {
-            "import": 0,
-            "knowledge": 1,
-            "concept_map": 2,
-            "source": 3,
-            "teach": 4,
-            "learner": 5,
-            "teacher": 6,
-        }
-        if view_name in view_map:
-            self.content_stack.setCurrentIndex(view_map[view_name])
-
-    def _rebuild_all_views(self):
-        """Rebuild every view (after asset switch) without leaking widgets."""
-        self._update_topbar()
-        # clear stale widget refs BEFORE rebuilding so no handler can touch a
-        # deleted object, and the new views re-register fresh references
-        self._teach_view = None
-        self._teach_graph = None
-        self._graph_view = None
-        self._source_view_widget = None
-        self._dash_graph = None
-        self._path_ladder = None
-        self._teach_answer_input = None
-        self.import_view = self._build_import_view()
-        self.knowledge_view = self._build_knowledge_view()
-        self.concept_map_view = self._build_concept_map_view()
-        self.source_view = self._build_source_view()
-        self.teach_view = self._build_teach_view()
-        self.learner_view = self._build_learner_view()
-        self.teacher_view = self._build_teacher_view()
-        while self.content_stack.count():
-            w = self.content_stack.widget(0)
-            self.content_stack.removeWidget(w)
-            w.deleteLater()
+        # Add views to content stack
         for v in [
-            self.import_view,
-            self.knowledge_view,
-            self.concept_map_view,
-            self.source_view,
-            self.teach_view,
-            self.learner_view,
-            self.teacher_view,
+            self._import_view,
+            self._knowledge_view,
+            self._concept_map_view,
+            self._source_view,
+            self._teach_view,
+            self._learner_view,
+            self._teacher_view,
         ]:
             self.content_stack.addWidget(v)
 
-    def on_asset_select(self, asset_id):
-        """Handle asset selection (rebuild all views, show knowledge model)."""
-        self.current_asset_id = asset_id
-        # Update checked state on the sidebar buttons
-        for aid, btn in getattr(self, "_asset_buttons", {}).items():
-            btn.setChecked(aid == asset_id)
-        # Refresh all views
-        self._rebuild_all_views()
-        self.content_stack.setCurrentIndex(2)  # cognitive map is the home view
-
-    def _get_stylesheet(self):
-        return """
-            QMainWindow {
-                background-color: #FAFAFA;
-            }
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: #F5F5F5;
-                width: 8px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical {
-                background: #BDBDBD;
-                min-height: 30px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #9E9E9E;
-            }
-            QPushButton {
-                background-color: transparent;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-            }
-        """
-
-    def _build_global_asset(self):
-        """Virtual asset merging every loaded asset (global knowledge map).
-
-        Concepts of the current asset keep their ids and colours; concepts
-        from other assets get prefixed ids and are rendered grey. Concepts
-        shared across assets (same normalized name) are linked with a
-        '共享概念' edge so the map shows cross-book connections.
-        """
-        from uuid import uuid4 as _uuid4
-        from expert_anything.core.learner import normalize as _norm
-
-        cur = self.get_asset()
-        concepts, relations, id_map, grey_ids = [], [], {}, set()
-        name_to_ids = {}
-        for aid, data in self.assets.items():
-            is_cur = aid == self.current_asset_id
-            for c in data.get("concepts", []):
-                cid = c["id"] if is_cur else f"{aid}:{c['id']}"
-                concepts.append(Concept(
-                    id=cid, name=c.get("name", "?"),
-                    definition=c.get("definition", ""),
-                    summary=c.get("summary", ""),
-                    evidence=c.get("evidence", []),
-                ))
-                if not is_cur:
-                    grey_ids.add(cid)
-                id_map[(aid, c["id"])] = cid
-                name_to_ids.setdefault(_norm(c.get("name", "")), []).append(cid)
-            for r in data.get("relations", []):
-                s = id_map.get((aid, r.get("source")))
-                t = id_map.get((aid, r.get("target")))
-                if s and t and s != t:
-                    relations.append(Relation(
-                        id=str(_uuid4()), source=s, target=t,
-                        label=r.get("label", ""), type="related"))
-        for norm, ids in name_to_ids.items():
-            for a in ids:
-                for b in ids:
-                    if a < b:
-                        relations.append(Relation(
-                            id=str(_uuid4()), source=a, target=b,
-                            label=_t("share_concept"), type="related"))
-
-        # fuse LLM compressed-layer concepts (external_concepts) as grey nodes
-        # with '外部' edges — the compressed knowledge layer made navigable.
-        ext_id = 0
-        for aid, data in self.assets.items():
-            tp = self.teacher_models.get(aid)
-            if not tp:
-                continue
-            for n in tp.get("concept_notes", []):
-                src_id = id_map.get((aid, n.get("concept_id")))
-                if not src_id:
-                    continue
-                for ec in n.get("external_concepts", []) or []:
-                    ename = str(ec).strip()
-                    if not ename:
-                        continue
-                    eid = f"ext:{aid}:{ext_id}"
-                    ext_id += 1
-                    concepts.append(Concept(
-                        id=eid, name=ename, definition="",
-                        summary="（外部概念：来自大模型压缩知识层，不在本书中）",
-                        evidence=[],
-                    ))
-                    grey_ids.add(eid)
-                    relations.append(Relation(
-                        id=str(_uuid4()), source=src_id, target=eid,
-                        label=_t("edge_external"), type="related"))
-
-        # supplement edges from teacher notes: prerequisites -> '前置' edges,
-        # connections mentioning another concept -> '关联' edges. This makes
-        # the map richer even when the raw relation list is sparse.
-        for aid, data in self.assets.items():
-            tp = self.teacher_models.get(aid)
-            if not tp:
-                continue
-            name_to_id_asset = {
-                _norm(c.get("name", "")): id_map.get((aid, c["id"]))
-                for c in data.get("concepts", [])
-            }
-            for n in tp.get("concept_notes", []):
-                src_id = id_map.get((aid, n.get("concept_id")))
-                if not src_id:
-                    continue
-                for pre in n.get("prerequisites", []) or []:
-                    tgt = name_to_id_asset.get(_norm(pre))
-                    if tgt and tgt != src_id:
-                        relations.append(Relation(
-                            id=str(_uuid4()), source=tgt, target=src_id,
-                            label=_t("edge_prereq"), type="related"))
-                for conn in n.get("connections", []) or []:
-                    for c in data.get("concepts", []):
-                        cname = c.get("name", "")
-                        tgt = id_map.get((aid, c["id"]))
-                        if cname and tgt and tgt != src_id and cname in conn:
-                            relations.append(Relation(
-                                id=str(_uuid4()), source=src_id, target=tgt,
-                                label=_t("edge_related"), type="related"))
-        path = []
-        if cur is not None:
-            path = [id_map.get((self.current_asset_id, cid), cid)
-                    for cid in cur.learning_path]
-        return KnowledgeAsset(
-            asset_id="global", type="global", title=_t("global_map_title"),
-            source_name="", created_at="", source_text="",
-            concepts=concepts, relations=relations, learning_path=path,
-        ), grey_ids
-
-    def _open_concept_panel(self, concept_id: str) -> None:
-        """Open the concept hub dialog for a concept id."""
-        asset = self.get_asset()
-        if asset is None or not concept_id:
-            return
-        teacher = None
-        td = self.teacher_models.get(self.current_asset_id)
-        if td:
-            try:
-                teacher = TeacherModel.from_dict(td)
-            except Exception:
-                teacher = None
-        panel = ConceptDetailPanel(
-            asset, concept_id, self.learner, teacher, self
+        # Wire ViewManager signals
+        self._view_manager = ViewManager(self.content_stack)
+        self._view_manager.register_views(
+            [
+                self._import_view,
+                self._knowledge_view,
+                self._concept_map_view,
+                self._source_view,
+                self._teach_view,
+                self._learner_view,
+                self._teacher_view,
+            ]
         )
-        panel.teach_requested.connect(self._start_teach_by_name)
-        panel.focus_requested.connect(self._focus_in_graph)
-        panel.evidence_requested.connect(self._jump_to_evidence)
-        panel.incorporate_requested.connect(self._on_incorporate_comparison)
-        self._concept_panel = panel  # keep a reference (prevent GC)
-        panel.show()
+        self._view_manager.navigate_requested.connect(self.on_nav_click)
+        self._view_manager.refresh_requested.connect(self._refresh_all_views)
 
-    def _open_concept_panel_by_name(self, concept_name: str) -> None:
-        asset = self.get_asset()
-        if asset is None:
-            return
-        c = asset.concept_by_name(concept_name)
-        if c is not None:
-            self._open_concept_panel(c.id)
+        # Default: knowledge map view
+        self.content_stack.setCurrentIndex(2)
+        self._update_topbar()
 
-    def _start_teach_by_name(self, concept_name: str, review: bool = False) -> None:
-        """Select a concept in the teach view and start the lesson.
+    # ---- topbar ----------------------------------------------------------------
 
-        ``review=True`` starts a review lesson (vary>0 -> the LLM is told to
-        explain from a different angle so the review adds something new).
-        """
-        self.on_nav_click("teach")
-        idx = self._teach_concept_list.findText(concept_name)
-        if idx >= 0:
-            self._teach_concept_list.setCurrentIndex(idx)
-        self._review_mode = review
-        self._on_start_teach()
+    def _build_topbar(self):
+        bar = QWidget()
+        bar.setStyleSheet("background-color: white; border-bottom: 2px solid #E0E0E0;")
+        bar.setFixedHeight(48)
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(20, 0, 16, 0)
+        lay.setSpacing(12)
 
-    def _focus_in_graph(self, concept_id: str) -> None:
-        self.on_nav_click("concept_map")
-        if getattr(self, "_graph_view", None) is not None:
-            self._graph_view.focus_concept(concept_id)
+        self._topbar_title = QLabel()
+        self._topbar_title.setStyleSheet(
+            "font-size: 14px; font-weight: bold; color: #1F2933;"
+        )
+        lay.addWidget(self._topbar_title)
 
-    def _jump_to_evidence(self, concept_id: str, evidence: str) -> None:
-        self.on_nav_click("source")
-        if getattr(self, "_source_view_widget", None) is not None:
-            self._source_view_widget.scroll_to_concept(concept_id, evidence)
+        self._topbar_progress = QLabel()
+        self._topbar_progress.setStyleSheet("color: #6B7A90; font-size: 11.5px;")
+        lay.addWidget(self._topbar_progress)
 
-    def on_card_click(self, concept_name):
-        """Handle concept card click - start teaching session."""
-        # Navigate to teach view
-        self.on_nav_click("teach")
-        # Find and select the concept
-        idx = self._teach_concept_list.findText(concept_name)
-        if idx >= 0:
-            self._teach_concept_list.setCurrentIndex(idx)
+        lay.addStretch()
 
-    def _on_start_teach(self):
-        """Handle starting teaching session."""
-        concept_name = self._teach_concept_list.currentText()
-        if not concept_name:
-            QMessageBox.warning(self, _t("hint"), _t("pick_concept_first"))
-            return
+        # Language switcher
+        self._lang_combo = QComboBox()
+        for _code, _name in LANGS.items():
+            self._lang_combo.addItem(_name, _code)
+        _lang_idx = self._lang_combo.findData(get_lang())
+        if _lang_idx >= 0:
+            self._lang_combo.setCurrentIndex(_lang_idx)
+        self._lang_combo.setStyleSheet(
+            "QComboBox { border: 1px solid #E0E0E0; border-radius: 4px;"
+            "padding: 3px 8px; font-size: 11.5px; background-color: white; }"
+        )
+        self._lang_combo.currentIndexChanged.connect(self._apply_language)
+        lay.addWidget(QLabel(_t("lang") + ": "))
+        lay.addWidget(self._lang_combo)
 
-        asset = self.get_asset()
-        if not asset:
-            return
+        # Shortcut buttons
+        for label, view in [
+            ("📖 " + _t("btn_teach"), "teach"),
+            ("🗺️ " + _t("btn_map"), "concept_map"),
+            ("📄 " + _t("btn_source"), "source"),
+        ]:
+            btn = QPushButton(label)
+            btn.setStyleSheet(
+                "QPushButton { background-color: transparent; color: #1565C0;"
+                "border: 1px solid #BBDEFB; border-radius: 6px;"
+                "padding: 5px 12px; font-size: 12px; }"
+                "QPushButton:hover { background-color: #E3F2FD; }"
+            )
+            btn.clicked.connect(lambda checked, v=view: self.on_nav_click(v))
+            lay.addWidget(btn)
 
-        # Find the concept
-        concept = None
-        for c in asset.concepts:
-            if normalize(c.name) == normalize(concept_name):
-                concept = c
-                break
+        return bar
 
-        if not concept:
-            QMessageBox.warning(self, _t("hint"), _t("concept_not_found", name=concept_name))
-            return
+    def _update_topbar(self):
+        if self.current_asset_id and self.current_asset_id in self.assets:
+            data = self.assets[self.current_asset_id]
+            title = (
+                data.get("title") or data.get("source_name") or self.current_asset_id
+            )
+            stats = self._compute_stats()
+            self._topbar_title.setText(f"📚 {title}")
+            self._topbar_progress.setText(
+                _t(
+                    "topbar_progress",
+                    m=stats["mastered"],
+                    t=stats["total"],
+                    l=stats["learning"],
+                    r=len(due_for_review(self.learner)),
+                )
+            )
+        else:
+            self._topbar_title.setText(_t("app_name"))
+            self._topbar_progress.setText("")
 
-        # Create tutor if needed
-        if self.current_asset_id:
-            self.current_tutor = Tutor(asset, llm=self.llm_client)
+    # ---- sidebar ----------------------------------------------------------------
 
-        # Show teaching content (review -> fresh angle)
-        vary = 1 if getattr(self, "_review_mode", False) else 0
-        self._show_teaching_content(concept, vary=vary)
+    def _build_sidebar(self):
+        sidebar = QWidget()
+        sidebar.setFixedWidth(220)
+        sidebar.setStyleSheet("background-color: #1A237E;")
+        lay = QVBoxLayout(sidebar)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+
+        # Logo area
+        logo = QWidget()
+        logo.setStyleSheet("background-color: #0D1B4C; padding: 18px 0 12px;")
+        logo_lay = QVBoxLayout(logo)
+        logo_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo_lay.setSpacing(2)
+        icon_lbl = QLabel("🧠")
+        icon_lbl.setStyleSheet("font-size: 28px; text-align: center;")
+        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo_lay.addWidget(icon_lbl)
+        name_lbl = QLabel("ExpertAnything")
+        name_lbl.setStyleSheet(
+            "color: white; font-size: 13px; font-weight: bold; text-align: center;"
+        )
+        name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo_lay.addWidget(name_lbl)
+        lay.addWidget(logo)
+
+        # Primary nav
+        nav = QWidget()
+        nav_lay = QVBoxLayout(nav)
+        nav_lay.setContentsMargins(8, 12, 8, 0)
+        nav_lay.setSpacing(4)
+        for icon, label, view in [
+            ("🗺️", "nav_map", "concept_map"),
+            ("📖", "nav_teach", "teach"),
+            ("📥", "nav_import", "import"),
+        ]:
+            btn = QPushButton(f"{icon}  {self._t(label)}")
+            btn.setStyleSheet(
+                "QPushButton { background-color: transparent; color: white;"
+                "text-align: left; padding: 10px 14px; border: none;"
+                "border-radius: 6px; font-size: 13px; }"
+                "QPushButton:hover { background-color: #3949AB; }"
+            )
+            btn.clicked.connect(lambda checked, v=view: self.on_nav_click(v))
+            nav_lay.addWidget(btn)
+        lay.addWidget(nav)
+
+        # Divider
+        div = QWidget()
+        div.setFixedHeight(1)
+        div.setStyleSheet("background-color: #3949AB; margin: 8px 16px;")
+        lay.addWidget(div)
+
+        # Secondary nav
+        sec = QWidget()
+        sec_lay = QVBoxLayout(sec)
+        sec_lay.setContentsMargins(8, 0, 8, 0)
+        sec_lay.setSpacing(4)
+        for icon, label, view in [
+            ("📊", "nav_knowledge", "knowledge"),
+            ("📄", "nav_source", "source"),
+            ("🧠", "nav_learner", "learner"),
+            ("👨‍🏫", "nav_teacher", "teacher"),
+        ]:
+            btn = QPushButton(f"{icon}  {self._t(label)}")
+            btn.setStyleSheet(
+                "QPushButton { background-color: transparent; color: #9FA8DA;"
+                "text-align: left; padding: 8px 14px; border: none;"
+                "border-radius: 6px; font-size: 12.5px; }"
+                "QPushButton:hover { background-color: #283593; color: white; }"
+            )
+            btn.clicked.connect(lambda checked, v=view: self.on_nav_click(v))
+            sec_lay.addWidget(btn)
+        lay.addWidget(sec)
+
+        # Asset list
+        self._asset_list_widget = QWidget()
+        al_lay = QVBoxLayout(self._asset_list_widget)
+        al_lay.setContentsMargins(8, 12, 8, 8)
+        al_lay.setSpacing(4)
+        al_title = QLabel(_t("nav_assets"))
+        al_title.setStyleSheet("color: #7986CB; font-size: 10.5px; font-weight: bold;")
+        al_lay.addWidget(al_title)
+        self._asset_list_layout = al_lay
+        self._asset_buttons: dict = {}
+        lay.addWidget(self._asset_list_widget, 1)
+        self._refresh_asset_list()
+
+        return sidebar
+
+    # ---- view building ---------------------------------------------------------
+
+    def _build_import_view(self):
+        view = ImportView(self)
+        view.asset_extracted.connect(self._on_asset_extracted)
+        view.teacher_built.connect(self._on_teacher_built)
+        view.navigate_requested.connect(self.on_nav_click)
+        self._import_view = view
+        self.import_view = view
+
+    def _build_knowledge_view(self):
+        view = KnowledgeView(self)
+        view.teach_requested.connect(self._on_teach_request)
+        view.open_concept_panel.connect(self._on_open_concept_panel)
+        view.focus_graph.connect(self._on_focus_graph)
+        self._knowledge_view = view
+        self.knowledge_view = view
+        # Compatibility attribute used by tests and external callers.
+        self._dash_graph = view._dash_graph
+
+    def _build_concept_map_view(self):
+        view = ConceptMapView(self)
+        view.teach_requested.connect(self._on_teach_request)
+        view.open_concept_panel.connect(self._on_open_concept_panel)
+        view.navigate_source.connect(self._on_jump_to_evidence)
+        self._concept_map_view = view
+        self.concept_map_view = view
+
+    def _build_source_view(self):
+        view = SourceView(self)
+        view.open_concept_panel.connect(self._on_open_concept_panel)
+        self._source_view = view
+        self.source_view = view
+        self._source_view_widget = view._source_widget
+
+    def _build_teach_view(self):
+        view = TeachView(self)
+        view.teach_started.connect(self._on_teach_started)
+        view.stuck_detected.connect(self._on_stuck_detected)
+        view.followup_done.connect(self._on_followup_done)
+        view.harness_adopted.connect(self._on_adopt_harness)
+        view.harness_transferred.connect(self._on_transfer_harness)
+        view.evaluate_recorded.connect(self._on_evaluate_recorded)
+        self._teach_view = view
+        self.teach_view = view
+        self._teach_graph = view._graph
+
+    def _build_learner_view(self):
+        view = LearnerView(self)
+        view.teach_requested.connect(self._on_teach_request)
+        view.export_report.connect(self._on_export_report)
+        view.export_html.connect(self._on_export_html)
+        self._learner_view = view
+        self.learner_view = view
+
+    def _build_teacher_view(self):
+        view = TeacherView(self)
+        view.open_concept_panel.connect(self._on_open_concept_panel)
+        self._teacher_view = view
+        self.teacher_view = view
+
+    # ---- knowledge graph helpers -----------------------------------------------
+
+    def _teach_graph_ref(self) -> KnowledgeGraphView:
+        if self._teach_graph is None:
+            self._teach_graph = KnowledgeGraphView()
+            self._teach_graph.concept_clicked.connect(self._on_graph_teach_click)
+            self._teach_graph.node_single_clicked.connect(self._on_graph_node_clicked)
+        return self._teach_graph
+
+    def _dash_graph_ref(self) -> KnowledgeGraphView:
+        # The dashboard graph belongs to KnowledgeView.  A rebuilt view must
+        # always receive a fresh QObject; retaining the old C++ wrapper after
+        # deleteLater() leaves MainWindow pointing at an invalid object.
+        graph = KnowledgeGraphView()
+        graph.concept_clicked.connect(self._on_graph_teach_click)
+        graph.node_single_clicked.connect(self._on_graph_node_clicked)
+        return graph
+
+    def _graph_view_ref(self) -> KnowledgeGraphView:
+        if self._graph_view is None:
+            self._graph_view = KnowledgeGraphView()
+            self._graph_view.concept_clicked.connect(self._on_graph_teach_click)
+            self._graph_view.node_single_clicked.connect(self._on_graph_node_clicked)
+        return self._graph_view
+
+    def _path_ladder_ref(self) -> PathLadderView:
+        if self._path_ladder is None:
+            self._path_ladder = PathLadderView()
+            self._path_ladder.concept_clicked.connect(self._on_graph_teach_click)
+        return self._path_ladder
+
+    def _map_detail_ref(self) -> NodeDetailCard:
+        if self._map_detail is None:
+            self._map_detail = NodeDetailCard()
+        return self._map_detail
+
+    # ---- navigation & view switching -------------------------------------------
+
+    VIEW_MAP = {
+        "import": 0,
+        "knowledge": 1,
+        "concept_map": 2,
+        "source": 3,
+        "teach": 4,
+        "learner": 5,
+        "teacher": 6,
+    }
+
+    def on_nav_click(self, view_name: str):
+        idx = self.VIEW_MAP.get(view_name)
+        if idx is not None:
+            self.content_stack.setCurrentIndex(idx)
+
+    def _on_teach_request(self, concept_name: str):
+        idx = self.VIEW_MAP.get("teach")
+        if idx is not None:
+            self.content_stack.setCurrentIndex(idx)
+        if hasattr(self, "_teach_view"):
+            self._teach_view.start_teach_by_name(concept_name)
+
+    # ---- delegation to extracted views (compatibility shim) -------------------
+    # These methods delegate to the view classes that were extracted from
+    # MainWindow.  They exist so that tests and external callers that reference
+    # MainWindow directly continue to work during the transition period.
+
+    @property
+    def _topbar_asset(self):
+        """Alias for _topbar_title (tests expect _topbar_asset)."""
+        return self._topbar_title
 
     def _show_teaching_content(self, concept, vary=0, style=None):
-        """Show teaching content for a concept (vary>0 = fresh angle, review).
-
-        ``style`` passes an explicit tutor style (e.g. an adopted AutoHarness
-        evolution candidate) — Tutor.teach then skips its own stuck rotation.
-        """
-        if not self.current_tutor:
-            asset = self.get_asset()
-            self.current_tutor = Tutor(asset, llm=self.llm_client)
-        
-        # Show progress
-        self._teach_progress.setVisible(True)
-        self._teach_progress.setValue(30)
-        self._teach_result_label.setText(_t("generating_lesson"))
-        self._teach_result_label.repaint()
-
-        # focus the position graph on the concept being taught
-        try:
-            asset = self.get_asset()
-            if asset is not None:
-                mastery_map = {}
-                for c in asset.concepts:
-                    norm_name = normalize(c.name)
-                    mastery_map[c.id] = (
-                        self.learner.get('concepts', {}).get(norm_name, {}).get('mastery', 0.0)
-                    )
-                anomaly_ids = set()
-                td = self.teacher_models.get(self.current_asset_id)
-                if td:
-                    try:
-                        anomaly_ids = anomaly_concept_ids(
-                            asset, TeacherModel.from_dict(td)
-                        )
-                    except Exception:
-                        anomaly_ids = set()
-                self._teach_graph.set_asset(
-                    asset,
-                    mastery_map=mastery_map,
-                    anomaly_ids=anomaly_ids,
-                    current_id=concept.id,
-                )
-                self._teach_graph.focus_concept(concept.id)
-                self._teach_graph.setVisible(True)
-        except Exception:
-            tg = getattr(self, "_teach_graph", None)
-            if tg is not None:
-                tg.setVisible(False)
-        
-        # Run teaching in background
-        self._teach_vary = vary
-        self._teach_worker = TeachWorker(self.current_tutor, concept,
-                                         vary=vary, style=style)
-        self._teach_worker.finished.connect(self._on_teach_finished)
-        self._teach_worker.error.connect(self._on_teach_error)
-        self._teach_worker.start()
-
-    def _on_teach_finished(self, result):
-        """Handle teaching completion."""
-        self._teach_progress.setValue(100)
-        
-        # Display teaching content
-        self._display_teach_result(result)
-
-    def _on_teach_error(self, error_msg):
-        """Handle teaching error."""
-        self._teach_progress.setVisible(False)
-        QMessageBox.critical(self, _t("error"), _t("teach_error", msg=error_msg))
+        """Delegate to TeachView."""
+        self._teach_view._show_teaching_content(concept, vary=vary, style=style)
 
     def _display_teach_result(self, result):
-        """Display teaching result in the UI (structured cards)."""
-        old = self._teach_result_area.takeWidget()
-        if old is not None:
-            old.deleteLater()
+        """Delegate to TeachView._display_result."""
+        self._teach_view._display_result(result)
 
-        view = TeachResultView(result)
-        view.submit_requested.connect(self._on_submit_answer)
-        view.followup_requested.connect(self._on_followup)
-        view.neighbor_clicked.connect(self._start_teach_by_name)
-        view.quiz_requested.connect(self._on_quiz_requested)
-        view.quiz_result.connect(self._on_quiz_result)
-        view.practice_requested.connect(self._on_practice_requested)
-        view.practice_submit.connect(self._on_practice_submit)
-        view.harness_adopt_requested.connect(self._on_adopt_harness)
-        view.harness_transfer_requested.connect(self._on_transfer_harness)
-        self._teach_lesson = result
-        if view.answer_input is not None:
-            self._teach_answer_input = view.answer_input
-        self._teach_view = view
-        self._teach_concept_now = result.get("concept", "")
-        self._teach_result_area.setWidget(view)
+    @property
+    def _teach_concept_now(self):
+        """Delegate to TeachView's current concept."""
+        return getattr(self._teach_view, "_teach_concept_now", "")
 
-        # Evolution audit trail: every teaching view shows why the harness
-        # changed (reason) and how (old -> new), making the automation traceable
-        view.append_harness_history(getattr(self, "_harness_history", []))
+    @_teach_concept_now.setter
+    def _teach_concept_now(self, value):
+        self._teach_view._teach_concept_now = value
 
-        # related-concepts navigation (follow the knowledge network)
-        asset = self.get_asset()
-        if asset is not None:
-            concept = asset.concept_by_name(result.get("concept", ""))
-            if concept is not None:
-                seen, neighbors = set(), []
-                for r in asset.relations:
-                    if r.source == concept.id:
-                        other = asset.concept_by_id(r.target)
-                        if other and other.id not in seen:
-                            seen.add(other.id)
-                            neighbors.append((r.label or _t("edge_related"), other.name, other.id))
-                    elif r.target == concept.id:
-                        other = asset.concept_by_id(r.source)
-                        if other and other.id not in seen:
-                            seen.add(other.id)
-                            neighbors.append((r.label or _t("edge_related"), other.name, other.id))
-                    if len(neighbors) >= 6:
-                        break
-                view.set_neighbors(neighbors)
-
-        self._teach_progress.setVisible(False)
-        self._teach_result_label.setText("")
-
-    def _on_practice_requested(self) -> None:
-        """Generate a hands-on task for the current concept."""
-        if self.current_tutor is None:
-            asset = self.get_asset()
-            if asset is None:
-                return
-            self.current_tutor = Tutor(asset, llm=self.llm_client)
-        concept = None
-        asset = self.get_asset()
-        if asset is not None:
-            concept = asset.concept_by_name(getattr(self, "_teach_concept_now", "") or "")
-        view = getattr(self, "_teach_view", None)
-        if concept is None or view is None:
-            return
-        view.show_practice(self.current_tutor.generate_practice(concept))
-
-    def _on_practice_submit(self, answer: str) -> None:
-        """Evaluate the practice submission and record the score."""
-        if self.current_tutor is None:
-            asset = self.get_asset()
-            if asset is None:
-                return
-            self.current_tutor = Tutor(asset, llm=self.llm_client)
-        concept = None
-        asset = self.get_asset()
-        if asset is not None:
-            concept = asset.concept_by_name(getattr(self, "_teach_concept_now", "") or "")
-        view = getattr(self, "_teach_view", None)
-        if concept is None or view is None:
-            return
-        task = getattr(view, "_practice_data", None) or {}
-        view.show_practice_result({
-            "score": 0.5, "feedback": _t("practice_evaluating"), "reference": "",
-        })
-        result = self.current_tutor.evaluate_practice(
-            concept, task.get("task", ""), answer)
-        # replace the provisional card: simple approach — show the real one
-        view.show_practice_result(result)
-        try:
-            from expert_anything.core.learner import record_evaluation
-            record_evaluation(
-                self.learner,
-                concept.name,
-                asset.asset_id,
-                result.get("score", 0.0),
-                f"[实践] {answer[:60]}",
-                result.get("feedback", ""),
-                meta={"channel": "practice"},
-            )
-            self.save_learner_state()
-            self._update_topbar()
-        except Exception:
-            pass
-
-    def _on_quiz_requested(self) -> None:
-        """Generate a quick self-test for the current concept (sync, quick)."""
-        if self.current_tutor is None:
-            asset = self.get_asset()
-            if asset is None:
-                return
-            self.current_tutor = Tutor(asset, llm=self.llm_client)
-        concept = None
-        asset = self.get_asset()
-        if asset is not None:
-            concept = asset.concept_by_name(getattr(self, "_teach_concept_now", "") or "")
-        view = getattr(self, "_teach_view", None)
-        if concept is None or view is None:
-            return
-        quiz = self.current_tutor.generate_quiz(concept)
-        view.show_quiz(quiz)
-
-    def _on_quiz_result(self, score: float) -> None:
-        """Record a quiz score into the learner model (mastery update)."""
-        concept_name = getattr(self, "_teach_concept_now", "")
-        asset = self.get_asset()
-        if not concept_name or asset is None:
-            return
-        try:
-            from expert_anything.core.learner import record_evaluation
-            record_evaluation(
-                self.learner,
-                concept_name,
-                asset.asset_id,
-                score,
-                f"[自测] {score:.0%}",
-                "快速自测",
-                meta={"channel": "quiz"},
-            )
-            self.save_learner_state()
-            self._update_topbar()
-        except Exception:
-            pass
-
-    def _on_followup(self, question: str) -> None:
-        """Answer a follow-up question in the background (grounded Q&A)."""
-        if self.current_tutor is None:
-            asset = self.get_asset()
-            if asset is None:
-                return
-            self.current_tutor = Tutor(asset, llm=self.llm_client)
-        concept = None
-        asset = self.get_asset()
-        if asset is not None:
-            concept = asset.concept_by_name(self._teach_concept_now or "")
-        if concept is None:
-            return
-
-        self._followup_history = getattr(self, "_followup_history", [])
-        lesson = getattr(self, "_teach_lesson", None)
-        self._followup_worker = FollowUpWorker(
-            self.current_tutor, concept, question, lesson, self._followup_history
-        )
-        self._followup_worker.finished.connect(self._on_followup_done)
-        self._followup_worker.error.connect(
-            lambda msg: self._teach_view.append_exchange(question, _t("followup_failed", msg=msg))
-        )
-        self._followup_worker.start()
-
-    def _on_followup_done(self, question: str, answer: str) -> None:
-        if getattr(self, "_teach_view", None) is not None:
-            self._teach_view.append_exchange(question, answer)
-        self._followup_history = getattr(self, "_followup_history", [])
-        self._followup_history.append((question, answer))
-        self._followup_history = self._followup_history[-4:]
-
-        # sink the question into the teacher model (learner signals)
-        try:
-            asset = self.get_asset()
-            if asset is not None:
-                concept = asset.concept_by_name(self._teach_concept_now or "")
-                if concept is not None:
-                    teacher = None
-                    td = self.teacher_models.get(self.current_asset_id)
-                    if td:
-                        teacher = TeacherModel.from_dict(td)
-                    teacher = record_learner_question(
-                        asset, teacher, concept.id, question
-                    )
-                    save_teacher(self.current_asset_id, teacher)
-                    self.teacher_models[self.current_asset_id] = teacher.to_dict()
-        except Exception:
-            pass
-
-    def _on_submit_answer(self):
-        """Handle answer submission."""
-        box = getattr(self, "_teach_answer_input", None)
-        if box is None or not hasattr(box, "toPlainText"):
-            QMessageBox.warning(self, _t("hint"), _t("no_submittable"))
-            return
-        answer = box.toPlainText().strip()
-        if not answer:
-            QMessageBox.warning(self, _t("hint"), _t("no_answer"))
-            return
-        
-        concept_name = self._teach_concept_list.currentText()
-        if not concept_name:
-            return
-
-        asset = self.get_asset()
-        if not asset:
-            return
-        
-        # Find concept
-        concept = None
-        for c in asset.concepts:
-            if normalize(c.name) == normalize(concept_name):
-                concept = c
-                break
-        
-        if not concept:
-            QMessageBox.warning(self, _t("hint"), _t("concept_not_found", name=concept_name))
-            return
-        
-        # Evaluate answer
-        if self.current_tutor:
-            result = self.current_tutor.evaluate(concept, answer)
-            score = result.get('score', 0)
-            feedback = result.get('feedback', '')
-            understood = result.get('understood', False)
-            
-            # Record evaluation, with the learning trace (which teaching
-            # strategy produced this attempt) as meta — the trace is the
-            # source of truth for stuck detection and later audits.
-            lesson = getattr(self, "_teach_lesson", None) or {}
-            new_mastery = record_evaluation(
-                self.learner,
-                concept.name,
-                asset.asset_id,
-                score,
-                answer,
-                feedback,
-                meta={
-                    "channel": "answer",
-                    "style": lesson.get("style", ""),
-                    "vary": getattr(self, "_teach_vary", 0),
-                    "rotated_style": bool(lesson.get("rotated_style")),
-                    "judges": result.get("judges", 1),
-                },
-            )
-            self.save_learner_state()
-
-            # Stuck detection (OmniScientist "null result → re-ideate"): when
-            # repeated attempts keep failing, surface it in the Teacher Model
-            # so the anomaly-prioritized path keeps the concept in front and
-            # Tutor.teach rotates its style on the next lesson.
-            try:
-                from expert_anything.core.learner import stuck_concepts
-                from expert_anything.core.teacher import incorporate_stuck_signal
-                key = normalize(concept.name)
-                hit = next(
-                    (s for s in stuck_concepts(self.learner) if s["key"] == key), None
-                )
-                if hit is not None:
-                    teacher = None
-                    td = self.teacher_models.get(asset.asset_id)
-                    if td:
-                        teacher = TeacherModel.from_dict(td)
-                    teacher = incorporate_stuck_signal(
-                        asset, teacher, concept.id,
-                        hit["attempts"], hit["avg"],
-                    )
-                    save_teacher(asset.asset_id, teacher)
-                    self.teacher_models[asset.asset_id] = teacher.to_dict()
-
-                    # AutoHarness: a stuck signal means the *harness strategy*
-                    # itself is stale (style rotation alone already failed).
-                    # Evolve the harness structure and surface the candidate
-                    # with a one-click adopt button. 三层信号（stuck 卡壳 /
-                    # regression 回归 / sessions 会话统计）由 detect_signals
-                    # 统一检测、_o2_target_fusion 仲裁（真实数据优先于假设），
-                    # evolve_joint 融合成一个决策：多信号并发 → 青色联合卡
-                    # （带可解释诊断）；单信号 → 保持原琥珀卡 / 紫色误伤卡。
-                    try:
-                        spec = self._harness_specs.get(asset.asset_id) or \
-                            _ah.fallback_harness(concept.name)
-                        sess = _ah.load_session_reports(
-                            config.DATA_DIR / "harness_state.json")
-                        jt = _ah.evolve_joint(
-                            spec, self.learner, reports=sess,
-                            concept_name=concept.name)
-                        jc = jt.get("candidates", [])
-                        if jt.get("evolved") and jc:
-                            fam = (jt.get("reason") or "").split("+")
-                            view = getattr(self, "_teach_view", None)
-                            diag = "\n".join(jt.get("diagnosis", []))
-                            if len(fam) >= 2:
-                                # 联合卡（青色）：多信号融合 + 可解释诊断
-                                body = _t("harness_joint_body",
-                                          concept=concept.name,
-                                          reason=jt["reason"],
-                                          summary=_ah.harness_summary(jc[0]),
-                                          diag=diag[:180])
-                                if view is not None:
-                                    view.append_harness_suggestion(
-                                        _t("harness_joint_title"), body,
-                                        jc[0], source="joint",
-                                        extra={"_joint_reason": jt["reason"]})
-                                    view.append_harness_history(
-                                        self._harness_history)
-                            elif "stuck" in fam:
-                                # 纯卡壳：琥珀卡（原行为不变）
-                                body = _t("harness_suggest_body",
-                                          concept=concept.name,
-                                          attempts=hit["attempts"],
-                                          summary=_ah.harness_summary(jc[0]))
-                                if view is not None:
-                                    view.append_harness_suggestion(
-                                        _t("harness_suggest_title"), body,
-                                        jc[0])
-                                    # 审计链：把既有演化历史一并展示，让自动化可追溯
-                                    view.append_harness_history(
-                                        self._harness_history)
-                            elif "regression" in fam:
-                                rt = jt["focused"]
-                                rbody = _t("harness_regress_body",
-                                           concept=concept.name,
-                                           before=rt["before_avg"],
-                                           after=rt["after_avg"],
-                                           attempts=rt["attempts"])
-                                if view is not None:
-                                    view.append_harness_suggestion(
-                                        _t("harness_regress_title"), rbody,
-                                        jc[0], source="regression")
-                                    view.append_harness_history(
-                                        self._harness_history)
-                            else:
-                                # 纯会话统计驱动（数据信号族）：青色数据卡
-                                body = _t("harness_joint_body",
-                                          concept=concept.name,
-                                          reason=jt["reason"],
-                                          summary=_ah.harness_summary(jc[0]),
-                                          diag=diag[:180])
-                                if view is not None:
-                                    view.append_harness_suggestion(
-                                        _t("harness_joint_title"), body,
-                                        jc[0], source="joint",
-                                        extra={"_joint_reason": jt["reason"]})
-                                    view.append_harness_history(
-                                        self._harness_history)
-                        # 跨资产迁移建议：其他资产上已演化/采纳的 harness 可能
-                        # 更适合当前卡壳资产 —— OFF(本地) vs ON(待迁移) 差分后
-                        # 推荐 migrate 才弹卡（方法论：差分优于绝对线对比）
-                        transfers = self._find_transfer_candidates(asset)
-                        if transfers:
-                            best = transfers[0]
-                            ev = best["evaluation"]
-                            diff = (ev.get("comparison") or {}).get("diff") or 0
-                            body = _t("harness_transfer_body",
-                                      source=best["source_title"],
-                                      name=ev.get("spec_name", "?"),
-                                      gain=round(diff, 2),
-                                      cost=ev.get("cost_diff", 0))
-                            self._teach_view.append_transfer_suggestion(
-                                _t("harness_transfer_title"), body, best)
-                            self._teach_view.append_harness_history(
-                                self._harness_history)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            
-            # Show result as an evaluation card (reference + gap)
-            reference = result.get('reference', '')
-            gap = result.get('gap', '')
-            if getattr(self, "_teach_view", None) is not None:
-                self._teach_view.append_evaluation(
-                    score, feedback, reference, gap
-                )
-            else:
-                msg = _t("score_line", s=score) + "\n"
-                msg += _t("eval_mastered") if understood else _t("eval_keep_going")
-                msg += "\n\n" + _t("feedback_line", fb=feedback)
-                QMessageBox.information(self, _t("eval_result"), msg)
-            
-            # Refresh learner view if needed
-            self._refresh_all_views()
-        else:
-            QMessageBox.warning(self, _t("hint"), _t("start_teach_first"))
-
-    def _on_adopt_harness(self, candidate):
-        """Adopt an AutoHarness evolution candidate: persist + re-teach.
-
-        The candidate (a normalized HarnessSpec) comes from ``evolve_for_stuck``
-        (amber card), ``evolve_for_regression`` (violet card) or ``evolve_joint``
-        (cyan card). Persist it per-asset, then re-teach the current concept
-        with the candidate's style so the adopted strategy takes effect
-        immediately (explicit style makes Tutor.teach skip its own stuck
-        rotation).
-        """
-        try:
-            asset = self.get_asset()
-            if asset is None:
-                return
-            # 来源标签（stuck 演化卡 / regression 误伤卡 / joint 联合卡）由
-            # widget 在 emit 时附加在 _source 上（joint 卡还带 _joint_reason
-            # 触发家族串）；这里剥离后再持久化，不污染 HarnessSpec。
-            src = ""
-            joint_reason = ""
-            if isinstance(candidate, dict):
-                src = candidate.pop("_source", "")
-                joint_reason = candidate.pop("_joint_reason", "")
-            spec = candidate
-            old_spec = self._harness_specs.get(asset.asset_id)
-            self._harness_specs[asset.asset_id] = spec
-            _ah.save_harness_state(config.DATA_DIR / "harness_state.json",
-                                   self._harness_specs)
-            concept_now = getattr(self, "_teach_concept_now", "")
-            # Audit trail: log this adoption (append-only), so the evolution
-            # history block on the next teaching view includes it. reason:
-            # regression（误伤裁守卫，回归驱动）/ joint（联合演化，记录触发
-            # 家族串如 stuck+regression+sessions，历史块按家族拆分本地化）/
-            # manual（卡壳演化候选手动启用）
-            if src == "regression":
-                reason = "regression"
-            elif src == "joint":
-                reason = joint_reason or "joint"
-            else:
-                reason = "manual"
-            self._harness_history = _ah.record_harness_evolution(
-                config.DATA_DIR / "harness_state.json",
-                _ah.evolution_event(reason, old_spec, spec,
-                                    asset_id=asset.asset_id,
-                                    concept=concept_now))
-            QMessageBox.information(
-                self, _t("harness_suggest_title"),
-                _t("harness_adopted", name=spec.get("name", "?"),
-                   concept=concept_now),
-            )
-            style = spec.get("policy", {}).get("style")
-            concept = asset.concept_by_name(concept_now) if concept_now else None
-            if concept is not None and style:
-                self._show_teaching_content(concept, vary=1, style=style)
-        except Exception as exc:  # pragma: no cover - GUI path
-            QMessageBox.warning(self, _t("hint"), str(exc))
+    def _start_topic(self, hub_cid):
+        """Delegate to KnowledgeView._start_topic."""
+        self._knowledge_view._start_topic(hub_cid)
 
     def _find_transfer_candidates(self, asset):
-        """Find harnesses worth migrating from *other* assets onto this one.
-
-        For every other asset that already has an adopted/evolved harness
-        (``_harness_specs``), run ``evaluate_transfer``: OFF = this asset's
-        current local harness, ON = the candidate from the source asset.
-        Only ``recommendation == "migrate"`` candidates are returned, sorted
-        by differential gain (best first) — a transfer is never free, so
-        noise/no-change results are filtered out here, not shown as cards.
-
-        Returns a list of payload dicts::
-            {"source_asset_id", "source_title", "spec", "evaluation", "gain"}
-        """
+        """Find harnesses worth migrating from *other* assets onto this one."""
         out: list[dict] = []
         if asset is None:
             return out
@@ -2225,31 +699,158 @@ class MainWindow(QMainWindow):
             if src_asset is None:
                 continue
             ev = _ah.evaluate_transfer(
-                spec, src_asset, asset,
+                spec,
+                src_asset,
+                asset,
                 learner_state=self.learner,
                 local_spec=self._harness_specs.get(asset.asset_id),
             )
             if ev.get("recommendation") == "migrate":
                 diff = (ev.get("comparison") or {}).get("diff") or 0.0
-                out.append({
-                    "source_asset_id": src_aid,
-                    "source_title": src_data.get("title", src_aid),
-                    "spec": spec,
-                    "evaluation": ev,
-                    "gain": round(float(diff), 4),
-                })
+                out.append(
+                    {
+                        "source_asset_id": src_aid,
+                        "source_title": src_data.get("title", src_aid),
+                        "spec": spec,
+                        "evaluation": ev,
+                        "gain": round(float(diff), 4),
+                    }
+                )
         out.sort(key=lambda x: x["gain"], reverse=True)
         return out
 
-    def _on_transfer_harness(self, payload):
-        """Adopt a harness migrated from another asset (audit trail transfer).
+    # ---- concept panel ---------------------------------------------------------
 
-        ``payload`` is built by ``_find_transfer_candidates``: spec + source
-        asset id + the OFF/ON differential evaluation that justified the move.
-        Persistence goes through ``adopt_harness_for_asset`` (check_harness
-        gate + ``_history`` reason="transfer" with source_asset_id), then the
-        current concept is re-taught with the migrated style.
-        """
+    def _on_open_concept_panel(self, concept_id: str):
+        """Open the concept detail panel for a concept id."""
+        self._open_concept_panel(concept_id)
+
+    def _open_concept_panel(self, concept_id: str):
+        asset = self.get_asset()
+        if asset is None:
+            return
+        if self._concept_panel is not None:
+            try:
+                self._concept_panel.close()
+            except Exception:
+                pass
+        teacher = None
+        td = self.teacher_models.get(self.current_asset_id)
+        if td:
+            try:
+                teacher = TeacherModel.from_dict(td)
+            except Exception:
+                teacher = None
+        panel = ConceptDetailPanel(
+            asset,
+            concept_id,
+            self.learner,
+            teacher,
+            self,
+        )
+        panel.teach_requested.connect(self._on_teach_request)
+        panel.focus_requested.connect(self._on_focus_graph)
+        panel.evidence_requested.connect(self._on_jump_to_evidence)
+        panel.incorporate_requested.connect(self._on_incorporate_comparison)
+        panel.show()
+        self._concept_panel = panel
+
+    def _on_focus_graph(self, concept_id: str):
+        self.content_stack.setCurrentIndex(self.VIEW_MAP["concept_map"])
+        if hasattr(self, "_concept_map_view"):
+            self._concept_map_view._graph_view.focus_concept(concept_id)
+
+    def _on_jump_to_evidence(self, concept_id: str, evidence: str = ""):
+        self.content_stack.setCurrentIndex(self.VIEW_MAP["source"])
+        if self._source_view_widget:
+            self._source_view_widget.scroll_to_concept(concept_id)
+
+    def _on_graph_teach_click(self, concept_name: str):
+        self._on_teach_request(concept_name)
+
+    def _on_graph_node_clicked(self, concept_id: str):
+        pass
+
+    def _on_incorporate_comparison(self, a_id: str, b_id: str):
+        asset = self.get_asset()
+        if asset is None:
+            return
+        teacher = None
+        td = self.teacher_models.get(self.current_asset_id)
+        if td:
+            try:
+                teacher = TeacherModel.from_dict(td)
+            except Exception:
+                teacher = None
+        teacher = incorporate_comparison(
+            asset,
+            teacher,
+            a_id,
+            b_id,
+            self.learner,
+        )
+        save_teacher(self.current_asset_id, teacher)
+        self.teacher_models[self.current_asset_id] = teacher.to_dict()
+
+    # ---- teaching flow ---------------------------------------------------------
+
+    def _on_teach_started(self, concept_name: str):
+        self._refresh_all_views()
+
+    def _on_stuck_detected(self, concept_name: str, stuck_info: object):
+        self._refresh_all_views()
+
+    def _on_followup_done(self, question: str, answer: str):
+        pass
+
+    def _on_adopt_harness(self, candidate):
+        """Adopt an AutoHarness evolution candidate: persist + re-teach."""
+        try:
+            asset = self.get_asset()
+            if asset is None:
+                return
+            src = ""
+            joint_reason = ""
+            if isinstance(candidate, dict):
+                src = candidate.pop("_source", "")
+                joint_reason = candidate.pop("_joint_reason", "")
+            spec = candidate
+            old_spec = self._harness_specs.get(asset.asset_id)
+            self._harness_specs[asset.asset_id] = spec
+            _ah.save_harness_state(
+                config.DATA_DIR / "harness_state.json", self._harness_specs
+            )
+            concept_now = getattr(self, "_teach_concept_now", "")
+            if src == "regression":
+                reason = "regression"
+            elif src == "joint":
+                reason = joint_reason or "joint"
+            else:
+                reason = "manual"
+            self._harness_history = _ah.record_harness_evolution(
+                config.DATA_DIR / "harness_state.json",
+                _ah.evolution_event(
+                    reason,
+                    old_spec,
+                    spec,
+                    asset_id=asset.asset_id,
+                    concept=concept_now,
+                ),
+            )
+            QMessageBox.information(
+                self,
+                _t("harness_suggest_title"),
+                _t("harness_adopted", name=spec.get("name", "?"), concept=concept_now),
+            )
+            style = spec.get("policy", {}).get("style")
+            concept = asset.concept_by_name(concept_now) if concept_now else None
+            if concept is not None and style:
+                self._show_teaching_content(concept, vary=1, style=style)
+        except Exception as exc:
+            QMessageBox.warning(self, _t("hint"), str(exc))
+
+    def _on_transfer_harness(self, payload):
+        """Adopt a harness migrated from another asset."""
         try:
             asset = self.get_asset()
             if asset is None:
@@ -2259,1343 +860,515 @@ class MainWindow(QMainWindow):
             concept_now = getattr(self, "_teach_concept_now", "")
             path = config.DATA_DIR / "harness_state.json"
             ok, _event = _ah.adopt_harness_for_asset(
-                path, asset.asset_id, spec,
-                source_asset_id=source_id, concept=concept_now)
+                path,
+                asset.asset_id,
+                spec,
+                source_asset_id=source_id,
+                concept=concept_now,
+            )
             if not ok:
-                QMessageBox.warning(self, _t("hint"),
-                                    _t("harness_none"))
+                QMessageBox.warning(self, _t("hint"), _t("harness_none"))
                 return
-            # adopt_harness_for_asset already appended the transfer event;
-            # reload the audit chain so the history block stays consistent
             self._harness_specs[asset.asset_id] = spec
             self._harness_history = _ah.load_harness_history(path)
             source_title = payload.get("source_title", source_id)
             QMessageBox.information(
-                self, _t("harness_transfer_title"),
-                _t("harness_transfer_adopted",
-                   name=spec.get("name", "?"),
-                   source=source_title, concept=concept_now),
+                self,
+                _t("harness_transfer_title"),
+                _t(
+                    "harness_transfer_adopted",
+                    name=spec.get("name", "?"),
+                    source=source_title,
+                    concept=concept_now,
+                ),
             )
             style = spec.get("policy", {}).get("style")
             concept = asset.concept_by_name(concept_now) if concept_now else None
             if concept is not None and style:
                 self._show_teaching_content(concept, vary=1, style=style)
-        except Exception as exc:  # pragma: no cover - GUI path
+        except Exception as exc:
             QMessageBox.warning(self, _t("hint"), str(exc))
 
-    def save_learner_state(self):
-        """Persist the in-memory learner model to disk (learner.json)."""
-        save_learner(self.learner)
-
-    def _refresh_all_views(self):
-        """Refresh all views after learner state change."""
-        # Refresh knowledge view
-        if self.content_stack.currentIndex() == 1:
-            old_view = self.content_stack.widget(1)
-            new_view = self._build_knowledge_view()
-            self.content_stack.replaceWidget(old_view, new_view)
-            old_view.deleteLater()
-        
-        # Refresh learner view
-        if self.content_stack.currentIndex() == 5:
-            old_view = self.content_stack.widget(5)
-            new_view = self._build_learner_view()
-            self.content_stack.replaceWidget(old_view, new_view)
-            old_view.deleteLater()
-
-    def _build_import_view(self):
-        """Build the import view for adding new knowledge assets."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Header
-        header = self._view_header(
-            _t("import_title"),
-            _t("import_subtitle2"),
-        )
-        layout.addWidget(header)
-
-        # Content
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(20, 16, 20, 20)
-        content_layout.setSpacing(12)
-
-        # File selection
-        file_label = QLabel(_t("choose_file") + ":")
-        file_label.setStyleSheet("font-size: 13px; font-weight: bold;")
-        content_layout.addWidget(file_label)
-
-        self._import_fname = QLineEdit("learning-note.md")
-        self._import_fname.textChanged.connect(self._update_import_ready_state)
-        self._import_fname.setStyleSheet("""
-            QLineEdit {
-                padding: 8px;
-                border: 1px solid #E0E0E0;
-                border-radius: 4px;
-                font-size: 13px;
-            }
-        """)
-        content_layout.addWidget(self._import_fname)
-
-        # Paste area
-        paste_label = QLabel(_t("paste_hint"))
-        paste_label.setStyleSheet("font-size: 13px; font-weight: bold;")
-        content_layout.addWidget(paste_label)
-
-        self._import_paste = QTextEdit()
-        self._import_paste.setPlaceholderText(_t("paste_placeholder"))
-        self._import_paste.textChanged.connect(self._update_import_ready_state)
-        self._import_paste.setMinimumHeight(200)
-        self._import_paste.setStyleSheet("""
-            QTextEdit {
-                padding: 8px;
-                border: 1px solid #E0E0E0;
-                border-radius: 4px;
-                font-size: 12px;
-            }
-        """)
-        content_layout.addWidget(self._import_paste)
-
-        # Buttons
-        btn_layout = QHBoxLayout()
-        
-        choose_btn = QPushButton(_t("choose_file"))
-        choose_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #FF9800;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #F57C00;
-            }
-        """)
-        choose_btn.clicked.connect(self._on_choose_file)
-        btn_layout.addWidget(choose_btn)
-
-        generate_btn = QPushButton(_t("start_analysis"))
-        self._analysis_btn = generate_btn
-        generate_btn.setEnabled(False)
-        generate_btn.setToolTip("请先选择文件或粘贴学习内容")
-        generate_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #388E3C;
-            }
-        """)
-        generate_btn.clicked.connect(self._on_generate)
-        btn_layout.addWidget(generate_btn)
-        btn_layout.addStretch()
-        
-        content_layout.addLayout(btn_layout)
-
-        # Progress
-        self._import_progress = QProgressBar()
-        self._import_progress.setMaximumHeight(20)
-        self._import_progress.setRange(0, 100)
-        self._import_progress.setValue(0)
-        self._import_progress.setFormat("%p%")
-        self._import_progress.setVisible(True)
-        content_layout.addWidget(self._import_progress)
-
-        # Status label must exist before readiness logic updates its text.
-        self._import_status_label = QLabel("请先选择文件或粘贴学习内容")
-        self._import_status_label.setStyleSheet("color: #666; font-size: 12px; margin-top: 8px;")
-        content_layout.addWidget(self._import_status_label)
-
-        # Keep the readiness state visible before analysis starts.  This
-        # prevents the import page from looking idle while the user is still
-        # preparing an asset.
-        self._update_import_ready_state()
-        
-        # LLM status
-        llm_status = _t("llm_ready") if self.llm_client else _t("llm_not_ready")
-        llm_label = QLabel(llm_status)
-        llm_label.setStyleSheet("color: #4CAF50; font-size: 12px; margin-top: 8px;") if self.llm_client else llm_label.setStyleSheet("color: #FF9800; font-size: 12px; margin-top: 8px;")
-        content_layout.addWidget(llm_label)
-
-        layout.addWidget(content)
-
-        return widget
-
-    def _build_concept_map_view(self):
-        """Build the concept map view showing the interactive knowledge graph."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Header
-        header = self._view_header(
-            _t("nav_map"),
-            _t("map_subtitle"),
-        )
-        layout.addWidget(header)
-
-        # Content with interactive graph
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(20, 16, 20, 20)
-        content_layout.setSpacing(12)
-
-        if self.current_asset_id and self.current_asset_id in self.assets:
-            # Toolbar: search / reset / scope
-            toolbar = QHBoxLayout()
-            toolbar.setSpacing(8)
-
-            self._map_search = QLineEdit()
-            self._map_search.setPlaceholderText(_t("search_placeholder"))
-            self._map_search.setStyleSheet(
-                "QLineEdit { border: 1px solid #BDBDBD; border-radius: 6px;"
-                "padding: 5px 10px; font-size: 12.5px; background-color: white; }"
-            )
-            self._map_search.returnPressed.connect(self._on_map_search)
-            toolbar.addWidget(self._map_search, 1)
-
-            zoom_out_btn = QPushButton("−")
-            zoom_out_btn.setToolTip(_t("zoom_out_tip"))
-            zoom_fit_btn = QPushButton(_t("zoom_fit"))
-            zoom_fit_btn.setToolTip(_t("zoom_fit"))
-            zoom_in_btn = QPushButton("＋")
-            zoom_in_btn.setToolTip(_t("zoom_in_tip"))
-            for b in (zoom_out_btn, zoom_fit_btn, zoom_in_btn):
-                b.setStyleSheet(
-                    "QPushButton { background-color: white; color: #1565C0;"
-                    "border: 1px solid #BBDEFB; border-radius: 6px; padding: 5px 10px;"
-                    "font-size: 12.5px; }"
-                    "QPushButton:hover { background-color: #E3F2FD; }"
-                )
-            zoom_out_btn.clicked.connect(
-                lambda: self._graph_view.zoom_out() if hasattr(self, "_graph_view") else None
-            )
-            zoom_fit_btn.clicked.connect(
-                lambda: self._graph_view.fit_content() if hasattr(self, "_graph_view") else None
-            )
-            zoom_in_btn.clicked.connect(
-                lambda: self._graph_view.zoom_in() if hasattr(self, "_graph_view") else None
-            )
-            toolbar.addWidget(zoom_out_btn)
-            toolbar.addWidget(zoom_fit_btn)
-            toolbar.addWidget(zoom_in_btn)
-
-            reset_btn = QPushButton(_t("reset_map"))
-            reset_btn.setStyleSheet(
-                "QPushButton { background-color: white; color: #1565C0;"
-                "border: 1px solid #BBDEFB; border-radius: 6px; padding: 5px 14px;"
-                "font-size: 12.5px; }"
-                "QPushButton:hover { background-color: #E3F2FD; }"
-            )
-            reset_btn.clicked.connect(
-                lambda: self._graph_view.reset_focus() if hasattr(self, "_graph_view") else None
-            )
-            toolbar.addWidget(reset_btn)
-
-            back_btn = QPushButton("返回上层")
-            back_btn.setToolTip("返回上一个钻取位置")
-            back_btn.setStyleSheet(
-                "QPushButton { background-color: white; color: #1565C0;"
-                "border: 1px solid #BBDEFB; border-radius: 6px; padding: 5px 12px;"
-                "font-size: 12.5px; }"
-                "QPushButton:hover { background-color: #E3F2FD; }"
-            )
-            back_btn.clicked.connect(
-                lambda: self._graph_view.drill_up() if hasattr(self, "_graph_view") else None
-            )
-            toolbar.addWidget(back_btn)
-
-            # Drill-down is performed by clicking a concept in the graph.
-            # Keep only a passive breadcrumb here; navigation controls without
-            # a selected target make the interaction ambiguous.
-            self._map_drill_path = QLabel("点击节点查看其上下位概念")
-            self._map_drill_path.setStyleSheet(
-                "QLabel { color: #546E7A; font-size: 12px; padding: 4px 8px; }"
-            )
-            toolbar.addWidget(self._map_drill_path, 1)
-
-            self._map_scope = QComboBox()
-            self._map_scope.addItems([_t("scope_all"), _t("scope_current")])
-            self._map_scope.setStyleSheet(
-                "QComboBox { border: 1px solid #BDBDBD; border-radius: 6px;"
-                "padding: 4px 8px; font-size: 12.5px; background-color: white; }"
-            )
-            self._map_scope.currentIndexChanged.connect(self._on_map_scope)
-            toolbar.addWidget(self._map_scope)
-
-            content_layout.addLayout(toolbar)
-
-            # Interactive graph view (uses core.graph_viz layout math)
-            self._graph_view = KnowledgeGraphView()
-            self._graph_view.concept_clicked.connect(self.on_card_click)
-            self._graph_view.node_single_clicked.connect(self._on_map_node_clicked)
-            self._graph_view.setStyleSheet("""
-                QGraphicsView {
-                    background-color: white;
-                    border: 1px solid #E0E0E0;
-                    border-radius: 8px;
-                }
-            """)
-            self._graph_view.setMinimumHeight(420)
-
-            # graph + per-node detail sidebar
-            map_splitter = QSplitter(Qt.Orientation.Horizontal)
-            self._map_detail = NodeDetailCard()
-            self._map_detail.teach_requested.connect(self._start_teach_by_name)
-            self._map_detail.full_detail_requested.connect(self._open_concept_panel)
-            self._map_detail.neighbor_clicked.connect(self._on_map_neighbor)
-            self._map_detail.compare_requested.connect(self._open_compare)
-            map_splitter.addWidget(self._graph_view)
-            map_splitter.addWidget(self._map_detail)
-            map_splitter.setStretchFactor(0, 1)
-            map_splitter.setStretchFactor(1, 0)
-            content_layout.addWidget(map_splitter, 1)
-
-            self._refresh_map_view()
-
-            # Visual legend chips (replaces the plain-text legend so the orange
-            # dashed frontier ring has an obvious visual explanation).
-            self._map_legend = MapLegend()
-            content_layout.addWidget(self._map_legend)
-        else:
-            placeholder = QLabel(_t("no_asset_placeholder"))
-            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            placeholder.setStyleSheet("color: #757575; font-size: 14px; margin: 40px;")
-            content_layout.addWidget(placeholder)
-
-        layout.addWidget(content)
-
-        return widget
-
-    def _refresh_map_view(self) -> None:
-        """(Re)load the concept map per the current scope selection."""
-        if not hasattr(self, "_graph_view") or not self.current_asset_id:
-            return
-        scope_all = getattr(self, "_map_scope", None) is None or self._map_scope.currentIndex() == 0
-        if scope_all:
-            asset, grey_ids = self._build_global_asset()
-        else:
-            asset = self.get_asset()
-            grey_ids = set()
-        self._map_global_asset = asset
-
-        mastery_map = {}
-        for c in asset.concepts:
-            norm_name = normalize(c.name)
-            mastery_map[c.id] = (
-                self.learner.get('concepts', {}).get(norm_name, {}).get('mastery', 0.0)
-            )
-
-        anomaly_ids = set()
-        teacher_data = self.teacher_models.get(self.current_asset_id)
-        if teacher_data:
-            try:
-                tm = TeacherModel.from_dict(teacher_data)
-                anomaly_ids = anomaly_concept_ids(asset, tm)
-            except Exception:
-                anomaly_ids = set()
-
-        current_id = None
-        items = self.get_adaptive_path(self.current_asset_id)
-        if items:
-            current_id = items[0].get('cid')
-
-        self._graph_view.set_asset(
-            asset,
-            mastery_map=mastery_map,
-            anomaly_ids=anomaly_ids,
-            current_id=current_id,
-            grey_ids=grey_ids,
-        )
-
-    def _on_map_search(self) -> None:
-        """Locate a concept by keyword and focus it in the graph."""
-        kw = self._map_search.text().strip().lower()
-        if not kw or not hasattr(self, "_graph_view"):
-            return
-        gv = self._graph_view
-        for cid, name, _role in gv._nodes:
-            if kw in name.lower():
-                gv.focus_concept(cid)
-                return
-        QMessageBox.information(self, _t("not_found_in_map").split("「")[0], _t("not_found_in_map", kw=self._map_search.text().strip()))
-
-    def _on_map_scope(self, _idx: int) -> None:
-        self._refresh_map_view()
-
-    def _update_map_drill_controls(self) -> None:
-        gv = getattr(self, "_graph_view", None)
-        if gv is None or not hasattr(self, "_map_drill_path"):
-            return
-        path = gv.drill_path()
-        asset = getattr(self, "_map_global_asset", None)
-        names = []
-        for cid in path:
-            c = asset.concept_by_id(cid) if asset is not None else None
-            names.append(c.name if c is not None else cid)
-        self._map_drill_path.setText(
-            "当前位置：" + (" > ".join(names) if names else "全部知识")
-            + "（点击节点继续钻取）"
-        )
-
-    def _on_map_node_clicked(self, concept_id: str) -> None:
-        """Graph single-click: focus + detail card; external nodes get an
-        on-demand LLM explanation (decompress the compressed layer)."""
-        gv = getattr(self, "_graph_view", None)
-        if gv is not None:
-            was_focused = gv._focus_id == concept_id
-            if was_focused:
-                # A later click on the focused node continues down one level.
-                gv.drill_down(concept_id)
-            else:
-                # The first click only focuses. Avoid rebuilding the scene
-                # twice inside one dispatched click callback.
-                gv.focus_concept(concept_id)
-            self._update_map_drill_controls()
-        if str(concept_id).startswith("ext:"):
-            self._explain_external(concept_id)
-            return
-        self._refresh_map_detail(concept_id)
-
-    def _explain_external(self, concept_id: str) -> None:
-        """Explain an external (compressed-layer) concept via the LLM."""
-        asset = getattr(self, "_map_global_asset", None)
-        if asset is None:
-            return
-        c = asset.concept_by_id(concept_id)
-        if c is None:
-            return
-        # find the anchor (in-book) concept connected to it
-        anchor_name = ""
-        for r in asset.relations:
-            if r.target == concept_id:
-                a = asset.concept_by_id(r.source)
-                if a:
-                    anchor_name = a.name
-                    break
-        if self.llm_client is None:
-            QMessageBox.information(
-                self, _t("hint"),
-                _t("external_no_llm", name=c.name))
-            return
-        try:
-            prompt = (
-                "概念「{ext}」来自外部知识（不在本书中），它与书中的「{anchor}」相关。"
-                "请用 3-5 句话解释这个概念是什么、为什么与「{anchor}」相关，"
-                "并用一个技术人员容易理解的类比帮助建立直觉。"
-                + ("Answer in English. " if _get_lang() == "en" else
-                   "日本語で回答してください。" if _get_lang() == "ja" else "")
-            ).format(ext=c.name, anchor=anchor_name or "当前概念")
-            ans = self.llm_client.chat(
-                [__import__("expert_anything.core.llm", fromlist=["Message"]).Message("user", prompt)],
-                temperature=0.3, max_tokens=400,
-            )
-            QMessageBox.information(
-                self,
-                f"{_t('external_title')}「{c.name}」",
-                ans,
-            )
-        except Exception as e:
-            QMessageBox.information(self, _t("hint"), str(e))
-
-    def _refresh_map_detail(self, concept_id: str) -> None:
-        """Update the in-graph detail sidebar for a concept."""
-        detail = getattr(self, "_map_detail", None)
-        asset = getattr(self, "_map_global_asset", None)
-        if detail is None or asset is None:
-            return
-        teacher = None
-        td = self.teacher_models.get(self.current_asset_id)
-        if td:
-            try:
-                teacher = TeacherModel.from_dict(td)
-            except Exception:
-                teacher = None
-        detail.set_concept(asset, concept_id, self.learner, teacher)
-
-    def _on_map_neighbor(self, concept_id: str) -> None:
-        """Roam: focus the neighbour in the graph and refresh the sidebar."""
-        gv = getattr(self, "_graph_view", None)
-        if gv is not None:
-            gv.focus_concept(concept_id)
-        self._refresh_map_detail(concept_id)
-
-    def _open_compare(self, id_a: str, id_b: str) -> None:
-        """Open the two-concept comparison dialog (map sidebar entry)."""
-        asset = getattr(self, "_map_global_asset", None) or self.get_asset()
-        if asset is None:
-            return
-        teacher = None
-        td = self.teacher_models.get(self.current_asset_id)
-        if td:
-            try:
-                teacher = TeacherModel.from_dict(td)
-            except Exception:
-                teacher = None
-        dlg = ConceptCompareDialog(asset, id_a, id_b,
-                                   self.learner, teacher, self)
-        dlg.focus_requested.connect(self._focus_in_graph)
-        dlg.teach_requested.connect(self._start_teach_by_name)
-        dlg.incorporate_requested.connect(self._on_incorporate_comparison)
-        self._compare_dialog = dlg  # keep a reference (prevent GC)
-        dlg.show()
-
-    def _on_incorporate_comparison(self, id_a: str, id_b: str) -> None:
-        """Sink a map comparison into the Teacher Model and persist it.
-
-        Shared neighbours become bridging anchors on both concepts; a mastery
-        gap >= 0.2 raises a learner_gap anomaly pinned to the weaker concept,
-        which the anomaly-prioritized teaching path walks ahead of.
-        """
-        asset = getattr(self, "_map_global_asset", None) or self.get_asset()
-        if asset is None:
-            return
-        try:
-            teacher = None
-            td = self.teacher_models.get(self.current_asset_id)
-            if td:
-                teacher = TeacherModel.from_dict(td)
-            teacher = incorporate_comparison(
-                asset, teacher, id_a, id_b, learner_state=self.learner
-            )
-            save_teacher(self.current_asset_id, teacher)
-            self.teacher_models[self.current_asset_id] = teacher.to_dict()
-        except Exception:
-            # Sinking is best-effort; the reader already got the comparison.
-            pass
-
-    def _build_source_view(self):
-        """Build the source text view for reading the original material."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Header
-        header = self._view_header(
-            _t("nav_source"),
-            _t("source_subtitle"),
-        )
-        layout.addWidget(header)
-
-        # Source text display with concept highlighting
-        if self.current_asset_id and self.current_asset_id in self.assets:
-            asset = self.get_asset()
-
-            # full-text search bar (P1-2)
-            search_row = QHBoxLayout()
-            search_row.setSpacing(6)
-            self._source_search = QLineEdit()
-            self._source_search.setPlaceholderText(_t("search_in_source"))
-            self._source_search.setStyleSheet(
-                "QLineEdit { border: 1px solid #BDBDBD; border-radius: 6px;"
-                "padding: 5px 10px; font-size: 12.5px; background-color: white; }"
-            )
-            self._source_search.returnPressed.connect(self._on_source_search)
-            search_row.addWidget(self._source_search, 1)
-            self._source_search_status = QLabel("")
-            self._source_search_status.setStyleSheet("color: #9E9E9E; font-size: 11px;")
-            search_row.addWidget(self._source_search_status)
-            sbtn = QPushButton(_t("search_btn"))
-            sbtn.setStyleSheet(
-                "QPushButton { background-color: white; color: #1565C0;"
-                "border: 1px solid #BBDEFB; border-radius: 6px; padding: 5px 14px;"
-                "font-size: 12.5px; }"
-                "QPushButton:hover { background-color: #E3F2FD; }"
-            )
-            sbtn.clicked.connect(self._on_source_search)
-            search_row.addWidget(sbtn)
-            layout.addLayout(search_row)
-
-            # concept index chips (click -> jump to first occurrence)
-            chips_scroll = QScrollArea()
-            chips_scroll.setWidgetResizable(True)
-            chips_scroll.setFixedHeight(42)
-            chips_scroll.setFrameShape(QFrame.Shape.NoFrame)
-            chips_host = QWidget()
-            chips_layout = QHBoxLayout(chips_host)
-            chips_layout.setContentsMargins(0, 0, 0, 0)
-            chips_layout.setSpacing(6)
-            for c in asset.concepts:
-                chip = QPushButton(c.name)
-                chip.setStyleSheet(
-                    "QPushButton { background-color: #F3E5F5; color: #7B1FA2;"
-                    "border: 1px solid #E1BEE7; border-radius: 12px; padding: 3px 12px;"
-                    "font-size: 11px; }"
-                    "QPushButton:hover { background-color: #E1BEE7; }"
-                )
-                chip.clicked.connect(
-                    lambda checked, cid=c.id: self._source_view_widget.scroll_to_concept(cid)
-                )
-                chips_layout.addWidget(chip)
-            chips_layout.addStretch()
-            chips_scroll.setWidget(chips_host)
-            layout.addWidget(chips_scroll)
-
-            self._source_view_widget = SourceTextView()
-            self._source_view_widget.set_asset(asset)
-            self._source_view_widget.concept_anchor_clicked.connect(
-                self._open_concept_panel
-            )
-            layout.addWidget(self._source_view_widget, 1)
-        else:
-            placeholder = QLabel(_t("no_asset_placeholder"))
-            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            placeholder.setStyleSheet("color: #757575; font-size: 14px; margin: 40px;")
-            layout.addWidget(placeholder)
-
-        return widget
-
-    def _build_teach_view(self):
-        """Build the teaching session view."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Mini header: one slim line so the teaching area gets max space
-        header = QFrame()
-        header.setStyleSheet(
-            "background-color: white; border-bottom: 1px solid #E0E0E0;"
-        )
-        h_lay = QHBoxLayout(header)
-        h_lay.setContentsMargins(20, 5, 20, 5)
-        h_lay.setSpacing(10)
-        h_t = QLabel(_t("nav_teach"))
-        h_t.setStyleSheet("font-size: 14px; font-weight: bold; color: #1F2933;")
-        h_lay.addWidget(h_t)
-        h_s = QLabel(_t("teach_hint"))
-        h_s.setStyleSheet("color: #9E9E9E; font-size: 11px;")
-        h_lay.addWidget(h_s)
-        h_lay.addStretch()
-        layout.addWidget(header)
-
-        # Splitter for concept list and content
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        
-        # Left panel: Concept list
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(16, 16, 8, 16)
-        
-        concept_label = QLabel(_t("swap_concept"))
-        concept_label.setStyleSheet("font-size: 13px; font-weight: bold;")
-        left_layout.addWidget(concept_label)
-
-        self._teach_concept_list = QComboBox()
-        self._teach_concept_list.setStyleSheet(
-            "QComboBox { padding: 6px; border: 1px solid #E0E0E0; border-radius: 4px;"
-            "font-size: 12px; background-color: white; }"
-        )
-        if self.current_asset_id and self.current_asset_id in self.assets:
-            data = self.assets[self.current_asset_id]
-            names = [c.get('name', '?') for c in data.get('concepts', [])]
-            self._teach_concept_list.addItems(names)
-            # Default to the adaptive next concept so the learner isn't faced with
-            # a full list to scan — the rest stay hidden behind the dropdown.
-            next_c, _ = self._next_concept()
-            if next_c is not None and next_c.name in names:
-                self._teach_concept_list.setCurrentText(next_c.name)
-        left_layout.addWidget(self._teach_concept_list)
-        
-        # Style selector
-        style_label = QLabel(_t("style_label"))
-        style_label.setStyleSheet("font-size: 12px; font-weight: bold; margin-top: 12px;")
-        left_layout.addWidget(style_label)
-        
-        self._teach_style_combo = QComboBox()
-        self._teach_style_combo.addItems([_t("style_example"), _t("style_diagram"), _t("style_steps")])
-        self._teach_style_combo.setStyleSheet("""
-            QComboBox {
-                padding: 6px;
-                border: 1px solid #E0E0E0;
-                border-radius: 4px;
-                font-size: 12px;
-            }
-        """)
-        left_layout.addWidget(self._teach_style_combo)
-
-        # Start button
-        start_btn = QPushButton(_t("start_teach"))
-        start_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1565C0;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #0D47A1;
-            }
-        """)
-        start_btn.clicked.connect(self._on_start_teach)
-        left_layout.addWidget(start_btn)
-        left_layout.addStretch()
-        
-        splitter.addWidget(left_panel)
-        
-        # Right panel: Teaching content
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(8, 16, 16, 16)
-        
-        self._teach_result_label = QLabel(_t("lesson_ready"))
-        self._teach_result_label.setStyleSheet("color: #757575; font-size: 13px;")
-        right_layout.addWidget(self._teach_result_label)
-
-        # concept-position mini graph: shows where the current concept sits
-        self._teach_graph = KnowledgeGraphView()
-        self._teach_graph.setMinimumHeight(140)
-        self._teach_graph.setMaximumHeight(170)  # keep the lesson area dominant
-        self._teach_graph.setStyleSheet(
-            "QGraphicsView { background-color: white; border: 1px solid #E0E0E0;"
-            "border-radius: 8px; }"
-        )
-        self._teach_graph.setVisible(False)
-        right_layout.addWidget(self._teach_graph)
-        
-        self._teach_progress = QProgressBar()
-        self._teach_progress.setVisible(False)
-        right_layout.addWidget(self._teach_progress)
-        
-        self._teach_result_area = QScrollArea()
-        self._teach_result_area.setWidgetResizable(True)
-        self._teach_result_area.setStyleSheet("""
-            QScrollArea {
-                border: 1px solid #E0E0E0;
-                border-radius: 8px;
-                background-color: white;
-            }
-        """)
-        right_layout.addWidget(self._teach_result_area, 1)  # fill the panel
-        
-        splitter.addWidget(right_panel)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 4)
-        splitter.setSizes([230, 760])
-
-        layout.addWidget(splitter, 1)  # fill the whole window height
-
-        return widget
-
-    def _build_teacher_view(self):
-        """Build the teacher model view showing system's understanding."""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # Header
-        header = self._view_header(
-            _t("nav_teacher"),
-            _t("teacher_subtitle"),
-        )
-        layout.addWidget(header)
-
-        # Content
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(20, 16, 20, 20)
-        content_layout.setSpacing(12)
-
-        # What is this view? (plain-language explainer)
-        explain = QFrame()
-        explain.setStyleSheet(
-            "QFrame { background-color: #FFF8E1; border: 1px solid #FFE0B2;"
-            "border-radius: 8px; }"
-        )
-        ex_lay = QVBoxLayout(explain)
-        ex_lay.setContentsMargins(12, 10, 12, 10)
-        ex_lay.setSpacing(4)
-        ex_t = QLabel(_t("teacher_explain_title"))
-        ex_t.setStyleSheet("font-size: 12.5px; font-weight: bold; color: #B45309;")
-        ex_lay.addWidget(ex_t)
-        ex_b = QLabel(_t("teacher_explain_body"))
-        ex_b.setWordWrap(True)
-        ex_b.setStyleSheet("font-size: 12px; color: #5D4037;")
-        ex_lay.addWidget(ex_t)
-        ex_lay.addWidget(ex_b)
-        content_layout.addWidget(explain)
-
-        # Check if teacher data exists
-        if self.current_asset_id in self.teacher_models:
-            teacher_data = self.teacher_models[self.current_asset_id]
-            
-            # Display teacher status
-            status = teacher_data.get('status', 'unknown')
-            status_label = QLabel(_t("teacher_status_" + {"done": "done", "fallback": "fallback", "failed": "failed"}.get(status, "done")))
-            status_color = "#2E7D32" if status == "done" else ("#FF9800" if status == "fallback" else "#F44336")
-            status_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {status_color};")
-            content_layout.addWidget(status_label)
-            
-            # Method info
-            method = teacher_data.get('method', '')
-            if method:
-                method_label = QLabel(_t("teacher_method", m=method))
-                method_label.setStyleSheet("font-size: 12px; color: #666;")
-                content_layout.addWidget(method_label)
-            
-            # Synthesized time
-            synthesized = teacher_data.get('synthesized_at', '')
-            if synthesized:
-                synth_label = QLabel(_t("teacher_time", t=synthesized[:19]))
-                synth_label.setStyleSheet("font-size: 12px; color: #666;")
-                content_layout.addWidget(synth_label)
-            
-            # Buttons
-            btn_layout = QHBoxLayout()
-            
-            recheck_btn = QPushButton(_t("recheck"))
-            recheck_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #FF9800;
-                    color: white;
-                    border: none;
-                    border-radius: 6px;
-                    padding: 8px 16px;
-                    font-size: 13px;
-                }
-                QPushButton:hover {
-                    background-color: #F57C00;
-                }
-            """)
-            recheck_btn.clicked.connect(self._on_recheck_teacher)
-            btn_layout.addWidget(recheck_btn)
-            
-            if not self.llm_client:
-                hint_label = QLabel(_t("recheck_needs_llm"))
-                hint_label.setStyleSheet("color: #999; font-size: 12px;")
-                btn_layout.addWidget(hint_label)
-            
-            btn_layout.addStretch()
-            content_layout.addLayout(btn_layout)
-            
-            # Anomalies section
-            anomalies = teacher_data.get('anomalies', [])
-            if anomalies:
-                anom_label = QLabel(_t("anomaly_label", n=len(anomalies)))
-                anom_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #E65100; margin-top: 12px;")
-                content_layout.addWidget(anom_label)
-                
-                kind_labels = {
-                    "contradiction": _t("kind_contradiction"), "undefined_term": _t("kind_undefined_term"),
-                    "logical_gap": _t("kind_logical_gap"), "surprising_claim": _t("kind_surprising_claim"),
-                    "learner_gap": _t("kind_learner_gap"), "needs_llm": _t("kind_needs_llm"),
-                }
-                sev_colors = {
-                    "high": "#C62828", "medium": "#E65100",
-                    "low": "#616161", "info": "#0277BD",
-                }
-                sev_bgs = {
-                    "high": "#FFEBEE", "medium": "#FFF3E0",
-                    "low": "#F5F5F5", "info": "#E1F5FE",
-                }
-                for a in anomalies:
-                    kind = a.get('kind', '?')
-                    desc = a.get('description', '')
-                    sev = a.get('severity', 'medium')
-                    loc = a.get('location', '')
-                    sev_color = sev_colors.get(sev, "#616161")
-                    sev_bg = sev_bgs.get(sev, "#F5F5F5")
-
-                    acard = QFrame()
-                    acard.setStyleSheet(
-                        f"QFrame {{ background-color: {sev_bg};"
-                        f"border-left: 4px solid {sev_color}; border-radius: 6px; }}"
-                    )
-                    a_lay = QVBoxLayout(acard)
-                    a_lay.setContentsMargins(12, 8, 12, 8)
-                    a_lay.setSpacing(4)
-
-                    head = QHBoxLayout()
-                    head.setSpacing(8)
-                    badge = QLabel(f"{kind_labels.get(kind, kind)} · {sev}")
-                    badge.setStyleSheet(
-                        f"background-color: {sev_color}; color: white;"
-                        "padding: 2px 10px; border-radius: 8px; font-size: 10px; font-weight: bold;"
-                    )
-                    head.addWidget(badge)
-                    if loc:
-                        loc_lbl = QLabel(_t("anomaly_loc", loc=loc[:40]))
-                        loc_lbl.setStyleSheet("color: #757575; font-size: 10.5px;")
-                        head.addWidget(loc_lbl)
-                    head.addStretch()
-                    a_lay.addLayout(head)
-
-                    desc_lbl = QLabel(desc)
-                    desc_lbl.setWordWrap(True)
-                    desc_lbl.setStyleSheet("font-size: 12.5px; color: #37474F;")
-                    a_lay.addWidget(desc_lbl)
-                    content_layout.addWidget(acard)
-            
-            # Concept notes section
-            notes = teacher_data.get('concept_notes', [])
-            if notes:
-                notes_label = QLabel(_t("notes_label", n=len(notes)))
-                notes_label.setStyleSheet("font-size: 13px; font-weight: bold; color: #666; margin-top: 12px;")
-                content_layout.addWidget(notes_label)
-                
-                notes_hint = QLabel(_t("notes_hint", n=len(notes)))
-                notes_hint.setStyleSheet("font-size: 11.5px; color: #8D6E63;")
-                content_layout.addWidget(notes_hint)
-
-                notes_list = QListWidget()
-                notes_list.setStyleSheet("""
-                    QListWidget {
-                        background-color: white;
-                        border: 1px solid #E0E0E0;
-                        border-radius: 6px;
-                        font-size: 12.5px;
-                    }
-                    QListWidget::item {
-                        padding: 7px 10px;
-                        border-bottom: 1px solid #F0F0F0;
-                    }
-                    QListWidget::item:hover { background-color: #FFF8E1; }
-                """)
-                for note in notes:
-                    name = note.get('name', '?')
-                    sign = note.get('significance', '')
-                    miscon = note.get('misconceptions', [])
-                    parts = [name]
-                    if sign:
-                        parts.append(sign[:46] + ("…" if len(sign) > 46 else ""))
-                    if miscon:
-                        parts.append(_t("detail_miscon", s=miscon[0][:24]))
-                    item = QListWidgetItem("　".join(parts))
-                    item.setData(Qt.ItemDataRole.UserRole, note.get('concept_id', ''))
-                    notes_list.addItem(item)
-                notes_list.itemClicked.connect(
-                    lambda it: self._open_concept_panel(it.data(Qt.ItemDataRole.UserRole))
-                    if it.data(Qt.ItemDataRole.UserRole) else None
-                )
-                content_layout.addWidget(notes_list)
-        else:
-            placeholder = QLabel(_t("teacher_empty"))
-            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            placeholder.setStyleSheet("color: #757575; font-size: 14px; margin: 40px;")
-            content_layout.addWidget(placeholder)
-            
-            # Try to build teacher model now
-            build_btn = QPushButton(_t("teacher_build_now"))
-            build_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #4CAF50;
-                    color: white;
-                    border: none;
-                    border-radius: 6px;
-                    padding: 10px 20px;
-                    font-size: 13px;
-                }
-                QPushButton:hover {
-                    background-color: #388E3C;
-                }
-            """)
-            build_btn.clicked.connect(self._on_build_teacher_now)
-            content_layout.addWidget(build_btn)
-
-        layout.addWidget(content)
-
-        return widget
-
-    def _on_recheck_teacher(self):
-        """Handle re-checking teacher model."""
-        if not self.llm_client:
-            QMessageBox.warning(self, _t("hint"), _t("recheck_needs_llm"))
-            return
-        
-        asset = self.get_asset()
-        if not asset:
-            return
-        
-        QMessageBox.information(self, _t("hint"), _t("rechecking"))
-        
-        self._teacher_worker = TeacherWorker(asset, self.llm_client)
-        self._teacher_worker.finished.connect(self._on_teacher_recheck_finished)
-        self._teacher_worker.error.connect(lambda e: QMessageBox.critical(self, _t("error"), _t("recheck_failed", e=e)))
-        self._teacher_worker.start()
-
-    def _on_teacher_recheck_finished(self, teacher):
-        """Handle teacher recheck completion."""
-        self.teacher_models[teacher.asset_id] = teacher.to_dict()
-        QMessageBox.information(self, _t("done"), _t("recheck_done", n=len(teacher.anomalies)))
-        # Refresh teacher view
-        old_view = self.content_stack.widget(6)
-        new_view = self._build_teacher_view()
-        self.content_stack.replaceWidget(old_view, new_view)
-        old_view.deleteLater()
-
-    def _on_build_teacher_now(self):
-        """Handle building teacher model now."""
-        if not self.llm_client:
-            QMessageBox.warning(self, _t("hint"), _t("build_needs_llm"))
-            return
-        
-        asset = self.get_asset()
-        if not asset:
-            return
-        
-        QMessageBox.information(self, _t("hint"), _t("building_teacher"))
-        
-        self._teacher_worker = TeacherWorker(asset, self.llm_client)
-        self._teacher_worker.finished.connect(self._on_teacher_build_finished)
-        self._teacher_worker.error.connect(lambda e: QMessageBox.critical(self, _t("error"), _t("build_failed", e=e)))
-        self._teacher_worker.start()
-
-    def _on_teacher_build_finished(self, teacher):
-        """Handle teacher model building completion."""
-        self.teacher_models[teacher.asset_id] = teacher.to_dict()
-        QMessageBox.information(self, _t("done"), _t("build_done", n=len(teacher.anomalies)))
-        # Refresh teacher view
-        old_view = self.content_stack.widget(6)
-        new_view = self._build_teacher_view()
-        self.content_stack.replaceWidget(old_view, new_view)
-        old_view.deleteLater()
-        """Handle file selection."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-             _t("choose_file"),
-            str(Path(__file__).parent / "data" / "samples"),
-            _t("filter_supported") + " (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;PDF (*.pdf);;EPUB (*.epub);;Word (*.docx);;Markdown/Text (*.md *.markdown *.txt);;HTML (*.html *.htm);;All (*.*)"
-        )
-        if file_path:
-            self._import_fname.setText(file_path)
-
-    def _on_choose_file(self):
-        """Handle file selection."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-             _t("choose_file"),
-            str(Path(__file__).parent / "data" / "samples"),
-            _t("filter_supported") + " (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;PDF (*.pdf);;EPUB (*.epub);;Word (*.docx);;Markdown/Text (*.md *.markdown *.txt);;HTML (*.html *.htm);;All (*.*)"
-        )
-        if file_path:
-            self._import_fname.setText(file_path)
-            self._import_status_label.setText("文件已选择，正在开始分析…")
-            self._on_generate()
-
-    def _update_import_ready_state(self):
-        """Keep the import page explicit about whether analysis can start."""
-        if not hasattr(self, "_analysis_btn"):
-            return
-        fname = self._import_fname.text().strip()
-        has_file = bool(fname and Path(fname).exists())
-        has_paste = bool(self._import_paste.toPlainText().strip())
-        ready = has_file or has_paste
-        busy = bool(getattr(self, "_extract_worker", None) and self._extract_worker.isRunning())
-        busy = busy or bool(getattr(self, "_teacher_worker", None) and self._teacher_worker.isRunning())
-        self._analysis_btn.setEnabled(ready and not busy)
-        if not busy and self._import_progress.value() == 0:
-            self._import_status_label.setText(
-                "已准备好，可以开始分析" if ready else "请先选择文件或粘贴学习内容"
-            )
-            self._analysis_btn.setToolTip("点击开始分析" if ready else "请先选择文件或粘贴学习内容")
-
-    def _on_generate(self):
-        """Handle knowledge extraction with progress."""
-        # Read file content
-        fname = self._import_fname.text().strip()
-        if not fname:
-            QMessageBox.warning(self, _t("error"), _t("import_file_prompt"))
-            return
-        
-        # Try to read from file path (raw bytes; binary formats parsed later)
-        raw = b""
-        if fname and Path(fname).exists():
-            try:
-                raw = Path(fname).read_bytes()
-            except Exception as e:
-                QMessageBox.critical(self, _t("error"), _t("read_failed", e=e))
-                return
-        else:
-            # Use pasted content
-            raw = self._import_paste.toPlainText().encode("utf-8")
-        
-        if not raw.strip():
-            QMessageBox.warning(self, _t("error"), _t("empty_content"))
-            return
-        
-        # Show progress and lock the action until the background pipeline ends.
-        self._import_progress.setVisible(True)
-        self._import_progress.setValue(10)
-        self._analysis_btn.setEnabled(False)
-        self._analysis_btn.setToolTip("正在分析，请稍候")
-        self._import_status_label.setText(_t("analyzing"))
-        self._import_status_label.repaint()
-        
-        # Run extraction in background thread
-        self._extract_worker = ExtractWorker(raw, fname, self.llm_client)
-        self._extract_worker.finished.connect(self._on_extraction_finished)
-        self._extract_worker.error.connect(self._on_extraction_error)
-        self._extract_worker.start()
-
-    def _on_extraction_finished(self, asset):
-        """Handle extraction completion."""
-        self._import_progress.setValue(80)
-        self._import_status_label.setText(_t("extracted_x", n=len(asset.concepts)))
-        
-        # Register asset in learner
-        register_asset(self.learner, asset)
-        self.assets[asset.asset_id] = {
-            "asset_id": asset.asset_id,
-            "type": asset.type,
-            "title": asset.title,
-            "source_name": asset.source_name,
-            "created_at": asset.created_at,
-            "concepts": [c.to_dict() for c in asset.concepts],
-            "relations": [r.to_dict() for r in asset.relations],
-            "learning_path": asset.learning_path,
-            "method": asset.method,
-            "source_text": asset.source_text[:5000] + "..." if len(asset.source_text) > 5000 else asset.source_text,
-        }
-        
-        # Build teacher model
-        self._import_progress.setValue(85)
-        self._import_status_label.setText(_t("selflearning"))
-        self._teacher_worker = TeacherWorker(asset, self.llm_client)
-        self._teacher_worker.finished.connect(self._on_teacher_finished)
-        self._teacher_worker.error.connect(self._on_extraction_error)
-        self._teacher_worker.start()
-
-    def _on_teacher_finished(self, teacher):
-        """Handle teacher model building."""
-        self._import_progress.setValue(95)
-        self._import_status_label.setText(_t("selflearning_done", n=len(teacher.anomalies)))
-        
-        # Save teacher model
-        self.teacher_models[teacher.asset_id] = teacher.to_dict()
-
-        # Switch current asset to the newly imported one
-        self.current_asset_id = teacher.asset_id
-
-        # Save learner state
+    def _on_evaluate_recorded(self):
         self.save_learner_state()
+        self._refresh_all_views()
 
-        # Refresh the sidebar and every data view against the new asset.
+    # ---- asset management ------------------------------------------------------
+
+    def _on_asset_extracted(self, asset):
+        pass  # ImportView handles everything
+
+    def _on_teacher_built(self, teacher):
+        pass  # ImportView handles everything
+
+    def on_asset_select(self, asset_id: str):
+        self.current_asset_id = asset_id
         self._refresh_asset_list()
         self._rebuild_all_views()
+        self.content_stack.setCurrentIndex(self.VIEW_MAP["concept_map"])
 
-        self._import_progress.setValue(100)
-        self._import_status_label.setText("分析完成，正在载入知识资产")
-        self._analysis_btn.setEnabled(False)
-        QMessageBox.information(
-            self,
-            _t("import_success_title"),
-            _t("import_done",
-               title=self.assets[teacher.asset_id]["title"],
-               c=len(self.assets[teacher.asset_id]["concepts"]),
-               r=len(self.assets[teacher.asset_id]["relations"]))
-        )
-        # Land on the imported knowledge entities instead of leaving the user
-        # on an empty-looking import form.
-        self.content_stack.setCurrentIndex(1)
-        # Switch to knowledge view
-        self.on_nav_click("knowledge")
-
-    def _on_extraction_error(self, error_msg):
-        """Handle extraction error."""
-        self._import_progress.setValue(0)
-        self._import_progress.setVisible(True)
-        self._import_status_label.setText("分析失败，请检查内容后重试")
-        self._update_import_ready_state()
-        QMessageBox.critical(self, _t("error"), _t("import_failed", msg=error_msg))
-
-    def _populate_asset_buttons(self):
-        """Render all known assets inside the stable sidebar container."""
-        if not hasattr(self, "_asset_list_layout"):
+    def _refresh_asset_list(self):
+        if not hasattr(self, "_asset_buttons"):
             return
         while self._asset_list_layout.count():
             item = self._asset_list_layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
         self._asset_buttons = {}
         for aid, data in self.assets.items():
             title = data.get("title") or data.get("source_name") or aid
             count = len(data.get("concepts", []))
-            btn = QPushButton(f"📚 {title[:22]}{'...' if len(title) > 22 else ''}  · {count}")
-            btn.setToolTip(f"{title}\n{count} 个知识实体")
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: transparent;
-                    color: #BBDEFB;
-                    text-align: left;
-                    padding: 8px 12px;
-                    border: none;
-                    border-radius: 4px;
-                    font-size: 12px;
-                }
-                QPushButton:hover { background-color: #283593; }
-                QPushButton:checked { background-color: #3949AB; }
-            """)
+            btn = QPushButton(
+                f"📚 {title[:22]}{'...' if len(title) > 22 else ''}  · {count}"
+            )
+            btn.setToolTip(_t("asset_tooltip", title=title, count=count))
+            btn.setStyleSheet(
+                "QPushButton { background-color: transparent; color: #BBDEFB;"
+                "text-align: left; padding: 8px 12px; border: none;"
+                "border-radius: 4px; font-size: 12px; }"
+                "QPushButton:hover { background-color: #283593; }"
+                "QPushButton:checked { background-color: #3949AB; }"
+            )
             btn.setCheckable(True)
             btn.setChecked(aid == self.current_asset_id)
             btn.clicked.connect(lambda checked, a=aid: self.on_asset_select(a))
             self._asset_buttons[aid] = btn
             self._asset_list_layout.addWidget(btn)
 
-    def _refresh_asset_list(self):
-        """Refresh the dedicated asset list without altering sidebar structure."""
-        self._populate_asset_buttons()
+    def _rebuild_all_views(self):
+        """Clear and rebuild every data-dependent view.
+
+        Fully rebuilds all 7 views (like the original code) so that graph
+        widgets, concept panels, and other lazy-created references are
+        fresh after an asset switch or language change.
+        """
+        # Remember which view was visible
+        prev_idx = (
+            self.content_stack.currentIndex() if hasattr(self, "content_stack") else 2
+        )
+
+        # Clear stale widget refs BEFORE rebuilding so no handler can touch
+        # a deleted object
+        for attr in [
+            "_concept_panel",
+            "_teach_answer_input",
+            "_teach_graph",
+            "_dash_graph",
+            "_graph_view",
+            "_source_view_widget",
+            "_map_detail",
+            "_path_ladder",
+        ]:
+            setattr(self, attr, None)
+
+        # Remove the old widget tree before constructing replacements.  Some
+        # extracted views own QObjects also exposed through MainWindow
+        # compatibility attributes; building first could re-parent a new shared
+        # widget into an old view that is about to be deleted.
+        while self.content_stack.count():
+            w = self.content_stack.widget(0)
+            self.content_stack.removeWidget(w)
+            w.deleteLater()
+
+        # Build fresh views
+        self._build_import_view()
+        self._build_knowledge_view()
+        self._build_concept_map_view()
+        self._build_source_view()
+        self._build_teach_view()
+        self._build_learner_view()
+        self._build_teacher_view()
+        # View constructors may trigger nested Qt layout ownership changes;
+        # publish the final live graph after the complete view tree exists.
+        self._dash_graph = self._knowledge_view._dash_graph
+
+        for v in [
+            self._import_view,
+            self._knowledge_view,
+            self._concept_map_view,
+            self._source_view,
+            self._teach_view,
+            self._learner_view,
+            self._teacher_view,
+        ]:
+            self.content_stack.addWidget(v)
+
+        # Re-register views with ViewManager
+        if self._view_manager:
+            self._view_manager.register_views(
+                [
+                    self._import_view,
+                    self._knowledge_view,
+                    self._concept_map_view,
+                    self._source_view,
+                    self._teach_view,
+                    self._learner_view,
+                    self._teacher_view,
+                ]
+            )
+
+        # Restore visible view
+        self.content_stack.setCurrentIndex(
+            min(prev_idx, self.content_stack.count() - 1)
+        )
+
+        self._update_topbar()
+        self._refresh_asset_list()
+        self._update_lang_combo()
+
+    # ---- language --------------------------------------------------------------
+
+    def _t(self, key, **kw) -> str:
+        return _t(key, **kw)
+
+    def _get_lang(self) -> str:
+        return get_lang()
+
+    def _update_lang_combo(self):
+        if hasattr(self, "_lang_combo"):
+            self._lang_combo.blockSignals(True)
+            idx = self._lang_combo.findData(get_lang())
+            if idx >= 0:
+                self._lang_combo.setCurrentIndex(idx)
+            self._lang_combo.blockSignals(False)
+
+    def _apply_language(self, _idx: int = 0):
+        code = self._lang_combo.currentData()
+        if not code or code == get_lang():
+            return
+        set_lang(code)
+        save_lang()
+
+        # Rebuild topbar
+        new_bar = self._build_topbar()
+        old_bar = self._topbar
+        old_bar.parent().layout().replaceWidget(old_bar, new_bar)
+        old_bar.deleteLater()
+        self._topbar = new_bar
+        self.topbar = new_bar
+
+        # Rebuild sidebar
+        new_sb = self._build_sidebar()
+        old_sb = self._sidebar
+        old_sb.parent().layout().replaceWidget(old_sb, new_sb)
+        old_sb.deleteLater()
+        self._sidebar = new_sb
+
+        # Rebuild all views
+        self._rebuild_all_views()
+
+    # ---- report export ---------------------------------------------------------
 
     def _on_export_report(self):
-        """Export learning report to file."""
-        # Build report content
-        report_lines = []
-        report_lines.append("=" * 70)
-        report_lines.append(_t("report_title"))
-        report_lines.append("=" * 70)
-        report_lines.append(_t("report_generated", t=datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        report_lines.append("")
-
-        # Asset info
-        report_lines.append(_t("report_assets"))
-        report_lines.append("-" * 70)
-        for aid, data in self.assets.items():
-            title = data.get('title', aid)
-            concepts = len(data.get('concepts', []))
-            relations = len(data.get('relations', []))
-            report_lines.append(f"  • {title}")
-            report_lines.append("    " + _t("report_concepts", c=concepts, r=relations))
-        report_lines.append("")
-
-        # Concept mastery
-        report_lines.append(_t("report_mastery"))
-        report_lines.append("-" * 70)
-        concepts = self.learner.get('concepts', {})
-        sorted_concepts = sorted(concepts.values(), key=lambda x: -x.get('mastery', 0))
-        for c in sorted_concepts[:15]:
-            name = c.get('name', '?')
-            mastery = c.get('mastery', 0)
-            sources = ', '.join(c.get('sources', []))
-            bar = '█' * int(mastery * 10) + '░' * (10 - int(mastery * 10))
-            report_lines.append(f"  [{bar}] {name}: {mastery:.0%}")
-            report_lines.append("      " + _t("report_sources", s=sources))
-        report_lines.append("")
-
-        # History
-        history = self.learner.get('history', [])
-        if history:
-            report_lines.append(_t("report_history"))
-            report_lines.append("-" * 70)
-            for h in history[-10:]:
-                at = h.get('at', '')[:19]
-                score = h.get('score', 0)
-                concept = h.get('concept', '?')
-                feedback = h.get('feedback', '')[:60]
-                report_lines.append(f"  [{at}] {concept}")
-                report_lines.append("    " + _t("report_score_fb", s=score, fb=feedback))
-            report_lines.append("")
-
-        report_lines.append("=" * 70)
-        report_lines.append(_t("report_done"))
-
-        # Save to file
-        report_content = "\n".join(report_lines)
-        filename, _ = QFileDialog.getSaveFileName(
+        text = build_html_report(self.assets, self.learner, localized=False)
+        path = config.DATA_DIR / "report.txt"
+        path.write_text(text, encoding="utf-8")
+        QMessageBox.information(
             self,
-            _t("save_report"),
-            _t("report_filename", ts=datetime.now().strftime("%Y%m%d_%H%M%S")),
-            "Text (*.txt);;All (*.*)"
+            self._t("done"),
+            self._t("report_saved", path=str(path)),
         )
-        if filename:
-            try:
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(report_content)
-                QMessageBox.information(
-                    self,
-                    _t("done"),
-                    _t("report_saved", filename=filename)
-                )
-            except Exception as e:
-                QMessageBox.critical(self, _t("error"), _t("report_failed", e=e))
 
-    def _on_export_report_html(self):
-        """Export a self-contained HTML visual report (mastery + network + history)."""
+    def _on_export_html(self):
+        # Pass all assets so the report shows the full cross-asset table
+        html = build_html_report(self.assets, self.learner, lang=self._get_lang())
+        path = config.DATA_DIR / "report.html"
+        path.write_text(html, encoding="utf-8")
+        QMessageBox.information(
+            self,
+            self._t("done"),
+            self._t("report_saved", path=str(path)),
+        )
+
+    # ---- helpers ----------------------------------------------------------------
+
+    def get_asset(self, asset_id: str | None = None) -> KnowledgeAsset | None:
+        aid = asset_id or self.current_asset_id
+        if not aid or aid not in self.assets:
+            return None
+        data = self.assets[aid]
         try:
-            html_content = build_html_report(
-                self.assets,
-                self.learner,
-                lang=_get_lang(),
-                current_asset_id=self.current_asset_id,
-            )
-        except Exception as e:
-            QMessageBox.critical(self, _t("error"), _t("report_failed", e=e))
-            return
+            return self._dict_to_asset(aid, data)
+        except Exception:
+            return None
 
-        from PySide6.QtCore import QUrl
-        from PySide6.QtGui import QDesktopServices
-
-        filename, _ = QFileDialog.getSaveFileName(
-            self,
-            _t("save_report_html"),
-            _t("report_html_filename", ts=datetime.now().strftime("%Y%m%d_%H%M%S")),
-            "HTML (*.html);;All (*.*)",
+    def _dict_to_asset(self, aid: str, data: dict) -> KnowledgeAsset:
+        chapters = [Chapter.from_dict(c) for c in data.get("chapters", [])]
+        concepts = [Concept.from_dict(c) for c in data.get("concepts", [])]
+        relations = [Relation.from_dict(r) for r in data.get("relations", [])]
+        return KnowledgeAsset(
+            asset_id=aid,
+            type=data.get("type", "article"),
+            title=data.get("title", ""),
+            source_name=data.get("source_name", ""),
+            created_at=data.get("created_at", ""),
+            source_text=data.get("source_text", ""),
+            chapters=chapters,
+            concepts=concepts,
+            relations=relations,
+            learning_path=data.get("learning_path", []),
+            method=data.get("method", "unknown"),
+            source_length=0,
         )
-        if filename:
-            try:
-                with open(filename, 'w', encoding='utf-8') as f:
-                    f.write(html_content)
-                QMessageBox.information(
-                    self,
-                    _t("done"),
-                    _t("report_html_saved", filename=filename),
-                )
-                QDesktopServices.openUrl(QUrl.fromLocalFile(filename))
-            except Exception as e:
-                QMessageBox.critical(self, _t("error"), _t("report_failed", e=e))
 
-    def _get_stylesheet(self):
-        return """
-            QMainWindow {
-                background-color: #FAFAFA;
-            }
-            QScrollArea {
-                border: none;
-                background-color: transparent;
-            }
-            QScrollBar:vertical {
-                border: none;
-                background: #F5F5F5;
-                width: 8px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical {
-                background: #BDBDBD;
-                min-height: 30px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #9E9E9E;
-            }
-            QPushButton {
-                background-color: transparent;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-            }
-        """
+    def get_adaptive_path(self, asset_id: str):
+        asset = self.get_asset(asset_id)
+        if asset is None:
+            return []
+        return adaptive_path(asset, self.learner)
+
+    def _compute_stats(self) -> dict:
+        mastered = learning = unstudied = 0
+        anomaly_count = 0
+        for c in self.get_asset().concepts if self.get_asset() else []:
+            norm = normalize(c.name)
+            m = self.learner.get("concepts", {}).get(norm, {}).get("mastery", 0.0)
+            if m >= 0.6:
+                mastered += 1
+            elif m > 0:
+                learning += 1
+            else:
+                unstudied += 1
+        td = self.teacher_models.get(self.current_asset_id or "", {})
+        anomaly_count = len(td.get("anomalies", []))
+        total = mastered + learning + unstudied
+        return dict(
+            total=total,
+            mastered=mastered,
+            learning=learning,
+            unstudied=unstudied,
+            anomalies=anomaly_count,
+        )
+
+    def _next_concept(self):
+        """Return (next Concept to learn, mastery)."""
+        asset = self.get_asset()
+        if asset is None:
+            return None, 0.0
+        entry = self.learner.get("assets", {}).get(self.current_asset_id, {})
+        completed = set(entry.get("completed", []))
+        path = self.get_adaptive_path(self.current_asset_id)
+        for item in path:
+            cid = item.get("cid")
+            if cid and cid not in completed:
+                c = asset.concept_by_id(cid)
+                if c is not None:
+                    m = (
+                        self.learner.get("concepts", {})
+                        .get(normalize(c.name), {})
+                        .get("mastery", 0.0)
+                    )
+                    return c, m
+        return None, 0.0
+
+    def save_learner_state(self):
+        save_learner(self.learner)
+
+    def _refresh_all_views(self):
+        self._update_topbar()
+        idx = self.content_stack.currentIndex()
+        if idx == 1 and hasattr(self, "_knowledge_view"):  # knowledge
+            self._knowledge_view.refresh()
+        elif idx == 2 and hasattr(self, "_concept_map_view"):  # concept map
+            self._concept_map_view.refresh()
+        elif idx == 3 and hasattr(self, "_source_view"):  # source
+            self._source_view.refresh()
+        elif idx == 4 and hasattr(
+            self, "_teach_view"
+        ):  # teach: rebuild style combo i18n
+            self._teach_view.refresh()
+        elif idx == 5 and hasattr(self, "_learner_view"):  # learner
+            self._learner_view.refresh()
+
+    # ---- global concept graph --------------------------------------------------
+
+    def _build_global_asset(self) -> tuple[KnowledgeAsset, set]:
+        """Merge all assets into one for the all-knowledge graph."""
+        all_concepts = []
+        all_relations = []
+        all_chapters = []
+        next_offset = 0
+        grey_ids = set()
+
+        for aid, data in self.assets.items():
+            try:
+                asset = self._dict_to_asset(aid, data)
+            except Exception:
+                continue
+            prefix = f"{aid}:" if len(self.assets) > 1 else ""
+            seen_ids = set()
+            for c in asset.concepts:
+                cid = f"{prefix}{c.id}"
+                all_concepts.append(
+                    Concept(
+                        id=cid,
+                        name=c.name,
+                        definition=c.definition,
+                        summary=c.summary,
+                        evidence=c.evidence,
+                        chapter=c.chapter,
+                        locations=c.locations,
+                    )
+                )
+                seen_ids.add(c.id)
+                if aid != self.current_asset_id:
+                    grey_ids.add(cid)
+            for r in asset.relations:
+                if r.source in seen_ids and r.target in seen_ids:
+                    all_relations.append(
+                        Relation(
+                            id=str(uuid.uuid4()),
+                            source=f"{prefix}{r.source}",
+                            target=f"{prefix}{r.target}",
+                            label=r.label,
+                            type=r.type,
+                            evidence=r.evidence,
+                        )
+                    )
+
+        # Shared-concept edges between same-normalized names
+        norm_map: dict = {}
+        for c in all_concepts:
+            k = normalize(c.name)
+            norm_map.setdefault(k, []).append(c.id)
+        for ids in norm_map.values():
+            if len(ids) > 1:
+                for aid_ in ids:
+                    for bid in ids:
+                        if aid_ < bid:
+                            all_relations.append(
+                                Relation(
+                                    id=str(uuid.uuid4()),
+                                    source=aid_,
+                                    target=bid,
+                                    label=self._t("edge_shared"),
+                                    type="shared_concept",
+                                    evidence="",
+                                )
+                            )
+
+        # Teacher external concepts
+        td = self.teacher_models.get(self.current_asset_id or "", {})
+        for note in td.get("concept_notes", []):
+            for ext in note.get("external_concepts", []):
+                ext_id = f"ext:{ext}"
+                if not any(c.id == ext_id for c in all_concepts):
+                    all_concepts.append(
+                        Concept(
+                            id=ext_id,
+                            name=ext,
+                            definition="",
+                            summary="",
+                            evidence="",
+                            chapter="",
+                            locations=[],
+                        )
+                    )
+                    grey_ids.add(ext_id)
+                    an = all_concepts[-1]
+                    for cn in all_concepts:
+                        if normalize(cn.name) == normalize(ext):
+                            all_relations.append(
+                                Relation(
+                                    id=str(uuid.uuid4()),
+                                    source=cn.id,
+                                    target=ext_id,
+                                    label=self._t("edge_external"),
+                                    type="external",
+                                    evidence="",
+                                )
+                            )
+
+        # Teacher notes add prerequisite edges
+        td2 = self.teacher_models.get(self.current_asset_id or "", {})
+        for note in td2.get("concept_notes", []):
+            cid = note.get("concept_id", "")
+            for prereq in note.get("prerequisites", []):
+                for c in all_concepts:
+                    if normalize(c.name) == normalize(prereq):
+                        all_relations.append(
+                            Relation(
+                                id=str(uuid.uuid4()),
+                                source=c.id,
+                                target=cid,
+                                label=self._t("edge_prereq"),
+                                type="prerequisite",
+                                evidence="",
+                            )
+                        )
+                        break
+            for conn in note.get("connections", []):
+                for c in all_concepts:
+                    if normalize(c.name) == normalize(conn):
+                        all_relations.append(
+                            Relation(
+                                id=str(uuid.uuid4()),
+                                source=cid,
+                                target=c.id,
+                                label=self._t("edge_related"),
+                                type="related",
+                                evidence="",
+                            )
+                        )
+                        break
+
+        title = self._t("global_graph_title")
+        global_asset = KnowledgeAsset(
+            asset_id="global",
+            type="global",
+            title=title,
+            source_name=title,
+            created_at="",
+            source_text="",
+            chapters=all_chapters,
+            concepts=all_concepts,
+            relations=all_relations,
+            learning_path=[],
+            method="global_graph",
+            source_length=0,
+        )
+        return global_asset, grey_ids
+
+    # ---- compare dialog -------------------------------------------------------
+
+    def _open_compare(self, a_id: str, b_id: str):
+        asset = self.get_asset()
+        if asset is None:
+            return
+        teacher = None
+        td = self.teacher_models.get(self.current_asset_id)
+        if td:
+            try:
+                teacher = TeacherModel.from_dict(td)
+            except Exception:
+                teacher = None
+        dlg = ConceptCompareDialog(asset, a_id, b_id, self.learner, teacher, self)
+        dlg.teach_requested.connect(self._on_teach_request)
+        dlg.incorporate_comparison.connect(self._on_incorporate_comparison)
+        dlg.show()
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
 def main():
-    app = QApplication([])
-    app.setStyle("Fusion")
+    _install_excepthook()
+    app = QApplication(sys.argv)
+    app.setApplicationName("ExpertAnything")
+
+    # Locale
+    locale = QLocale.system().name()
+    qt_trans = QTranslator()
+    if qt_trans.load(
+        f"qtbase_{locale}", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    ):
+        app.installTranslator(qt_trans)
+
     window = MainWindow()
     window.show()
-    import sys
     sys.exit(app.exec())
 
 

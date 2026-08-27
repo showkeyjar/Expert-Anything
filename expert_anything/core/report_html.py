@@ -213,6 +213,9 @@ def build_html_report(assets: dict, learner: dict,
     # ---------- concept detail (primary asset) ----------
     detail_html = _build_concept_details(assets.get(primary, {}), concept_mastery)
 
+    # ---------- mastery trend chart ----------
+    trend_html = _build_mastery_trend(history)
+
     # ---------- history ----------
     hist_html = _build_history(history)
 
@@ -319,6 +322,8 @@ def build_html_report(assets: dict, learner: dict,
     <h2>{overview_lbl}</h2>
     {bars_html}
   </section>
+
+  {trend_html}
 
   <section class="card">
     <h2>{network_lbl}</h2>
@@ -440,6 +445,8 @@ def _build_concept_details(asset: dict, concept_mastery: dict) -> str:
         if locations:
             first = locations[0]
             parts = []
+            if first.get("page"):
+                parts.append(t("loc_page", n=first["page"]))
             if first.get("line"):
                 parts.append(t("loc_line", n=first["line"]))
             if first.get("chapter"):
@@ -449,12 +456,33 @@ def _build_concept_details(asset: dict, concept_mastery: dict) -> str:
                     f"<div class='loc'>{_escape(' · '.join(parts))}</div>"
                 )
 
+        # map each evidence to its page (tolerant match against snippets)
+        page_by_ev: dict[str, int] = {}
+        for loc in locations:
+            snip = loc.get("snippet") or ""
+            if snip and loc.get("page"):
+                page_by_ev[snip] = loc["page"]
+
+        def _match_page(e: str) -> int:
+            if e in page_by_ev:
+                return page_by_ev[e]
+            for snip, pg in page_by_ev.items():
+                if pg and (e.startswith(snip) or snip.startswith(e)):
+                    return pg
+            return 0
+
         ev_items = []
         for e in evidence[:3]:
             line = _match_line(e)
+            page = _match_page(e)
+            suffix_parts = []
+            if page:
+                suffix_parts.append(t("loc_page", n=page))
+            if line:
+                suffix_parts.append(t("loc_line", n=line))
             suffix = (
-                f" <span class='locnum'>({_escape(t('loc_line', n=line))})</span>"
-                if line else ""
+                f" <span class='locnum'>({_escape(' · '.join(suffix_parts))})</span>"
+                if suffix_parts else ""
             )
             ev_items.append(f"<li>{_escape(e)}{suffix}</li>")
         ev_html = "".join(ev_items)
@@ -470,6 +498,92 @@ def _build_concept_details(asset: dict, concept_mastery: dict) -> str:
             + "</div>"
         )
     return f"<div class='cgrid'>{''.join(cards)}</div>"
+
+
+def _build_mastery_trend(history: list) -> str:
+    """Inline SVG line chart: per-date average score + mastery count over time."""
+    if len(history) < 2:
+        return ""
+    from collections import defaultdict
+    from expert_anything.core.learner import normalize
+
+    # aggregate by date (YYYY-MM)
+    by_date: dict[str, dict] = defaultdict(lambda: {"scores": [], "mastered": 0, "total": 0})
+    for h in history:
+        at = (h.get("at") or "")[:10]
+        if not at:
+            continue
+        score = float(h.get("score", 0))
+        key = normalize(h.get("concept", ""))
+        by_date[at]["scores"].append(score)
+        by_date[at]["total"] += 1
+        if score >= 0.6:
+            by_date[at]["mastered"] += 1
+
+    dates = sorted(by_date.keys())
+    if len(dates) < 2:
+        return ""
+
+    W, H = 580, 160
+    PADL, PADR, PADT, PADB = 50, 20, 12, 32
+    plot_w = W - PADL - PADR
+    plot_h = H - PADT - PADB
+
+    # normalise to 0..1 range for scores; mastery count uses second y-axis
+    score_vals = [sum(d["scores"]) / len(d["scores"]) for d in by_date.values()]
+    mastery_vals = [d["mastered"] for d in by_date.values()]
+    max_mastery = max(mastery_vals) if mastery_vals else 1
+
+    def sx(i: int) -> float:
+        return PADL + i / max(len(dates) - 1, 1) * plot_w
+
+    def sy_score(v: float) -> float:
+        return PADT + (1 - v) * plot_h
+
+    def sy_mastery(v: int) -> float:
+        return PADT + (1 - v / max_mastery) * plot_h
+
+    # build polyline paths
+    score_pts = " ".join(f"{sx(i):.1f},{sy_score(v):.1f}" for i, v in enumerate(score_vals))
+    mastery_pts = " ".join(f"{sx(i):.1f},{sy_mastery(v):.1f}" for i, v in enumerate(mastery_vals))
+
+    # y-axis score ticks
+    score_ticks = ""
+    for tick in [0.0, 0.25, 0.5, 0.75, 1.0]:
+        y = sy_score(tick)
+        score_ticks += f"<line x1='{PADL}' y1='{y:.1f}' x2='{W-PADR}' y2='{y:.1f}' stroke='#E2E8F0' stroke-width='1'/>\n"
+        score_ticks += f"<text x='{PADL-6}' y='{y+4:.1f}' text-anchor='end' font-size='11' fill='#6B7A90'>{tick:.2f}</text>\n"
+
+    # x-axis date labels (every Nth to avoid crowding)
+    step = max(1, len(dates) // 6)
+    x_labels = ""
+    for i in range(0, len(dates), step):
+        x_labels += f"<text x='{sx(i):.1f}' y='{H-8}' text-anchor='middle' font-size='11' fill='#6B7A90'>{dates[i][5:]}</text>\n"
+
+    # area fill under score line
+    first_y = sy_score(score_vals[0])
+    last_y = sy_score(score_vals[-1])
+    area_pts = f"{sx(0):.1f},{PADT+plot_h} {score_pts} {sx(len(dates)-1):.1f},{PADT+plot_h}"
+
+    legend = (
+        f"<rect x='{W-200}' y='8' width='10' height='10' fill='#1565C0' rx='2'/>"
+        f"<text x='{W-186}' y='17' font-size='12' fill='#6B7A90'>{_escape(t('trend_avg_score'))}</text>\n"
+        f"<rect x='{W-200}' y='26' width='10' height='10' fill='#4CAF50' rx='2'/>"
+        f"<text x='{W-186}' y='35' font-size='12' fill='#6B7A90'>{_escape(t('trend_mastered'))}</text>"
+    )
+
+    svg = (
+        f"<svg viewBox='0 0 {W} {H}' style='width:100%;max-width:{W}px;margin:0 auto;display:block' xmlns='http://www.w3.org/2000/svg'>\n"
+        f"{score_ticks}\n"
+        f"{x_labels}\n"
+        f"<polygon points='{area_pts}' fill='#1565C020'/>\n"
+        f"<polyline points='{score_pts}' fill='none' stroke='#1565C0' stroke-width='2.5' stroke-linejoin='round'/>\n"
+        f"<polyline points='{mastery_pts}' fill='none' stroke='#4CAF50' stroke-width='2' stroke-linejoin='round' stroke-dasharray='4,3'/>\n"
+        f"{legend}\n"
+        f"</svg>"
+    )
+    label = _escape(t("html_trend"))
+    return f"<section class='card'><h2>{label}</h2>{svg}</section>\n"
 
 
 def _build_history(history: list) -> str:

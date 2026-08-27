@@ -47,7 +47,7 @@ print(f"    reloaded {len(reloaded)} asset(s)")
 print("[3] learner registration + alignment...")
 state = learner.load()
 learner.register_asset(state, asset)
-learner.set_profile(state, "能设计一个可用的 Agent Memory", "了解一些", "例子")
+learner.set_profile(state, "能设计一个可用的 Agent Memory", "了解一些", "example")
 learner.save(state)
 
 print("[4] tutor teach (fallback)...")

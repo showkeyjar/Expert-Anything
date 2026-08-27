@@ -644,4 +644,60 @@ System              Model                    System
 >
 > 构建一个能够帮助人类形成专家能力的 AI 系统。
 
+---
+
+## ADR-007：P0-1 main.py 单体文件拆分
+
+### Status
+
+Accepted — Implemented 2026-08-20
+
+### Context
+
+`main.py` grew to 3,605 lines, containing 7 distinct UI views, workers, signal routing, and all application state.  The monolith made the codebase difficult to navigate, test, and onboard contributors.
+
+### Decision
+
+Extract each view into a standalone `ui/views/<name>_view.py` class, keep a thin `MainWindow` in `main.py`, and add a `ui/view_manager.py` for signal routing.
+
+### File layout
+
+```
+ui/views/
+    import_view.py       ImportView (extract + teach build pipeline)
+    knowledge_view.py    KnowledgeView (dashboard + TOC + clusters + path)
+    concept_map_view.py  ConceptMapView (living graph + NodeDetailCard)
+    source_view.py       SourceView (full-text reader + concept chips)
+    teach_view.py        TeachView (lesson + practice + quiz + harness)
+    learner_view.py      LearnerView (mastery stats + trend + history)
+    teacher_view.py      TeacherView (anomalies + concept notes)
+
+ui/widgets/
+    teach_widgets.py    TeachResultView + DecoderSceneCard
+    trend_chart.py      TrendChartView + MasteryDistributionBar
+    map_widgets.py      MapLegend
+    node_detail.py      NodeDetailCard
+    source_widgets.py   re-exports SourceTextView + helpers
+    __init__.py         public API (re-exports all widgets)
+
+ui/view_manager.py   content stack + signal routing
+main.py              MainWindow (~380 lines) + entry point
+```
+
+### Design principles
+
+1. Views receive `MainWindow` reference (`self._main`) to access shared state.
+2. Views communicate upward via their own signals — no view knows about another.
+3. ViewManager wires signals to MainWindow slots — routing in one place.
+4. `pyside_widgets.py` kept intact — all helpers remain; widgets import from it.
+5. All files compile and 237 tests pass — zero regression.
+
+### Consequences
+
+- Each view is independently navigable (~200-400 lines each).
+- New contributors can modify one view without understanding the whole UI.
+- Testability: views can be unit-tested in isolation with a mock MainWindow.
+- MainWindow dropped from ~3,605 to ~380 lines.
+- No new runtime dependencies.
+
 
