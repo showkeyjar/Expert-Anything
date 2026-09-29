@@ -82,6 +82,12 @@ def prepare_app():
     app = QApplication.instance() or QApplication([])
     for name in ("information", "warning", "critical"):
         setattr(QMessageBox, name, staticmethod(lambda *a, **k: QMessageBox.StandardButton.Ok))
+    # ``question`` is the one dialog that returns a decision; answer "No" by
+    # default so opt-in flows (e.g. the domain-template offer on import) stay
+    # inert unless a test explicitly patches in a "Yes".
+    QMessageBox.question = staticmethod(
+        lambda *a, **k: QMessageBox.StandardButton.No
+    )
     return app
 
 

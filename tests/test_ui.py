@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QFrame,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QTableWidget,
@@ -248,6 +249,231 @@ class TestHarnessSuggestionUI(unittest.TestCase):
         buttons[0].click()
         self.assertEqual(len(received), 1)
         self.assertEqual(received[0]["name"], "evolved-1")
+
+    def test_stuck_signal_shows_evolution_card(self):
+        """Full §12 wiring: stuck signal → evolve_joint → card in the teach
+        result view → adopt click → persist + re-teach. The card must appear
+        exactly once for the same (concept, reason, candidate) signature."""
+        import main as main_module
+        from unittest import mock
+
+        win = self.win
+        asset = win.get_asset()
+        if asset is None or not asset.concepts:
+            self.skipTest("no asset loaded")
+        concept = asset.concepts[0]
+        win._teach_concept_now = concept.name
+        # render a lesson result view so the suggestion card has a host and
+        # its adopt/transfer signals get wired (as in _display_result)
+        win._teach_view._display_result(
+            {"concept": concept.name, "style": "例子"}
+        )
+        view = win._teach_view._teach_view_widget
+
+        fake = {
+            "evolved": True,
+            "source": "joint",
+            "reason": "stuck",
+            "focused": {
+                "name": concept.name,
+                "stuck": True,
+                "regression": False,
+                "attempts": 3,
+                "avg": 0.2,
+            },
+            "diagnosis": [],
+            "candidates": [
+                {
+                    "name": "evolved-stuck",
+                    "mode": "fast",
+                    "tools": ["teach", "quiz"],
+                    "policy": {"style": "图示"},
+                    "loop": {"max_steps": 4},
+                    "evaluation": {"metric": "learning_gain", "threshold": 0.6},
+                    "meta": {"budget_cost": 50, "sandbox": "local"},
+                }
+            ],
+        }
+        with mock.patch.object(main_module._ah, "evolve_joint", return_value=fake):
+            win._offer_harness_evolution(concept.name, {"attempts": 3, "avg": 0.2})
+            # repeated weak evaluation of the same concept: no duplicate card
+            win._offer_harness_evolution(concept.name, {"attempts": 4, "avg": 0.1})
+
+        from PySide6.QtWidgets import QPushButton
+        from expert_anything.core.i18n import t as _t
+
+        buttons = [
+            b
+            for b in view.findChildren(QPushButton)
+            if b.text() == _t("harness_adopt")
+        ]
+        self.assertEqual(len(buttons), 1)  # deduped to a single card
+        self.assertIsNotNone(view.grab())
+
+        before = dict(win._harness_specs)
+        try:
+            with (
+                mock.patch.object(main_module._ah, "save_harness_state"),
+                mock.patch.object(main_module._ah, "record_harness_evolution"),
+                mock.patch.object(main_module.QMessageBox, "information"),
+                mock.patch.object(win, "_show_teaching_content") as teach_mock,
+            ):
+                buttons[0].click()  # adopt → full chain via harness_adopted
+            teach_mock.assert_called_once()
+            kw = teach_mock.call_args.kwargs
+            self.assertEqual(kw.get("style"), "图示")
+            self.assertEqual(kw.get("vary"), 1)
+            self.assertEqual(
+                win._harness_specs.get(asset.asset_id, {}).get("name"),
+                "evolved-stuck",
+            )
+        finally:
+            win._harness_specs.clear()
+            win._harness_specs.update(before)
+            win._harness_offer_shown = set()
+
+    def test_transfer_card_via_stuck(self):
+        """Stuck → migration candidate → light-blue card → adopt chain.
+        _find_transfer_candidates is mocked: its differential evaluation has
+        core-layer tests; here we verify the wiring (card render, session
+        dedup, evaluation skip, one-click migrate re-teach)."""
+        import main as main_module
+        from unittest import mock
+
+        win = self.win
+        asset = win.get_asset()
+        if asset is None or not asset.concepts:
+            self.skipTest("no asset loaded")
+        others = [aid for aid in win.assets if aid != asset.asset_id]
+        if not others:
+            self.skipTest("no second asset loaded")
+        src_aid = others[0]
+        concept = asset.concepts[0]
+        win._teach_concept_now = concept.name
+        win._teach_view._display_result(
+            {"concept": concept.name, "style": "例子"}
+        )
+        view = win._teach_view._teach_view_widget
+
+        spec = {
+            "name": "migr-1",
+            "mode": "fast",
+            "tools": ["teach", "quiz"],
+            "policy": {"style": "图示"},
+            "loop": {"max_steps": 4},
+            "evaluation": {"metric": "learning_gain", "threshold": 0.6},
+            "meta": {"budget_cost": 50, "sandbox": "local"},
+        }
+        payload = {
+            "source_asset_id": src_aid,
+            "source_title": "Source Book",
+            "spec": spec,
+            "evaluation": {"comparison": {"diff": 0.12}, "cost_diff": 4},
+            "gain": 0.12,
+        }
+        before = dict(win._harness_specs)
+        try:
+            with mock.patch.object(
+                win,
+                "_find_transfer_candidates",
+                return_value=[payload],
+            ) as find_mock:
+                win._harness_specs[src_aid] = spec
+                win._offer_harness_transfer_cards()
+                win._offer_harness_transfer_cards()  # dedup: no 2nd card
+            self.assertEqual(find_mock.call_count, 1)  # 2nd call skipped eval
+
+            from PySide6.QtWidgets import QPushButton
+            from expert_anything.core.i18n import t as _t
+
+            buttons = [
+                b
+                for b in view.findChildren(QPushButton)
+                if b.text() == _t("harness_transfer_adopt")
+            ]
+            self.assertEqual(len(buttons), 1)
+            self.assertIsNotNone(view.grab())
+
+            with (
+                mock.patch.object(
+                    main_module._ah,
+                    "adopt_harness_for_asset",
+                    return_value=(True, {}),
+                ) as adopt_mock,
+                mock.patch.object(main_module.QMessageBox, "information"),
+                mock.patch.object(win, "_show_teaching_content") as teach_mock,
+            ):
+                buttons[0].click()
+            adopt_mock.assert_called_once()
+            teach_mock.assert_called_once()
+            kw = teach_mock.call_args.kwargs
+            self.assertEqual(kw.get("style"), "图示")
+            self.assertEqual(kw.get("vary"), 1)
+            self.assertEqual(
+                win._harness_specs.get(asset.asset_id, {}).get("name"), "migr-1"
+            )
+        finally:
+            win._harness_specs.clear()
+            win._harness_specs.update(before)
+            win._transfer_offer_shown = set()
+
+    def test_doubt_strip_in_lesson(self):
+        """§2 walk-ahead: the teach result view shows this concept's doubts,
+        or the asset-wide open count when the concept is clean; nothing at
+        all when the whole asset is resolved."""
+        from expert_anything.core.teacher import Anomaly, TeacherModel
+        from expert_anything.core.i18n import t as _t
+        from PySide6.QtWidgets import QLabel
+
+        win = self.win
+        asset = win.get_asset()
+        if asset is None or not asset.concepts:
+            self.skipTest("no asset loaded")
+        concept = asset.concepts[0]
+        name = concept.name
+
+        tm = TeacherModel(asset_id=asset.asset_id)
+        tm.anomalies.append(Anomaly(
+            id="d1", kind="contradiction",
+            description=f"{name} 的定义前后矛盾", severity="high"))
+        before = dict(win.teacher_models)
+        try:
+            win.teacher_models[asset.asset_id] = tm.to_dict()
+            win._teach_view._display_result(
+                {"concept": name, "style": "例子"}
+            )
+            view = win._teach_view._teach_view_widget
+            texts = [l.text() for l in view.findChildren(QLabel)]
+            self.assertIn(_t("doubt_section"), texts)
+            matched = [x for x in texts if "矛盾" in x and name in x]
+            self.assertTrue(matched, texts)
+
+            # clean concept + open anomalies elsewhere → doubt_none line
+            tm2 = TeacherModel(asset_id=asset.asset_id)
+            tm2.anomalies.append(Anomaly(
+                id="d2", kind="undefined_term",
+                description="别的概念术语未定义"))
+            win.teacher_models[asset.asset_id] = tm2.to_dict()
+            win._teach_view._display_result(
+                {"concept": name, "style": "例子"}
+            )
+            texts = [l.text() for l in
+                     win._teach_view._teach_view_widget.findChildren(QLabel)]
+            self.assertIn(
+                _t("doubt_none", n=1), texts
+            )
+
+            # fully resolved asset → no strip at all
+            win.teacher_models.pop(asset.asset_id, None)
+            win._teach_view._display_result(
+                {"concept": name, "style": "例子"}
+            )
+            texts = [l.text() for l in
+                     win._teach_view._teach_view_widget.findChildren(QLabel)]
+            self.assertNotIn(_t("doubt_section"), texts)
+        finally:
+            win.teacher_models.clear()
+            win.teacher_models.update(before)
 
     def test_adopt_persists_and_retaches(self):
         import main as main_module
@@ -1110,6 +1336,58 @@ class TestMapContextUI(unittest.TestCase):
             )
         card.close()
 
+    def test_card_action_path_variants(self):
+        """action_path*: weak successors → focus variant (⚠ + mastery %),
+        all-mastered → plain numbered run, path-end concept → no section."""
+        from expert_anything.ui.widgets import NodeDetailCard
+        from expert_anything.core.i18n import t as _t
+        from expert_anything.core.learner import normalize as _norm
+
+        asset, cid = self._asset_and_concept()
+        path = asset.learning_path or [c.id for c in asset.concepts]
+        if len(path) < 2 or cid not in path:
+            self.skipTest("no successor in demo path")
+        succ = asset.concept_by_id(path[path.index(cid) + 1])
+
+        def _section_titles(card):
+            return [l.text() for l in card.findChildren(QLabel)]
+
+        # weak successor (no learner record → mastery 0) → focus variant
+        empty_state = {"concepts": {}}
+        card = NodeDetailCard()
+        card.set_concept(asset, cid, empty_state)
+        self.assertIn(_t("action_path_focus"), _section_titles(card))
+        btns = [b.text() for b in card.findChildren(QPushButton)]
+        self.assertTrue(
+            any(succ.name in t and "⚠" in t for t in btns), btns
+        )
+        card.close()
+
+        # all successors mastered → plain numbered run
+        strong_state = {
+            "concepts": {
+                _norm(c.name): {"name": c.name, "mastery": 0.9}
+                for c in asset.concepts
+            }
+        }
+        card = NodeDetailCard()
+        card.set_concept(asset, cid, strong_state)
+        titles = _section_titles(card)
+        self.assertIn(_t("action_path"), titles)
+        self.assertNotIn(_t("action_path_focus"), titles)
+        btns = [b.text() for b in card.findChildren(QPushButton)]
+        self.assertTrue(any(t.startswith("1. ") for t in btns), btns)
+        card.close()
+
+        # path-end concept → no action path section at all
+        last = asset.concept_by_id(path[-1])
+        card = NodeDetailCard()
+        card.set_concept(asset, path[-1], empty_state)
+        titles = _section_titles(card)
+        self.assertNotIn(_t("action_path"), titles)
+        self.assertNotIn(_t("action_path_focus"), titles)
+        card.close()
+
     def test_card_compare_emits(self):
         from expert_anything.ui.widgets import NodeDetailCard
         from expert_anything.core.i18n import t as _t
@@ -1318,3 +1596,121 @@ class TestImportExperience(unittest.TestCase):
             self.view._on_extraction_finished(asset)
         self.assertGreaterEqual(self.view._import_progress.value(), 80)
         self.assertIn("教师", self.view._import_status_label.text())
+
+    # -- domain template integration ------------------------------------- #
+
+    def _asset_titled(self, needle):
+        for aid in self.win.assets:
+            asset = self.win.get_asset(aid)
+            if asset is not None and needle in (asset.title or ""):
+                return asset
+        return None
+
+    def test_template_offer_reports_domain_and_coverage(self):
+        asset = self._asset_titled("电力")
+        if asset is None:
+            self.skipTest("demo data has no electricity asset")
+        offer = self.view._template_offer(asset)
+        self.assertIsNotNone(offer)
+        self.assertEqual(offer["domain_id"], "electricity_trading")
+        self.assertGreater(offer["matched_count"], 0)
+        self.assertLessEqual(offer["coverage"], 1.0)
+
+    def test_template_offer_is_none_without_domain_signal(self):
+        class _Plain:
+            title = "纯数学笔记"
+            concepts: list = []
+            learning_path: list = []
+
+        self.assertIsNone(self.view._template_offer(_Plain()))
+
+    def test_declined_template_leaves_pipeline_untouched(self):
+        from unittest import mock
+
+        asset = self._asset_titled("电力")
+        if asset is None:
+            self.skipTest("demo data has no electricity asset")
+        before = list(asset.learning_path or [])
+        with mock.patch(
+            "expert_anything.ui.views.import_view.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.No,
+        ), mock.patch(
+            "expert_anything.ui.views.import_view.apply_domain_template"
+        ) as apply_fn:
+            self.view._offer_domain_template(asset)
+        apply_fn.assert_not_called()
+        self.assertEqual(list(asset.learning_path or []), before)
+
+    def test_confirmed_template_applies_and_reports_stats(self):
+        from unittest import mock
+
+        from expert_anything.core.domain_templates import TemplateApplicationResult
+
+        asset = self._asset_titled("电力")
+        if asset is None:
+            self.skipTest("demo data has no electricity asset")
+        result = TemplateApplicationResult(
+            domain_id="electricity_trading",
+            template_name="中国电力市场交易体系",
+            applied=True,
+            reason="ok",
+            template_concept_count=20,
+            matched_count=10,
+            coverage=0.5,
+            enriched_count=3,
+            learning_path_applied=True,
+            learning_path=["c001"],
+        )
+        with mock.patch(
+            "expert_anything.ui.views.import_view.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ), mock.patch(
+            "expert_anything.ui.views.import_view.apply_domain_template",
+            return_value=result,
+        ) as apply_fn, mock.patch(
+            "expert_anything.ui.views.import_view.QMessageBox.information"
+        ) as info:
+            self.view._offer_domain_template(asset)
+        apply_fn.assert_called_once_with(asset, "electricity_trading")
+        info.assert_called_once()
+        summary = info.call_args[0][2]
+        self.assertIn("中国电力市场交易体系", summary)
+        self.assertIn("50%", summary)
+
+    def test_failed_apply_warns_and_keeps_import_alive(self):
+        from unittest import mock
+
+        asset = self._asset_titled("电力")
+        if asset is None:
+            self.skipTest("demo data has no electricity asset")
+        with mock.patch(
+            "expert_anything.ui.views.import_view.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ), mock.patch(
+            "expert_anything.ui.views.import_view.apply_domain_template",
+            side_effect=RuntimeError("boom"),
+        ), mock.patch(
+            "expert_anything.ui.views.import_view.QMessageBox.warning"
+        ) as warn:
+            self.view._offer_domain_template(asset)  # must not raise
+        warn.assert_called_once()
+
+    def test_degraded_result_surfaces_reason(self):
+        from expert_anything.core.domain_templates import TemplateApplicationResult
+        from expert_anything.core.i18n import t as _tstr
+
+        degraded = TemplateApplicationResult(
+            domain_id="electricity_trading",
+            template_name="中国电力市场交易体系",
+            applied=True,
+            reason="degraded_low_coverage",
+            template_concept_count=20,
+            matched_count=6,
+            coverage=0.3,
+        )
+        text = self.view._template_result_text(degraded)
+        self.assertIn("30%", text)
+        # language-agnostic: the localized reason sentence must be embedded
+        self.assertIn(
+            _tstr("domain_template_reason_degraded_low_coverage"), text
+        )

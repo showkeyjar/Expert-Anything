@@ -1,15 +1,32 @@
 """Import view: file selection, paste area, extraction pipeline."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QProgressBar, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QComboBox,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QLineEdit,
+    QProgressBar,
+    QPushButton,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
 )
 from expert_anything.core import config
 from expert_anything.core import parsers
+from expert_anything.core.domain_templates import (
+    apply_domain_template,
+    build_concept_mapping,
+    detect_domain_from_title,
+    get_domain_template,
+)
 from expert_anything.core.extraction import extract_knowledge
 from expert_anything.core.learner import register_asset
 from expert_anything.core.llm import LLMClient, LLMNotConfigured
@@ -35,10 +52,13 @@ class ExtractWorker(QThread):
             # carry a 1-based page number for the reader/report.
             page_offsets = (
                 parsers.pdf_page_offsets(self.raw)
-                if Path(self.source).suffix.lower() == ".pdf" else None
+                if Path(self.source).suffix.lower() == ".pdf"
+                else None
             )
             asset = extract_knowledge(
-                text, self.source, llm=self.llm_client,
+                text,
+                self.source,
+                llm=self.llm_client,
                 page_offsets=page_offsets,
             )
             self.finished.emit(asset)
@@ -71,9 +91,9 @@ class ImportView(QWidget):
     """View 1 — Import knowledge assets."""
 
     # Signals emitted back to MainWindow
-    asset_extracted = Signal(object)   # KnowledgeAsset
-    teacher_built = Signal(object)     # TeacherModel
-    asset_selected = Signal(str)       # asset_id
+    asset_extracted = Signal(object)  # KnowledgeAsset
+    teacher_built = Signal(object)  # TeacherModel
+    asset_selected = Signal(str)  # asset_id
     navigate_requested = Signal(str)  # view_name
 
     def __init__(self, main, parent=None):
@@ -90,10 +110,12 @@ class ImportView(QWidget):
         layout.setSpacing(0)
 
         # Header
-        layout.addWidget(self._view_header(
-            _t("import_title"),
-            _t("import_subtitle2"),
-        ))
+        layout.addWidget(
+            self._view_header(
+                _t("import_title"),
+                _t("import_subtitle2"),
+            )
+        )
 
         # Content
         content = QWidget()
@@ -103,30 +125,24 @@ class ImportView(QWidget):
 
         # First-run path: make the product's core loop visible before asking
         # the learner to choose between file import and pasted content.
-        self._flow_hint = QLabel("1  导入资料  →  2  生成知识地图  →  3  选择概念开始学习")
-        self._flow_hint.setWordWrap(True)
-        self._flow_hint.setStyleSheet(
-            "background: #E8F1FF; color: #174A7E; border-radius: 6px; "
-            "padding: 10px 12px; font-size: 12px; font-weight: bold;"
-        )
-        content_layout.addWidget(self._flow_hint)
+        content_layout.addWidget(self._build_guide_card())
 
         # File selection
         file_label = QLabel(_t("choose_file") + ":")
-        file_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        file_label.setStyleSheet("font-size: 15px; font-weight: bold;")
         content_layout.addWidget(file_label)
 
         self._import_fname = QLineEdit("learning-note.md")
         self._import_fname.textChanged.connect(self._update_ready)
         self._import_fname.setStyleSheet("""
             QLineEdit { padding: 8px; border: 1px solid #E0E0E0;
-                        border-radius: 4px; font-size: 13px; }
+                        border-radius: 4px; font-size: 15px; }
         """)
         content_layout.addWidget(self._import_fname)
 
         # Paste area
         paste_label = QLabel(_t("paste_hint"))
-        paste_label.setStyleSheet("font-size: 13px; font-weight: bold;")
+        paste_label.setStyleSheet("font-size: 15px; font-weight: bold;")
         content_layout.addWidget(paste_label)
 
         self._import_paste = QTextEdit()
@@ -135,7 +151,7 @@ class ImportView(QWidget):
         self._import_paste.setMinimumHeight(200)
         self._import_paste.setStyleSheet("""
             QTextEdit { padding: 8px; border: 1px solid #E0E0E0;
-                        border-radius: 4px; font-size: 12px; }
+                        border-radius: 4px; font-size: 14px; }
         """)
         content_layout.addWidget(self._import_paste)
 
@@ -145,7 +161,7 @@ class ImportView(QWidget):
         choose_btn = QPushButton(_t("choose_file"))
         choose_btn.setStyleSheet("""
             QPushButton { background-color: #FF9800; color: white; border: none;
-                          border-radius: 6px; padding: 8px 16px; font-size: 13px; }
+                          border-radius: 6px; padding: 8px 16px; font-size: 15px; }
             QPushButton:hover { background-color: #F57C00; }
         """)
         choose_btn.clicked.connect(self._on_choose_file)
@@ -155,7 +171,7 @@ class ImportView(QWidget):
         self._analysis_btn.setEnabled(False)
         self._analysis_btn.setStyleSheet("""
             QPushButton { background-color: #4CAF50; color: white; border: none;
-                          border-radius: 6px; padding: 8px 16px; font-size: 13px; }
+                          border-radius: 6px; padding: 8px 16px; font-size: 15px; }
             QPushButton:hover { background-color: #388E3C; }
             QPushButton:disabled { background-color: #BDBDBD; }
         """)
@@ -173,40 +189,108 @@ class ImportView(QWidget):
         self._import_progress.setVisible(True)
         content_layout.addWidget(self._import_progress)
 
-        self._import_status_label = QLabel("请先选择文件或粘贴学习内容")
-        self._import_status_label.setStyleSheet("color: #666; font-size: 12px; margin-top: 8px;")
+        self._import_status_label = QLabel(_t("import_status_wait"))
+        self._import_status_label.setStyleSheet(
+            "color: #666; font-size: 14px; margin-top: 8px;"
+        )
         content_layout.addWidget(self._import_status_label)
 
         self._update_ready()
 
         # LLM status
-        llm_status = _t("llm_ready") if self._main.llm_client else (
-            _t("llm_not_ready") + "；仍可导入，但知识定义、关系和教师自检会较简化。"
-            "配置模型服务后重新导入可获得完整体验。"
+        llm_status = (
+            _t("llm_ready")
+            if self._main.llm_client
+            else _t("llm_not_ready_detail")
         )
         self._llm_label = QLabel(llm_status)
         self._llm_label.setWordWrap(True)
         self._llm_label.setStyleSheet(
-            "color: #4CAF50; font-size: 12px; margin-top: 8px;"
-            if self._main.llm_client else
-            "color: #FF9800; font-size: 12px; margin-top: 8px;"
+            "color: #4CAF50; font-size: 14px; margin-top: 8px;"
+            if self._main.llm_client
+            else "color: #FF9800; font-size: 14px; margin-top: 8px;"
         )
         content_layout.addWidget(self._llm_label)
 
         layout.addWidget(content)
 
+    def _build_guide_card(self) -> QFrame:
+        """First-run guide card: a three-step walkthrough for newcomers."""
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #F7FAFF; border: 1px solid #D6E4F5;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(16, 14, 16, 12)
+        lay.setSpacing(10)
+
+        title = QLabel(_t("guide_title"))
+        title.setStyleSheet("font-size: 15.5px; font-weight: bold; color: #174A7E;")
+        lay.addWidget(title)
+
+        steps = QHBoxLayout()
+        steps.setSpacing(10)
+        for num, title_key, desc_key in [
+            (1, "guide_step1_title", "guide_step1_desc"),
+            (2, "guide_step2_title", "guide_step2_desc"),
+            (3, "guide_step3_title", "guide_step3_desc"),
+        ]:
+            steps.addWidget(self._guide_step(num, _t(title_key), _t(desc_key)), 1)
+        lay.addLayout(steps)
+
+        note = QLabel(_t("guide_note"))
+        note.setWordWrap(True)
+        note.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
+        lay.addWidget(note)
+
+        return card
+
+    @staticmethod
+    def _guide_step(num: int, title: str, desc: str) -> QFrame:
+        step = QFrame()
+        step.setStyleSheet(
+            "QFrame { background-color: white; border: 1px solid #D6E4F5;"
+            "border-radius: 6px; }"
+        )
+        lay = QVBoxLayout(step)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        head = QHBoxLayout()
+        head.setSpacing(8)
+        badge = QLabel(str(num))
+        badge.setFixedSize(22, 22)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge.setStyleSheet(
+            "QLabel { background-color: #1565C0; color: white;"
+            "border-radius: 11px; font-size: 14px; font-weight: bold; }"
+        )
+        head.addWidget(badge)
+        head.addWidget(QLabel(title), 1)
+        lay.addLayout(head)
+
+        d = QLabel(desc)
+        d.setWordWrap(True)
+        d.setStyleSheet("color: #5F6B7A; font-size: 14px; line-height: 1.4;")
+        lay.addWidget(d)
+
+        return step
+
     def _view_header(self, title, subtitle=""):
         header = QFrame()
-        header.setStyleSheet("background-color: white; border-bottom: 2px solid #1565C0;")
+        header.setStyleSheet(
+            "background-color: white; border-bottom: 2px solid #1565C0;"
+        )
         lay = QHBoxLayout(header)
         lay.setContentsMargins(20, 7, 20, 7)
         lay.setSpacing(10)
         t = QLabel(str(title))
-        t.setStyleSheet("font-size: 16px; font-weight: bold; color: #1F2933;")
+        t.setStyleSheet("font-size: 18px; font-weight: bold; color: #1F2933;")
         lay.addWidget(t)
         if subtitle:
             s = QLabel(str(subtitle))
-            s.setStyleSheet("color: #6B7A90; font-size: 11.5px;")
+            s.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
             lay.addWidget(s)
         lay.addStretch()
         return header
@@ -223,7 +307,7 @@ class ImportView(QWidget):
         self._analysis_btn.setEnabled(ready and not busy)
         if not busy and self._import_progress.value() == 0:
             self._import_status_label.setText(
-                "已准备好，可以开始分析" if ready else "请先选择文件或粘贴学习内容"
+                _t("import_status_ready") if ready else _t("import_status_wait")
             )
 
     def _on_choose_file(self):
@@ -231,15 +315,14 @@ class ImportView(QWidget):
             self,
             _t("choose_file"),
             str(Path(__file__).parent.parent / "data" / "samples"),
-            _t("filter_supported") +
-            " (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;"
+            _t("filter_supported")
+            + " (*.pdf *.epub *.docx *.md *.markdown *.txt *.html *.htm);;"
             "PDF (*.pdf);;EPUB (*.epub);;Word (*.docx);;"
             "Markdown/Text (*.md *.markdown *.txt);;HTML (*.html *.htm);;All (*.*)",
         )
         if file_path:
             self._import_fname.setText(file_path)
-            self._import_status_label.setText("文件已选择，正在开始分析…")
-            self._on_generate()
+            self._import_status_label.setText(_t("import_status_file_chosen"))
 
     def _is_busy(self):
         return bool(
@@ -254,12 +337,17 @@ class ImportView(QWidget):
             self._analysis_btn.setText(button_text)
         self._import_status_label.repaint()
 
+    @staticmethod
+    def _stage_msg(cur: int, msg: str) -> str:
+        """Localized "Step N of 3: …" progress message."""
+        return _t("import_step_progress", cur=cur, msg=msg)
+
     def _on_generate(self):
         # Button disabling is not enough: keyboard activation and queued Qt
         # signals can still re-enter the slot before the first worker returns.
         if self._is_busy():
             self._analysis_btn.setEnabled(False)
-            self._import_status_label.setText("分析正在进行，请等待当前任务完成")
+            self._import_status_label.setText(_t("import_status_busy"))
             return
 
         fname = self._import_fname.text().strip()
@@ -272,6 +360,7 @@ class ImportView(QWidget):
                 raw = Path(fname).read_bytes()
             except Exception as e:
                 from PySide6.QtWidgets import QMessageBox
+
                 QMessageBox.critical(self, _t("error"), _t("read_failed", e=e))
                 return
         else:
@@ -279,24 +368,116 @@ class ImportView(QWidget):
 
         if not raw.strip():
             from PySide6.QtWidgets import QMessageBox
+
             QMessageBox.warning(self, _t("error"), _t("empty_content"))
             return
 
         self._last_error = ""
         self._analysis_btn.setEnabled(False)
-        self._set_stage(10, "第 1/3 步：正在解析资料并抽取知识…", "分析中…")
+        self._set_stage(10, self._stage_msg(1, _t("import_stage_parse")), _t("analyzing"))
 
         self._extract_worker = ExtractWorker(raw, fname, self._main.llm_client)
         self._extract_worker.finished.connect(self._on_extraction_finished)
         self._extract_worker.error.connect(self._on_extraction_error)
         self._extract_worker.start()
 
-    def _on_extraction_finished(self, asset):
-        self._set_stage(
-            80,
-            f"第 2/3 步：已抽取 {len(asset.concepts)} 个概念，正在构建教师模型…",
-            "构建知识模型…",
+    # -- domain template entry ------------------------------------------- #
+    #: ``TemplateApplicationResult.reason`` values that have localized copy.
+    _TEMPLATE_REASONS = (
+        "degraded_no_mapping",
+        "degraded_low_coverage",
+        "unknown_domain",
+    )
+
+    @staticmethod
+    def _template_offer(asset):
+        """The domain template that could enrich ``asset``, or ``None``.
+
+        Read-only: title-based domain detection plus a dry-run coverage
+        estimate.  No LLM, no mutation — safe to compute before the learner
+        decides whether to apply the template.
+        """
+        domain_id = detect_domain_from_title(getattr(asset, "title", "") or "")
+        if not domain_id:
+            return None
+        template = get_domain_template(domain_id)
+        if template is None:
+            return None
+        report = build_concept_mapping(asset, template)
+        return {
+            "domain_id": domain_id,
+            "template_name": template.name,
+            "matched_count": report["matched_count"],
+            "template_concept_count": report["template_concept_count"],
+            "coverage": report["coverage"],
+        }
+
+    def _offer_domain_template(self, asset):
+        """Offer the detected domain template to the learner and apply it.
+
+        Three no-op paths keep the plain import behaviour byte-for-byte: the
+        title carries no domain signal, the domain ships no template, or the
+        learner declines.  When confirmed, the template is applied here —
+        before the asset is registered — so the learner model and every view
+        snapshot pick up the enriched concepts and the domain learning path in
+        a single pass.
+        """
+        offer = self._template_offer(asset)
+        if offer is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            _t("domain_template_title"),
+            _t(
+                "domain_template_ask",
+                template=offer["template_name"],
+                matched=offer["matched_count"],
+                total=offer["template_concept_count"],
+                pct=f"{offer['coverage']:.0%}",
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
         )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            result = apply_domain_template(asset, offer["domain_id"])
+        except Exception as exc:  # defensive: an import must always finish
+            QMessageBox.warning(
+                self, _t("error"), _t("domain_template_failed", e=str(exc))
+            )
+            return
+        QMessageBox.information(
+            self,
+            _t("domain_template_title"),
+            self._template_result_text(result),
+        )
+
+    def _template_result_text(self, result) -> str:
+        """Localized summary of a ``TemplateApplicationResult``."""
+        stats = {
+            "template": result.template_name or result.domain_id,
+            "matched": result.matched_count,
+            "total": result.template_concept_count,
+            "pct": f"{result.coverage:.0%}",
+            "enriched": result.enriched_count,
+        }
+        if result.applied and result.learning_path_applied:
+            return _t("domain_template_applied", **stats)
+        reason = result.reason if result.reason in self._TEMPLATE_REASONS else "other"
+        return _t(
+            "domain_template_applied_degraded",
+            reason=_t(f"domain_template_reason_{reason}"),
+            **stats,
+        )
+
+    def _on_extraction_finished(self, asset):
+        # Domain template first: on confirmation the asset is enriched before
+        # it is registered / snapshotted, so nothing downstream sees a stale
+        # concept set or learning path.
+        self._offer_domain_template(asset)
+
+        self._set_stage(80, self._stage_msg(2, _t("import_extracted_concepts", n=len(asset.concepts))), "…")
 
         # Register in learner
         register_asset(self._main.learner, asset)
@@ -312,16 +493,16 @@ class ImportView(QWidget):
             "relations": [r.to_dict() for r in asset.relations],
             "learning_path": asset.learning_path,
             "method": asset.method,
-            "source_text": (
-                asset.source_text[:5000] + "..."
-                if len(asset.source_text) > 5000 else asset.source_text
-            ),
+            # Keep the complete source in the persisted asset.  The reader
+            # may render a preview, but truncating here breaks long-document
+            # navigation and makes evidence locations invalid after restart.
+            "source_text": asset.source_text,
         }
 
         self.asset_extracted.emit(asset)
 
         # Build teacher model
-        self._set_stage(85, "第 2/3 步：正在构建教师模型并检查知识缺口…")
+        self._set_stage(85, self._stage_msg(2, _t("import_stage_teacher")))
         self._teacher_worker = TeacherWorker(asset, self._main.llm_client)
         self._teacher_worker.finished.connect(self._on_teacher_finished)
         self._teacher_worker.error.connect(self._on_extraction_error)
@@ -339,11 +520,7 @@ class ImportView(QWidget):
         self._main._refresh_asset_list()
         self._main._rebuild_all_views()
 
-        self._set_stage(
-            100,
-            "第 3/3 步：分析完成。接下来可在知识地图中选择推荐概念开始学习。",
-            "分析完成",
-        )
+        self._set_stage(100, self._stage_msg(3, _t("import_done")), _t("done"))
         self._analysis_btn.setEnabled(False)
 
         self.teacher_built.emit(teacher)
@@ -352,12 +529,11 @@ class ImportView(QWidget):
 
     def _on_extraction_error(self, error_msg):
         from PySide6.QtWidgets import QMessageBox
-        self._last_error = str(error_msg).strip() or "未知错误"
+
+        self._last_error = str(error_msg).strip() or _t("unknown_error")
         self._import_progress.setValue(0)
         self._import_progress.setVisible(True)
-        self._analysis_btn.setText("重试分析")
+        self._analysis_btn.setText(_t("retry"))
         self._update_ready()
-        self._import_status_label.setText(
-            f"分析失败：{self._last_error}。输入内容已保留，可直接重试。"
-        )
+        self._import_status_label.setText(_t("import_failed_state", msg=self._last_error))
         QMessageBox.critical(self, _t("error"), _t("import_failed", msg=error_msg))

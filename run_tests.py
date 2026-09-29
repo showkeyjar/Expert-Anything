@@ -11,6 +11,7 @@ Layers:
   ui    – offscreen PySide6 window/widget tests
   llm   – real LLM tests (skipped without EXPERTANYTHING_LLM_API_KEY)
 """
+
 import argparse
 import importlib.util
 import os
@@ -22,9 +23,20 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 LAYERS = {
-    "core": ["tests.test_core", "tests.test_report", "tests.test_checks",
-             "tests.test_decoder", "tests.test_auto_harness",
-             "tests.test_map_context", "tests.test_prompt_templates"],
+    "core": [
+        "tests.test_core",
+        "tests.test_report",
+        "tests.test_checks",
+        "tests.test_decoder",
+        "tests.test_auto_harness",
+        "tests.test_map_context",
+        "tests.test_prompt_templates",
+        "tests.test_domain_templates",
+        "tests.test_domain_prompts",
+        "tests.test_terminology",
+        "tests.test_search",
+        "tests.test_i18n_integrity",
+    ],
     "data": ["tests.test_demo_data"],
     "ui": ["tests.test_ui"],
     "llm": ["tests.test_llm"],
@@ -57,8 +69,9 @@ def main() -> int:
         selected_layers = ["llm"]
         label = "llm"
     else:
-        selected_layers = [layer for layer in LAYERS
-                           if not (layer == "llm" and args.quick)]
+        selected_layers = [
+            layer for layer in LAYERS if not (layer == "llm" and args.quick)
+        ]
         label = "quick" if args.quick else "full"
 
     modules = []
@@ -86,8 +99,10 @@ def main() -> int:
     print(f"== ExpertAnything tests [{label}] ==")
     runner = unittest.TextTestRunner(verbosity=2 if args.v else 1)
     result = runner.run(suite)
-    print(f"\n== {result.testsRun} tests, "
-          f"{len(result.failures)} failures, {len(result.errors)} errors ==")
+    print(
+        f"\n== {result.testsRun} tests, "
+        f"{len(result.failures)} failures, {len(result.errors)} errors =="
+    )
     return 0 if result.wasSuccessful() else 1
 
 

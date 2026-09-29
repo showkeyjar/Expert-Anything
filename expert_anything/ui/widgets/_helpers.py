@@ -24,6 +24,13 @@ MASTERY_COLORS = {
 def _tag_label(tag: str) -> str:
     """Translated tag label -- looked up at render time so language switches
     take effect immediately (module-level _t() would freeze the first lang)."""
+    # Dynamic tags with numeric suffix
+    if tag.startswith("unblock:"):
+        try:
+            n = int(tag.split(":", 1)[1])
+            return _t("tag_unblock_n", n=n)
+        except (ValueError, IndexError):
+            pass
     return {
         "weak": _t("legend_weak"),
         "anom": _t("legend_anomaly"),
@@ -32,6 +39,9 @@ def _tag_label(tag: str) -> str:
         "blocked": _t("legend_learning"),
         "path": _t("legend_focus"),
         "stuck": _t("tag_stuck"),
+        "high_leverage": _t("tag_high_leverage"),
+        "prereq_shaky": _t("legend_weak"),
+        "unblock_stuck": _t("tag_stuck"),
     }.get(tag, tag)
 
 
@@ -53,7 +63,7 @@ def tag_chip(text: str, color: str = "#1565C0") -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet(
         f"background-color: {color}20; color: {color};"
-        "padding: 2px 8px; border-radius: 4px; font-size: 10px;"
+        "padding: 2px 8px; border-radius: 4px; font-size: 12px;"
     )
     return lbl
 
@@ -61,6 +71,6 @@ def tag_chip(text: str, color: str = "#1565C0") -> QLabel:
 def _sec_title(text: str, color: str = "#0c4a6e") -> QLabel:
     lbl = QLabel(text)
     lbl.setStyleSheet(
-        f"font-size: 12.5px; font-weight: bold; color: {color}; margin-top: 6px;"
+        f"font-size: 14.5px; font-weight: bold; color: {color}; margin-top: 6px;"
     )
     return lbl

@@ -25,8 +25,10 @@ class NodeDetailCard(QFrame):
 
     teach_requested = Signal(str)  # concept name
     full_detail_requested = Signal(str)  # concept id
+    source_requested = Signal(str)  # concept id -> reader at grounded evidence
     neighbor_clicked = Signal(str)  # concept id (roam)
     compare_requested = Signal(str, str)  # concept_a_id, concept_b_id
+    quick_quiz_requested = Signal(str)  # concept id (quick self-test)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -46,7 +48,7 @@ class NodeDetailCard(QFrame):
         self._clear()
         t = QLabel(_t("detail_click_hint"))
         t.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        t.setStyleSheet("color: #9E9E9E; font-size: 12.5px; padding: 30px 0;")
+        t.setStyleSheet("color: #9E9E9E; font-size: 14.5px; padding: 30px 0;")
         self._layout.addWidget(t)
         self._layout.addStretch()
 
@@ -85,7 +87,7 @@ class NodeDetailCard(QFrame):
         head.setSpacing(8)
         name = QLabel(concept.name)
         name.setWordWrap(True)
-        name.setStyleSheet("font-size: 15px; font-weight: bold; color: #0c3d5f;")
+        name.setStyleSheet("font-size: 17px; font-weight: bold; color: #0c3d5f;")
         head.addWidget(name, 1)
         key = next(
             (
@@ -100,7 +102,7 @@ class NodeDetailCard(QFrame):
         m_lbl = QLabel(f"{mastery:.0%}")
         m_lbl.setStyleSheet(
             f"background-color: {mastery_color(mastery)}; color: white;"
-            "padding: 2px 10px; border-radius: 9px; font-size: 11px; font-weight: bold;"
+            "padding: 2px 10px; border-radius: 9px; font-size: 13px; font-weight: bold;"
         )
         head.addWidget(m_lbl, 0)
         self._layout.addLayout(head)
@@ -109,29 +111,81 @@ class NodeDetailCard(QFrame):
         if concept.definition or concept.summary:
             d = QLabel((concept.definition or concept.summary)[:140])
             d.setWordWrap(True)
-            d.setStyleSheet("font-size: 12.5px; color: #37474F;")
+            d.setStyleSheet("font-size: 14.5px; color: #37474F;")
             self._layout.addWidget(d)
 
-        # relations (roam)
+        # mini scene preview — a quick visual deconstruction of the concept
+        # and its nearest neighbours. Gives the learner an immediate visual
+        # anchor before they read the text details.
+        try:
+            from expert_anything.core import decoder
+
+            # Unified entry point (domain scene when available, generic
+            # fallback otherwise) so the detail panel matches the lesson view.
+            scene = decoder.scene_for_concept(asset, concept)
+            if scene and scene.get("nodes"):
+                svg_data = decoder.render_svg(scene)
+                if svg_data:
+                    try:
+                        from PySide6.QtSvgWidgets import QSvgWidget
+                        from PySide6.QtCore import QByteArray
+
+                        svg_widget = QSvgWidget()
+                        svg_widget.load(QByteArray(svg_data.encode("utf-8")))
+                        svg_widget.setMinimumHeight(130)
+                        svg_widget.setMaximumHeight(160)
+                        svg_widget.setStyleSheet(
+                            "background-color: #FAFAFA; border: 1px solid #E8E8E8;"
+                            "border-radius: 8px;"
+                        )
+                        self._layout.addWidget(svg_widget)
+                    except Exception:
+                        pass  # QtSvg not available — silently skip the preview
+        except Exception:
+            pass  # scene generation failed — silently skip
+
+        # relations (roam) — colored by semantic type so the learner reads
+        # structural meaning (causes / part-of / prerequisite / contrast / …)
+        # at a glance instead of seeing a uniform "everything is connected" list.
         rels = []
         for r in asset.relations:
             if r.source == concept.id:
                 other = asset.concept_by_id(r.target)
                 if other:
-                    rels.append((r.label or _t("edge_related"), other.name, other.id))
+                    rels.append(
+                        (
+                            r.label or _t("edge_related"),
+                            other.name,
+                            other.id,
+                            getattr(r, "type", ""),
+                        )
+                    )
             elif r.target == concept.id:
                 other = asset.concept_by_id(r.source)
                 if other:
-                    rels.append((r.label or _t("edge_related"), other.name, other.id))
+                    rels.append(
+                        (
+                            r.label or _t("edge_related"),
+                            other.name,
+                            other.id,
+                            getattr(r, "type", ""),
+                        )
+                    )
         if rels:
+            from expert_anything.core.decoder import classify_relation, REL_SEMANTICS
+
             self._layout.addWidget(_sec_title(_t("detail_relations"), "#0284C7"))
-            for label, other_name, other_id in rels[:6]:
-                btn = QPushButton(f"{label} → {other_name}")
+            for label, other_name, other_id, rtype in rels[:6]:
+                sem = classify_relation(label, rtype)
+                sem_info = REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])
+                color = sem_info["color"]
+                sem_label = _t("rel_" + sem)
+                btn = QPushButton(f"{sem_label} · {label} → {other_name}")
                 btn.setStyleSheet(
-                    "QPushButton { background-color: #E1F0FA; color: #0369A1;"
-                    "border: 1px solid #BAE6FD; border-radius: 6px; padding: 4px 10px;"
-                    "font-size: 11.5px; text-align: left; }"
-                    "QPushButton:hover { background-color: #BAE6FD; }"
+                    f"QPushButton {{ background-color: {color}18; color: {color};"
+                    f"border: 1px solid {color}55; border-radius: 6px; padding: 4px 10px;"
+                    "font-size: 13.5px; text-align: left; }"
+                    f"QPushButton:hover {{ background-color: {color}33; }}"
                 )
                 btn.clicked.connect(
                     lambda checked, cid=other_id: self.neighbor_clicked.emit(cid)
@@ -143,6 +197,15 @@ class NodeDetailCard(QFrame):
         self._append_peers(asset, concept_id, learner_state)
         self._append_next_level(asset, concept_id, learner_state)
 
+        # difficulty badge — auto-labelled from evaluation history
+        self._append_difficulty(asset, concept_id, learner_state)
+
+        # path position — show where this concept sits in the learning path
+        self._append_path_position(asset, concept_id)
+
+        # action path — practice-oriented sequence after this concept
+        self._append_action_path(asset, concept_id, learner_state)
+
         # first evidence
         if concept.evidence:
             self._layout.addWidget(_sec_title(_t("detail_evidence"), "#2E7D32"))
@@ -152,7 +215,7 @@ class NodeDetailCard(QFrame):
             )
             ev.setWordWrap(True)
             ev.setStyleSheet(
-                "font-size: 11.5px; color: #546E7A; background-color: #F0F8F0;"
+                "font-size: 13.5px; color: #546E7A; background-color: #F0F8F0;"
                 "border-radius: 6px; padding: 8px;"
             )
             self._layout.addWidget(ev)
@@ -171,7 +234,7 @@ class NodeDetailCard(QFrame):
                     for b in bits:
                         lbl = QLabel(b)
                         lbl.setWordWrap(True)
-                        lbl.setStyleSheet("font-size: 11.5px; color: #5E35B1;")
+                        lbl.setStyleSheet("font-size: 13.5px; color: #5E35B1;")
                         self._layout.addWidget(lbl)
 
         # actions
@@ -180,20 +243,44 @@ class NodeDetailCard(QFrame):
         teach_btn = QPushButton(_t("panel_teach"))
         teach_btn.setStyleSheet(
             "QPushButton { background-color: #1565C0; color: white; border: none;"
-            "border-radius: 6px; padding: 6px 12px; font-size: 12px; font-weight: bold; }"
+            "border-radius: 6px; padding: 6px 12px; font-size: 14px; font-weight: bold; }"
             "QPushButton:hover { background-color: #0D47A1; }"
         )
         teach_btn.clicked.connect(lambda: self.teach_requested.emit(concept.name))
         btn_row.addWidget(teach_btn)
+
+        # Quick self-test: 30-second check without leaving the map
+        quiz_btn = QPushButton(_t("detail_quick_quiz"))
+        quiz_btn.setStyleSheet(
+            "QPushButton { background-color: #FFF8E1; color: #E65100;"
+            "border: 1px solid #FFCC80; border-radius: 6px; padding: 6px 10px;"
+            "font-size: 13.5px; font-weight: 600; }"
+            "QPushButton:hover { background-color: #FFECB3; }"
+        )
+        quiz_btn.setToolTip(_t("detail_quick_quiz_tip"))
+        quiz_btn.clicked.connect(lambda: self.quick_quiz_requested.emit(concept_id))
+        btn_row.addWidget(quiz_btn)
+
         full_btn = QPushButton(_t("detail_full"))
         full_btn.setStyleSheet(
             "QPushButton { background-color: white; color: #0284C7;"
             "border: 1px solid #BAE6FD; border-radius: 6px; padding: 6px 12px;"
-            "font-size: 12px; }"
+            "font-size: 14px; }"
             "QPushButton:hover { background-color: #E1F0FA; }"
         )
         full_btn.clicked.connect(lambda: self.full_detail_requested.emit(concept_id))
         btn_row.addWidget(full_btn)
+
+        source_btn = QPushButton(_t("btn_source"))
+        source_btn.setStyleSheet(
+            "QPushButton { background-color: white; color: #2E7D32;"
+            "border: 1px solid #A5D6A7; border-radius: 6px; padding: 6px 10px;"
+            "font-size: 14px; }"
+            "QPushButton:hover { background-color: #E8F5E9; }"
+        )
+        source_btn.setToolTip(_t("read_source"))
+        source_btn.clicked.connect(lambda: self.source_requested.emit(concept_id))
+        btn_row.addWidget(source_btn)
 
         # compare — only meaningful when a peer / next-level candidate exists
         if self._compare_target(asset, concept_id):
@@ -201,7 +288,7 @@ class NodeDetailCard(QFrame):
             cmp_btn.setStyleSheet(
                 "QPushButton { background-color: white; color: #00695C;"
                 "border: 1px solid #80CBC4; border-radius: 6px; padding: 6px 12px;"
-                "font-size: 12px; }"
+                "font-size: 14px; }"
                 "QPushButton:hover { background-color: #E0F2F1; }"
             )
             cmp_btn.clicked.connect(
@@ -240,7 +327,7 @@ class NodeDetailCard(QFrame):
         roam.setStyleSheet(
             f"QPushButton {{ background-color: {color}18; color: {color};"
             f"border: 1px solid {color}55; border-radius: 6px; padding: 4px 10px;"
-            "font-size: 11.5px; text-align: left; }"
+            "font-size: 13.5px; text-align: left; }"
             f"QPushButton:hover {{ background-color: {color}33; }}"
         )
         roam.setToolTip(_t("detail_pill_roam"))
@@ -252,7 +339,7 @@ class NodeDetailCard(QFrame):
         teach.setToolTip(_t("detail_pill_teach"))
         teach.setStyleSheet(
             f"QPushButton {{ background-color: {color}; color: white; border: none;"
-            "border-radius: 6px; padding: 4px 0; font-size: 11px; font-weight: bold; }"
+            "border-radius: 6px; padding: 4px 0; font-size: 13px; font-weight: bold; }"
             f"QPushButton:hover {{ background-color: {color}BB; }}"
         )
         teach.clicked.connect(
@@ -271,7 +358,7 @@ class NodeDetailCard(QFrame):
         self._layout.addWidget(_sec_title(_t("detail_siblings"), "#6D4C41"))
         if not peers:
             empty = QLabel(_t("detail_peers_empty"))
-            empty.setStyleSheet("font-size: 11px; color: #BDBDBD;")
+            empty.setStyleSheet("font-size: 13px; color: #BDBDBD;")
             self._layout.addWidget(empty)
             return
         for p in peers:
@@ -287,14 +374,199 @@ class NodeDetailCard(QFrame):
         self._layout.addWidget(_sec_title(_t("detail_next_level"), "#00695C"))
         if not nxt:
             empty = QLabel(_t("detail_next_empty"))
-            empty.setStyleSheet("font-size: 11px; color: #BDBDBD;")
+            empty.setStyleSheet("font-size: 13px; color: #BDBDBD;")
             self._layout.addWidget(empty)
             return
         for n in nxt:
             arrow = "→" if n["dir"] == "out" else ("←" if n["dir"] == "in" else "→")
-            label = (
-                f"{arrow} {n['label']}　{n['name']}"
-                if n["label"]
-                else f"{arrow} {n['name']}"
+            sem_label = n.get("sem_label", "")
+            sem_color = n.get("sem_color", "#00695C")
+            if n["label"] and sem_label:
+                label = f"{arrow} [{sem_label}] {n['label']}　{n['name']}"
+            elif n["label"]:
+                label = f"{arrow} {n['label']}　{n['name']}"
+            else:
+                label = f"{arrow} {n['name']}"
+            self._layout.addWidget(self._pill(label, n["id"], n["name"], sem_color))
+
+    def _append_difficulty(self, asset, concept_id: str, learner_state: dict) -> None:
+        """Show an auto-computed difficulty badge and mastery prediction."""
+        from expert_anything.core.learner import concept_difficulty, mastery_prediction
+
+        diff_map = concept_difficulty(
+            learner_state, asset_id=asset.asset_id if asset else None
+        )
+        c = asset.concept_by_id(concept_id) if asset else None
+        if not c:
+            return
+        diff = diff_map.get(c.name, "unknown")
+        diff_styles = {
+            "easy": ("#E8F5E9", "#2E7D32", _t("diff_easy"), _t("diff_easy_tip")),
+            "medium": ("#FFF8E1", "#E65100", _t("diff_medium"), _t("diff_medium_tip")),
+            "hard": ("#FFEBEE", "#C62828", _t("diff_hard"), _t("diff_hard_tip")),
+            "unknown": ("#F5F5F5", "#9E9E9E", "?", _t("diff_unknown_tip")),
+        }
+        bg, fg, label, tip = diff_styles.get(diff, diff_styles["unknown"])
+        badge = QLabel(f" {_t('diff_label')}: {label} ")
+        badge.setStyleSheet(
+            f"background-color: {bg}; color: {fg}; border: 1px solid {fg};"
+            "border-radius: 10px; padding: 2px 10px; font-size: 13px; font-weight: bold;"
+        )
+        badge.setToolTip(tip)
+        self._layout.addWidget(badge)
+
+        # Mastery prediction — linear trend forecast
+        from expert_anything.core.learner import normalize as _norm
+
+        pred = mastery_prediction(learner_state, c.name)
+        self._layout.addWidget(_sec_title(_t("pred_title"), "#5E35B1"))
+
+        current_mastery = float(
+            learner_state.get("concepts", {}).get(_norm(c.name), {}).get("mastery", 0.0)
+        )
+
+        if pred["trend"] == "unknown" and current_mastery == 0:
+            info = QLabel(_t("pred_no_data"))
+            info.setStyleSheet("font-size: 13px; color: #9E9E9E;")
+            info.setWordWrap(True)
+            self._layout.addWidget(info)
+        elif current_mastery >= 0.6:
+            info = QLabel(_t("pred_already_mastered"))
+            info.setStyleSheet("font-size: 13.5px; color: #2E7D32; font-weight: 600;")
+            self._layout.addWidget(info)
+        else:
+            trend_key = "trend_" + pred["trend"]
+            trend_label = _t(trend_key)
+            pred_pct = f"{pred['predicted_mastery']:.0%}"
+
+            if pred["will_achieve"]:
+                verdict = _t("pred_will_achieve")
+                verdict_color = "#2E7D32"
+                verdict_bg = "#E8F5E9"
+            else:
+                verdict = _t("pred_wont_achieve")
+                verdict_color = "#C62828"
+                verdict_bg = "#FFEBEE"
+
+            verdict_lbl = QLabel(verdict)
+            verdict_lbl.setStyleSheet(
+                f"background-color: {verdict_bg}; color: {verdict_color};"
+                "border-radius: 6px; padding: 4px 8px; font-size: 13px; font-weight: 600;"
             )
-            self._layout.addWidget(self._pill(label, n["id"], n["name"], "#00695C"))
+            verdict_lbl.setWordWrap(True)
+            self._layout.addWidget(verdict_lbl)
+
+            detail_parts = [f"{_t('pred_predicted')}: {pred_pct}", trend_label]
+            if pred["sessions_needed"] > 0:
+                detail_parts.append(
+                    _t("pred_sessions_needed", n=pred["sessions_needed"])
+                )
+            detail = QLabel("  ·  ".join(detail_parts))
+            detail.setStyleSheet("font-size: 13px; color: #616161;")
+            detail.setWordWrap(True)
+            self._layout.addWidget(detail)
+
+    def _append_path_position(self, asset, concept_id: str) -> None:
+        """Show where this concept sits in the learning path.
+
+        Displays a compact "step N of M" badge with the previous and next
+        concepts in the curated path, so the learner always knows their
+        position in the overall knowledge sequence.
+        """
+        path = getattr(asset, "learning_path", None) or []
+        if concept_id not in path:
+            return
+        idx = path.index(concept_id)
+        total = len(path)
+        self._layout.addWidget(_sec_title(_t("detail_path_pos"), "#1565C0"))
+
+        # Position badge
+        pos_widget = QWidget()
+        pos_lay = QHBoxLayout(pos_widget)
+        pos_lay.setContentsMargins(0, 0, 0, 0)
+        pos_lay.setSpacing(6)
+
+        badge = QLabel(f"{idx + 1} / {total}")
+        badge.setStyleSheet(
+            "background-color: #1565C0; color: white;"
+            "border-radius: 10px; padding: 3px 12px; font-size: 14px; font-weight: bold;"
+        )
+        pos_lay.addWidget(badge)
+        pos_lay.addStretch()
+        self._layout.addWidget(pos_widget)
+
+        # Previous concept in path
+        if idx > 0:
+            prev = asset.concept_by_id(path[idx - 1])
+            if prev:
+                prev_btn = QPushButton(f"← {prev.name}")
+                prev_btn.setStyleSheet(
+                    "QPushButton { background-color: #E3F2FD; color: #1565C0;"
+                    "border: 1px solid #90CAF9; border-radius: 6px; padding: 4px 10px;"
+                    "font-size: 13px; text-align: left; }"
+                    "QPushButton:hover { background-color: #BBDEFB; }"
+                )
+                prev_btn.clicked.connect(
+                    lambda checked, c=path[idx - 1]: self.neighbor_clicked.emit(c)
+                )
+                self._layout.addWidget(prev_btn)
+
+        # Next concept in path
+        if idx + 1 < total:
+            nxt = asset.concept_by_id(path[idx + 1])
+            if nxt:
+                nxt_btn = QPushButton(f"{nxt.name} →")
+                nxt_btn.setStyleSheet(
+                    "QPushButton { background-color: #E8F5E9; color: #2E7D32;"
+                    "border: 1px solid #A5D6A7; border-radius: 6px; padding: 4px 10px;"
+                    "font-size: 13px; text-align: right; }"
+                    "QPushButton:hover { background-color: #C8E6C9; }"
+                )
+                nxt_btn.clicked.connect(
+                    lambda checked, c=path[idx + 1]: self.neighbor_clicked.emit(c)
+                )
+                self._layout.addWidget(nxt_btn)
+
+    def _append_action_path(self, asset, concept_id: str, learner_state: dict) -> None:
+        """Practice-oriented "how to use it" sequence after this concept.
+
+        The learning path answers "what to learn next"; this section answers
+        "in what order to *apply* it". When weak successors (mastery < 0.6)
+        exist the focus variant is shown (⚠ + mastery %) so the learner
+        drills the shaky spots first; otherwise the plain successor run is
+        listed. Path-end concepts render nothing — no fake action path.
+        """
+        path = getattr(asset, "learning_path", None) or []
+        if concept_id not in path:
+            return
+        idx = path.index(concept_id)
+        successors = []
+        for cid in path[idx + 1 : idx + 6]:
+            c = asset.concept_by_id(cid)
+            if c:
+                successors.append(c)
+        if not successors:
+            return
+
+        from expert_anything.core.learner import normalize as _norm
+
+        def _mastery(c) -> float:
+            rec = (
+                learner_state.get("concepts", {}).get(_norm(c.name), {})
+            )
+            try:
+                return float(rec.get("mastery", 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        weak = [c for c in successors if _mastery(c) < 0.6]
+        if weak:
+            self._layout.addWidget(_sec_title(_t("action_path_focus"), "#E65100"))
+            for c in weak:
+                self._layout.addWidget(
+                    self._pill(f"⚠ {c.name} {_mastery(c):.0%}", c.id, c.name, "#E65100")
+                )
+        else:
+            self._layout.addWidget(_sec_title(_t("action_path"), "#00897B"))
+            for i, c in enumerate(successors, 1):
+                self._layout.addWidget(self._pill(f"{i}. {c.name}", c.id, c.name, "#00897B"))

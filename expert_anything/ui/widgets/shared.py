@@ -15,12 +15,14 @@ class KnowledgeCard(QFrame):
 
     clicked = Signal(str)
 
-    def __init__(self, concept_name, mastery=0.0, tags=None, is_top=False, parent=None):
+    def __init__(self, concept_name, mastery=0.0, tags=None, is_top=False,
+                 urgency=None, parent=None):
         super().__init__(parent)
         self.concept_name = concept_name
         self.mastery = mastery
         self.tags = tags or []
         self.is_top = is_top
+        self.urgency = urgency  # urgency accent colour for left border
         self.setup_ui()
         self.apply_style()
 
@@ -47,7 +49,7 @@ class KnowledgeCard(QFrame):
                     color: #1565C0;
                     padding: 2px 8px;
                     border-radius: 4px;
-                    font-size: 10px;
+                    font-size: 12px;
                 }
             """)
             title_row.addWidget(tag_label)
@@ -58,10 +60,10 @@ class KnowledgeCard(QFrame):
         dot_row = QHBoxLayout()
         dot_row.setSpacing(6)
         dot = QLabel("●")
-        dot.setStyleSheet(f"color: {self._get_mastery_hex()}; font-size: 12px;")
+        dot.setStyleSheet(f"color: {self._get_mastery_hex()}; font-size: 14px;")
         dot_row.addWidget(dot)
         pct = QLabel(f"{self.mastery:.0%}")
-        pct.setStyleSheet("color: #616161; font-size: 12px; font-weight: bold;")
+        pct.setStyleSheet("color: #616161; font-size: 14px; font-weight: bold;")
         dot_row.addWidget(pct)
         dot_row.addStretch()
         layout.addLayout(dot_row)
@@ -77,7 +79,7 @@ class KnowledgeCard(QFrame):
                 border: none;
                 border-radius: 6px;
                 padding: 6px 16px;
-                font-size: 11px;
+                font-size: 13px;
             }
             QPushButton:hover {
                 background-color: #0D47A1;
@@ -95,6 +97,19 @@ class KnowledgeCard(QFrame):
                     border: 2px solid #1565C0;
                     border-radius: 12px;
                 }
+            """)
+        elif self.urgency:
+            self.setStyleSheet(f"""
+                QFrame {{
+                    background-color: white;
+                    border: 1px solid #E0E0E0;
+                    border-left: 4px solid {self.urgency};
+                    border-radius: 8px;
+                }}
+                QFrame:hover {{
+                    border: 1px solid #90CAF9;
+                    border-left: 4px solid {self.urgency};
+                }}
             """)
         else:
             self.setStyleSheet("""
@@ -145,7 +160,7 @@ class StatCard(QFrame):
         icon_layout = QVBoxLayout(icon_circle)
         icon_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label = QLabel(icon)
-        icon_label.setStyleSheet(f"color: {color}; font-size: 16px;")
+        icon_label.setStyleSheet(f"color: {color}; font-size: 18px;")
         icon_layout.addWidget(icon_label)
 
         header = QHBoxLayout()
@@ -155,7 +170,7 @@ class StatCard(QFrame):
         layout.addLayout(header)
 
         value_widget = QLabel(str(value))
-        value_widget.setStyleSheet(f"color: {color}; font-size: 24px; font-weight: bold;")
+        value_widget.setStyleSheet(f"color: {color}; font-size: 26px; font-weight: bold;")
         layout.addWidget(value_widget)
         layout.addStretch()
 

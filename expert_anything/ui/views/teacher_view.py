@@ -84,11 +84,11 @@ class TeacherView(QWidget):
         ex_lay.setContentsMargins(12, 10, 12, 10)
         ex_lay.setSpacing(4)
         ex_t = QLabel(self._main._t("teacher_explain_title"))
-        ex_t.setStyleSheet("font-size: 12.5px; font-weight: bold; color: #B45309;")
+        ex_t.setStyleSheet("font-size: 14.5px; font-weight: bold; color: #B45309;")
         ex_lay.addWidget(ex_t)
         ex_b = QLabel(self._main._t("teacher_explain_body"))
         ex_b.setWordWrap(True)
-        ex_b.setStyleSheet("font-size: 12px; color: #5D4037;")
+        ex_b.setStyleSheet("font-size: 14px; color: #5D4037;")
         ex_lay.addWidget(ex_b)
         content_layout.addWidget(explain)
 
@@ -106,11 +106,11 @@ class TeacherView(QWidget):
         lay.setContentsMargins(20, 7, 20, 7)
         lay.setSpacing(10)
         t = QLabel(str(title))
-        t.setStyleSheet("font-size: 16px; font-weight: bold; color: #1F2933;")
+        t.setStyleSheet("font-size: 18px; font-weight: bold; color: #1F2933;")
         lay.addWidget(t)
         if subtitle:
             s = QLabel(str(subtitle))
-            s.setStyleSheet("color: #6B7A90; font-size: 11.5px;")
+            s.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
             lay.addWidget(s)
         lay.addStretch()
         return header
@@ -122,7 +122,7 @@ class TeacherView(QWidget):
         status_labels = {"done": "done", "fallback": "fallback", "failed": "failed"}
         slbl = QLabel(self._main._t("teacher_status_" + status_labels.get(status, "done")))
         slbl.setStyleSheet(
-            f"font-size: 14px; font-weight: bold; "
+            f"font-size: 16px; font-weight: bold; "
             f"color: {'#2E7D32' if status == 'done' else '#FF9800' if status == 'fallback' else '#F44336'};"
         )
         layout.addWidget(slbl)
@@ -130,20 +130,20 @@ class TeacherView(QWidget):
         method = teacher_data.get('method', '')
         if method:
             lbl = QLabel(self._main._t("teacher_method", m=method))
-            lbl.setStyleSheet("font-size: 12px; color: #666;")
+            lbl.setStyleSheet("font-size: 14px; color: #666;")
             layout.addWidget(lbl)
 
         synthesized = teacher_data.get('synthesized_at', '')
         if synthesized:
             lbl = QLabel(self._main._t("teacher_time", t=synthesized[:19]))
-            lbl.setStyleSheet("font-size: 12px; color: #666;")
+            lbl.setStyleSheet("font-size: 14px; color: #666;")
             layout.addWidget(lbl)
 
         btn_layout = QHBoxLayout()
         recheck_btn = QPushButton(self._main._t("recheck"))
         recheck_btn.setStyleSheet("""
             QPushButton { background-color: #FF9800; color: white; border: none;
-                          border-radius: 6px; padding: 8px 16px; font-size: 13px; }
+                          border-radius: 6px; padding: 8px 16px; font-size: 15px; }
             QPushButton:hover { background-color: #F57C00; }
         """)
         recheck_btn.clicked.connect(self._on_recheck)
@@ -151,7 +151,7 @@ class TeacherView(QWidget):
 
         if not self._main.llm_client:
             hint = QLabel(self._main._t("recheck_needs_llm"))
-            hint.setStyleSheet("color: #999; font-size: 12px;")
+            hint.setStyleSheet("color: #999; font-size: 14px;")
             btn_layout.addWidget(hint)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
@@ -161,7 +161,7 @@ class TeacherView(QWidget):
         if anomalies:
             albl = QLabel(self._main._t("anomaly_label", n=len(anomalies)))
             albl.setStyleSheet(
-                "font-size: 13px; font-weight: bold; color: #E65100; margin-top: 12px;"
+                "font-size: 15px; font-weight: bold; color: #E65100; margin-top: 12px;"
             )
             layout.addWidget(albl)
 
@@ -205,19 +205,19 @@ class TeacherView(QWidget):
                 badge.setStyleSheet(
                     f"background-color: {sev_color}; color: white;"
                     "padding: 2px 10px; border-radius: 8px;"
-                    "font-size: 10px; font-weight: bold;"
+                    "font-size: 12px; font-weight: bold;"
                 )
                 head.addWidget(badge)
                 if loc:
                     loc_lbl = QLabel(self._main._t("anomaly_loc", loc=loc[:40]))
-                    loc_lbl.setStyleSheet("color: #757575; font-size: 10.5px;")
+                    loc_lbl.setStyleSheet("color: #757575; font-size: 12.5px;")
                     head.addWidget(loc_lbl)
                 head.addStretch()
                 a_lay.addLayout(head)
 
                 desc_lbl = QLabel(desc)
                 desc_lbl.setWordWrap(True)
-                desc_lbl.setStyleSheet("font-size: 12.5px; color: #37474F;")
+                desc_lbl.setStyleSheet("font-size: 14.5px; color: #37474F;")
                 a_lay.addWidget(desc_lbl)
                 layout.addWidget(acard)
 
@@ -226,18 +226,18 @@ class TeacherView(QWidget):
         if notes:
             nlbl = QLabel(self._main._t("notes_label", n=len(notes)))
             nlbl.setStyleSheet(
-                "font-size: 13px; font-weight: bold; color: #666; margin-top: 12px;"
+                "font-size: 15px; font-weight: bold; color: #666; margin-top: 12px;"
             )
             layout.addWidget(nlbl)
 
             nhint = QLabel(self._main._t("notes_hint", n=len(notes)))
-            nhint.setStyleSheet("font-size: 11.5px; color: #8D6E63;")
+            nhint.setStyleSheet("font-size: 13.5px; color: #8D6E63;")
             layout.addWidget(nhint)
 
             notes_list = QListWidget()
             notes_list.setStyleSheet("""
                 QListWidget { background-color: white; border: 1px solid #E0E0E0;
-                              border-radius: 6px; font-size: 12.5px; }
+                              border-radius: 6px; font-size: 14.5px; }
                 QListWidget::item { padding: 7px 10px;
                                     border-bottom: 1px solid #F0F0F0; }
                 QListWidget::item:hover { background-color: #FFF8E1; }
@@ -260,13 +260,13 @@ class TeacherView(QWidget):
     def _build_empty(self, layout):
         placeholder = QLabel(self._main._t("teacher_empty"))
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setStyleSheet("color: #757575; font-size: 14px; margin: 40px;")
+        placeholder.setStyleSheet("color: #757575; font-size: 16px; margin: 40px;")
         layout.addWidget(placeholder)
 
         build_btn = QPushButton(self._main._t("teacher_build_now"))
         build_btn.setStyleSheet("""
             QPushButton { background-color: #4CAF50; color: white; border: none;
-                          border-radius: 6px; padding: 10px 20px; font-size: 13px; }
+                          border-radius: 6px; padding: 10px 20px; font-size: 15px; }
             QPushButton:hover { background-color: #388E3C; }
         """)
         build_btn.clicked.connect(self._on_build_now)

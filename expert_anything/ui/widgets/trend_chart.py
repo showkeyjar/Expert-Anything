@@ -21,7 +21,7 @@ class TrendChartView(QWidget):
         self.setMinimumHeight(170)
 
     def set_data(self, items: list[dict]) -> None:
-        """items: [{"label": short concept name, "score": 0..1}] in time order."""
+        """items: [{"label": short concept name, "score": 0..1, "time": str}] in time order."""
         self._items = list(items)
         self.update()
 
@@ -60,6 +60,7 @@ class TrendChartView(QWidget):
             painter.setPen(_QPen(_QColor("#E0E0E0"), 1))
 
         # bars
+        bar_centers: list[tuple[int, float]] = []  # (x_center, score) for trend line
         for i, item in enumerate(self._items):
             score = max(0.0, min(1.0, float(item.get("score", 0.0))))
             x = margin_l + i * slot + (slot - bar_w) / 2
@@ -70,6 +71,7 @@ class TrendChartView(QWidget):
             painter.setPen(_QPen(color.darker(130), 1))
             painter.setBrush(color)
             painter.drawRoundedRect(int(x), int(y), int(bar_w), max(1, int(bar_h)), 3, 3)
+            bar_centers.append((int(x + bar_w / 2), score))
 
             # label under bar
             label = item.get("label", "") or ""
@@ -82,6 +84,43 @@ class TrendChartView(QWidget):
                              int(slot - 4), 26,
                              Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
                              short)
+
+        # trend line — connects bar tops to visualise improvement direction
+        if len(bar_centers) >= 2:
+            painter.setPen(_QPen(_QColor("#1565C0"), 2))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            points = []
+            for cx, sc in bar_centers:
+                py = margin_t + plot_h * (1 - sc)
+                points.append((cx, int(py)))
+            for j in range(len(points) - 1):
+                painter.drawLine(points[j][0], points[j][1],
+                                 points[j + 1][0], points[j + 1][1])
+            # dots at each data point
+            for cx, py in points:
+                painter.setBrush(_QColor("#1565C0"))
+                painter.setPen(_QPen(_QColor("#0D47A1"), 1))
+                painter.drawEllipse(cx - 3, py - 3, 6, 6)
+
+            # trend arrow: up / down / flat based on last 3 items
+            recent = bar_centers[-3:] if len(bar_centers) >= 3 else bar_centers
+            if len(recent) >= 2:
+                delta = recent[-1][1] - recent[0][1]
+                if delta > 0.1:
+                    arrow_text = "↗"
+                    arrow_color = _QColor("#2E7D32")
+                elif delta < -0.1:
+                    arrow_text = "↘"
+                    arrow_color = _QColor("#C62828")
+                else:
+                    arrow_text = "→"
+                    arrow_color = _QColor("#757575")
+                painter.setPen(arrow_color)
+                big = _QFont()
+                big.setPointSize(12)
+                big.setBold(True)
+                painter.setFont(big)
+                painter.drawText(w - margin_r - 30, margin_t + 16, arrow_text)
 
         painter.end()
 

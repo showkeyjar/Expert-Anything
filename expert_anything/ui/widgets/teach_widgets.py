@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+import html
+import re
+
+from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import (
     QColor as _QColor,
+    QDesktopServices,
     QFont as _QFont,
     QPainter as _QPainter,
     QPen as _QPen,
@@ -10,6 +14,8 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
+    QGraphicsOpacityEffect,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -39,12 +45,20 @@ class DecoderSceneCard(QWidget):
     game_scored = Signal(float)
 
     def __init__(
-        self, scene: dict, concept: str = "", source_title: str = "", parent=None
+        self,
+        scene: dict,
+        concept: str = "",
+        source_title: str = "",
+        definition: str = "",
+        evidence: list[str] | None = None,
+        parent=None,
     ):
         super().__init__(parent)
         self._scene = scene
         self._concept = concept
         self._source_title = source_title
+        self._definition = definition
+        self._evidence = evidence or []
         self._frames: list[dict] = []
         self._idx = 0
         self._picked: list[int] = []
@@ -69,13 +83,13 @@ class DecoderSceneCard(QWidget):
 
         head = QHBoxLayout()
         t = QLabel(_t("decoder_card_title"))
-        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #E65100;")
+        t.setStyleSheet("font-size: 14px; font-weight: bold; color: #E65100;")
         head.addWidget(t)
         head.addStretch()
         open_btn = QPushButton(_t("decoder_open_html"))
         open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         open_btn.setStyleSheet(
-            "font-size: 12px; color: #E65100; border: 1px solid #FFCC80;"
+            "font-size: 14px; color: #E65100; border: 1px solid #FFCC80;"
             "border-radius: 6px; padding: 2px 10px; background: white;"
         )
         open_btn.clicked.connect(self._open_html)
@@ -110,7 +124,7 @@ class DecoderSceneCard(QWidget):
 
         self._caption = QLabel("")
         self._caption.setWordWrap(True)
-        self._caption.setStyleSheet("font-size: 13.5px; color: #123B66;")
+        self._caption.setStyleSheet("font-size: 15.5px; color: #123B66;")
         lay.addWidget(self._caption)
 
         # clickable step dots (jump to any step)
@@ -142,12 +156,12 @@ class DecoderSceneCard(QWidget):
             self._btn_play,
         ):
             b.setStyleSheet(
-                "font-size: 12px; padding: 3px 12px; border: 1px solid #FFCC80;"
+                "font-size: 14px; padding: 3px 12px; border: 1px solid #FFCC80;"
                 "border-radius: 6px; background: white; color: #E65100;"
             )
             b.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_start.setStyleSheet(
-            "font-size: 12px; padding: 3px 14px; border: none;"
+            "font-size: 14px; padding: 3px 14px; border: none;"
             "border-radius: 6px; background: #E65100; color: white;"
             "font-weight: bold;"
         )
@@ -173,11 +187,11 @@ class DecoderSceneCard(QWidget):
         game = self._scene.get("game")
         if isinstance(game, dict) and game.get("items"):
             gh = QLabel(_t("decoder_game_title"))
-            gh.setStyleSheet("font-size: 12px; font-weight: bold; color: #BF360C;")
+            gh.setStyleSheet("font-size: 14px; font-weight: bold; color: #BF360C;")
             lay.addWidget(gh)
             goal = QLabel(str(game.get("goal", "")))
             goal.setWordWrap(True)
-            goal.setStyleSheet("font-size: 12px; color: #5D4037;")
+            goal.setStyleSheet("font-size: 14px; color: #5D4037;")
             lay.addWidget(goal)
 
             grid = QGridLayout()
@@ -188,7 +202,7 @@ class DecoderSceneCard(QWidget):
                 b.setCursor(Qt.CursorShape.PointingHandCursor)
                 b.setCheckable(False)
                 b.setStyleSheet(
-                    "font-size: 12px; padding: 4px 10px; border-radius: 12px;"
+                    "font-size: 14px; padding: 4px 10px; border-radius: 12px;"
                     "border: 1px solid #FFB74D; background: #FFF8E1; color: #5D4037;"
                     "text-align: center;"
                 )
@@ -198,12 +212,12 @@ class DecoderSceneCard(QWidget):
             lay.addLayout(grid)
 
             hint = QLabel(_t("decoder_your_order"))
-            hint.setStyleSheet("font-size: 11px; color: #8D6E63;")
+            hint.setStyleSheet("font-size: 13px; color: #8D6E63;")
             lay.addWidget(hint)
             self._picked_label = QLabel("—")
             self._picked_label.setWordWrap(True)
             self._picked_label.setStyleSheet(
-                "font-size: 13px; color: #37474F; background: white;"
+                "font-size: 15px; color: #37474F; background: white;"
                 "border-radius: 6px; padding: 4px;"
             )
             lay.addWidget(self._picked_label)
@@ -211,21 +225,21 @@ class DecoderSceneCard(QWidget):
             gctrl = QHBoxLayout()
             self._btn_check = QPushButton(_t("decoder_game_check"))
             self._btn_check.setStyleSheet(
-                "font-size: 12px; padding: 3px 12px; border-radius: 6px;"
+                "font-size: 14px; padding: 3px 12px; border-radius: 6px;"
                 "background: #E65100; color: white;"
             )
             self._btn_check.setCursor(Qt.CursorShape.PointingHandCursor)
             self._btn_check.clicked.connect(self._check_game)
             retry = QPushButton(_t("decoder_game_retry"))
             retry.setStyleSheet(
-                "font-size: 12px; padding: 3px 12px; border-radius: 6px;"
+                "font-size: 14px; padding: 3px 12px; border-radius: 6px;"
                 "border: 1px solid #FFCC80; background: white; color: #E65100;"
             )
             retry.setCursor(Qt.CursorShape.PointingHandCursor)
             retry.clicked.connect(self._reset_game)
             reveal = QPushButton(_t("decoder_game_answer"))
             reveal.setStyleSheet(
-                "font-size: 12px; padding: 3px 12px; border-radius: 6px;"
+                "font-size: 14px; padding: 3px 12px; border-radius: 6px;"
                 "border: 1px solid #FFCC80; background: white; color: #E65100;"
             )
             reveal.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -236,7 +250,7 @@ class DecoderSceneCard(QWidget):
             lay.addLayout(gctrl)
             self._verdict = QLabel("")
             self._verdict.setWordWrap(True)
-            self._verdict.setStyleSheet("font-size: 12px;")
+            self._verdict.setStyleSheet("font-size: 14px;")
             lay.addWidget(self._verdict)
 
     # --- step player behaviour ----------------------------------------------
@@ -267,7 +281,7 @@ class DecoderSceneCard(QWidget):
         self._load_frame(decoder.render_svg(self._scene))
         self._caption.setText(
             f"<span style='background-color:#1976D2; color:white;"
-            f"border-radius:4px; padding:1px 8px; font-size:11px;'>◎</span>"
+            f"border-radius:4px; padding:1px 8px; font-size: 13px;'>◎</span>"
             f"&nbsp; {html.escape(_t('decoder_overview_hint'))}"
         )
 
@@ -280,7 +294,7 @@ class DecoderSceneCard(QWidget):
         self._load_frame(f["svg"])
         self._caption.setText(
             f"<span style='background-color:#1976D2; color:white;"
-            f"border-radius:4px; padding:1px 8px; font-size:11px;'>"
+            f"border-radius:4px; padding:1px 8px; font-size: 13px;'>"
             f"&nbsp;{self._idx + 1}/{len(self._frames)}&nbsp;</span>"
             f"&nbsp; {html.escape(f['caption'])}"
         )
@@ -293,7 +307,7 @@ class DecoderSceneCard(QWidget):
                 style = "background: #DCEBFB; color: #1565C0;border: 1px solid #64B5F6;"
             else:
                 style = "background: white; color: #7B8FA3;border: 1px solid #C6D4E4;"
-            d.setStyleSheet(style + "border-radius: 12px; font-size: 11px;")
+            d.setStyleSheet(style + "border-radius: 12px; font-size: 13px;")
 
     def _load_frame(self, svg: str) -> None:
         """Swap the frame SVG with a gentle fade-in (keeps steps feeling
@@ -352,7 +366,7 @@ class DecoderSceneCard(QWidget):
                     if k in self._picked
                     else "background: #FFF8E1; color: #5D4037; border-color: #FFB74D;"
                 )
-                + "font-size: 12px; padding: 4px 10px; border-radius: 12px;"
+                + "font-size: 14px; padding: 4px 10px; border-radius: 12px;"
                 "border: 1px solid; text-align: center;"
             )
 
@@ -371,7 +385,7 @@ class DecoderSceneCard(QWidget):
             else f"{_t('decoder_game_wrong')}（{hits}/{n}）"
         )
         self._verdict.setStyleSheet(
-            f"font-size: 12px; font-weight: {'bold' if ok else 'normal'};"
+            f"font-size: 14px; font-weight: {'bold' if ok else 'normal'};"
             f"color: {'#2E7D32' if ok else '#C62828'};"
         )
         self.game_scored.emit(score)
@@ -382,7 +396,7 @@ class DecoderSceneCard(QWidget):
         self._verdict.setText("")
         for k in range(len(self._chip_btns)):
             self._chip_btns[k].setStyleSheet(
-                "font-size: 12px; padding: 4px 10px; border-radius: 12px;"
+                "font-size: 14px; padding: 4px 10px; border-radius: 12px;"
                 "border: 1px solid #FFB74D; background: #FFF8E1; color: #5D4037;"
                 "text-align: center;"
             )
@@ -395,7 +409,7 @@ class DecoderSceneCard(QWidget):
             f"{_t('decoder_game_answer')}： "
             + " → ".join(str(items[k]) for k in answer)
         )
-        self._verdict.setStyleSheet("font-size: 12px; color: #1565C0;")
+        self._verdict.setStyleSheet("font-size: 14px; color: #1565C0;")
 
     # --- browser demo ---------------------------------------------------------
     def _open_html(self) -> None:
@@ -411,7 +425,11 @@ class DecoderSceneCard(QWidget):
             with open(path, "w", encoding="utf-8") as fh:
                 fh.write(
                     decoder.render_interactive_html(
-                        self._scene, self._concept, self._source_title
+                        self._scene,
+                        self._concept,
+                        self._source_title,
+                        self._definition,
+                        self._evidence,
                     )
                 )
             QDesktopServices.openUrl(QUrl.fromLocalFile(path))
@@ -435,6 +453,9 @@ class TeachResultView(QWidget):
     quiz_result = Signal(float)  # scored quiz (record into mastery)
     practice_requested = Signal()  # user asked for a hands-on task
     practice_submit = Signal(str)  # answer submitted (score via quiz_result)
+    next_requested = Signal()
+    retry_requested = Signal()
+    vary_requested = Signal()
     harness_adopt_requested = Signal(dict)  # learner adopts an evolved HarnessSpec
     harness_transfer_requested = Signal(
         dict
@@ -457,11 +478,11 @@ class TeachResultView(QWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(4)
         t = QLabel(title)
-        t.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {title_color};")
+        t.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {title_color};")
         lay.addWidget(t)
         b = QLabel(body)
         b.setWordWrap(True)
-        b.setStyleSheet("font-size: 13px; color: #37474F; line-height: 1.6;")
+        b.setStyleSheet("font-size: 15px; color: #37474F; line-height: 1.6;")
         lay.addWidget(b)
         return card
 
@@ -474,12 +495,20 @@ class TeachResultView(QWidget):
         head = QHBoxLayout()
         head.setSpacing(10)
         title = QLabel(result.get("concept", _t("stat_total")))
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #1565C0;")
+        title.setStyleSheet("font-size: 20px; font-weight: bold; color: #1565C0;")
         head.addWidget(title)
         style = result.get("style", "")
         if style:
             # style is always canonical code (example/diagram/steps) internally
             head.addWidget(tag_chip(_t("style_" + style), "#0284C7"))
+        # Phase 4 — deterministic difficulty hint from detect_user_profile
+        # (foundation / standard / advanced / unknown); unknown renders too,
+        # because "we cannot tell yet" is itself useful information.
+        hint = str(result.get("difficulty_hint", "") or "")
+        if hint:
+            hint_text = _t("profile_hint_" + hint)
+            if hint_text and hint_text != "profile_hint_" + hint:
+                head.addWidget(tag_chip(hint_text, "#7B5A9E"))
         head.addStretch()
         root.addLayout(head)
 
@@ -502,11 +531,98 @@ class TeachResultView(QWidget):
                 )
             )
 
+            # source provenance — show which evidence the explanation is based on
+            evidence_list = [
+                str(e) for e in (result.get("evidence") or []) if str(e).strip()
+            ]
+            if evidence_list:
+                prov = QFrame()
+                prov.setStyleSheet(
+                    "QFrame { background-color: #F1F8E9; border-left: 3px solid #689F38;"
+                    "border-radius: 4px; }"
+                )
+                prov_lay = QVBoxLayout(prov)
+                prov_lay.setContentsMargins(10, 6, 10, 6)
+                prov_lay.setSpacing(4)
+                prov_title = QLabel(_t("source_provenance"))
+                prov_title.setStyleSheet(
+                    "font-size: 13px; font-weight: bold; color: #558B2F;"
+                )
+                prov_lay.addWidget(prov_title)
+                for e in evidence_list[:2]:
+                    e_short = e if len(e) <= 120 else e[:117] + "…"
+                    e_lbl = QLabel(f"📖 {e_short}")
+                    e_lbl.setWordWrap(True)
+                    e_lbl.setStyleSheet(
+                        "font-size: 13px; color: #558B2F; line-height: 1.4;"
+                    )
+                    prov_lay.addWidget(e_lbl)
+                root.addWidget(prov)
+
+        # knowledge decoding card (SceneSpec → step animation + sort game)
+        # Placed right after explanation so the learner sees the visual
+        # deconstruction before reading examples and steps — visual-first.
+        scene = result.get("scene")
+        if isinstance(scene, dict) and scene.get("nodes"):
+            dec_card = DecoderSceneCard(
+                scene,
+                _txt(result.get("concept")),
+                definition=_txt(result.get("definition", "")),
+                evidence=result.get("evidence") or [],
+            )
+            dec_card.game_scored.connect(self.quiz_result)
+            root.addWidget(dec_card)
+
         # example
         example = _txt(result.get("example"))
         if example:
             root.addWidget(
                 self._card(_t("example"), example, "#FFF8E1", "#FFE082", "#B45309")
+            )
+
+        # terminology (Phase 4 — registered domain glossary, template-sourced;
+        # the block is produced by core.terminology via Tutor.enrich, so this
+        # view never invents a term: an unregistered concept says so).
+        terminology = result.get("terminology")
+        if isinstance(terminology, dict):
+            term_self = terminology.get("self")
+            related_terms = terminology.get("related") or []
+            lines: list[str] = []
+            if isinstance(term_self, dict) and term_self.get("name"):
+                lines.append(f"{_t('terminology_self')}: {term_self.get('name', '')}")
+                aliases = [
+                    str(a) for a in (term_self.get("aliases") or []) if str(a).strip()
+                ]
+                if aliases:
+                    lines.append(f"{_t('terminology_alias')}: {' / '.join(aliases)}")
+                definition = str(term_self.get("definition", "") or "").strip()
+                if definition:
+                    lines.append(f"{_t('terminology_definition')}: {definition}")
+                points = [
+                    str(p)
+                    for p in (term_self.get("key_points") or [])
+                    if str(p).strip()
+                ]
+                if points:
+                    lines.append(f"{_t('terminology_key_points')}: {points[0]}")
+            else:
+                lines.append(_t("terminology_none"))
+            for term in related_terms[:3]:
+                if not isinstance(term, dict) or not term.get("name"):
+                    continue
+                matched = str(term.get("matched", "") or "")
+                label = f"• {term['name']}"
+                if matched and matched != term["name"]:
+                    label += f" ({_t('terminology_matched', matched=matched)})"
+                lines.append(label)
+            root.addWidget(
+                self._card(
+                    _t("terminology"),
+                    "\n".join(lines),
+                    "#F3E5F5",
+                    "#CE93D8",
+                    "#6A1B9A",
+                )
             )
 
         # analogy bridge (LLM compressed-knowledge layer)
@@ -533,12 +649,25 @@ class TeachResultView(QWidget):
                 )
             )
 
+        # connected (semantic relation summary — the "where it sits" block)
+        connected = _txt(result.get("connected"))
+        if connected:
+            root.addWidget(
+                self._card(
+                    _t("connected_title"),
+                    connected,
+                    "#E8F0F8",
+                    "#B0C4D8",
+                    "#0c4a6e",
+                )
+            )
+
         # steps (numbered ladder)
         steps = _lst(result.get("steps"))
         if steps:
             steps_title = QLabel(_t("steps_title"))
             steps_title.setStyleSheet(
-                "font-size: 12px; font-weight: bold; color: #37474F;"
+                "font-size: 14px; font-weight: bold; color: #37474F;"
             )
             root.addWidget(steps_title)
             for i, s in enumerate(steps, 1):
@@ -549,21 +678,14 @@ class TeachResultView(QWidget):
                 num.setFixedSize(22, 22)
                 num.setStyleSheet(
                     "background-color: #1565C0; color: white; border-radius: 11px;"
-                    "font-size: 11px; font-weight: bold;"
+                    "font-size: 13px; font-weight: bold;"
                 )
                 row.addWidget(num, 0)
                 txt = QLabel(str(s))
                 txt.setWordWrap(True)
-                txt.setStyleSheet("font-size: 13px; color: #37474F;")
+                txt.setStyleSheet("font-size: 15px; color: #37474F;")
                 row.addWidget(txt, 1)
                 root.addLayout(row)
-
-        # knowledge decoding card (SceneSpec → step animation + sort game)
-        scene = result.get("scene")
-        if isinstance(scene, dict) and scene.get("nodes"):
-            dec_card = DecoderSceneCard(scene, _txt(result.get("concept")))
-            dec_card.game_scored.connect(self.quiz_result)
-            root.addWidget(dec_card)
 
         # practice
         practice = _txt(result.get("practice"))
@@ -577,11 +699,11 @@ class TeachResultView(QWidget):
             prac_lay.setContentsMargins(12, 10, 12, 10)
             prac_lay.setSpacing(6)
             p_t = QLabel(_t("practice"))
-            p_t.setStyleSheet("font-size: 12px; font-weight: bold; color: #2E7D32;")
+            p_t.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32;")
             prac_lay.addWidget(p_t)
             p_q = QLabel(practice)
             p_q.setWordWrap(True)
-            p_q.setStyleSheet("font-size: 13px; color: #37474F;")
+            p_q.setStyleSheet("font-size: 15px; color: #37474F;")
             prac_lay.addWidget(p_q)
 
             self.answer_input = QTextEdit()
@@ -589,14 +711,14 @@ class TeachResultView(QWidget):
             self.answer_input.setMinimumHeight(80)
             self.answer_input.setStyleSheet(
                 "QTextEdit { border: 1px solid #C5E1A5; border-radius: 6px;"
-                "padding: 8px; font-size: 13px; background-color: white; }"
+                "padding: 8px; font-size: 15px; background-color: white; }"
             )
             prac_lay.addWidget(self.answer_input)
 
             submit_btn = QPushButton(_t("submit_answer"))
             submit_btn.setStyleSheet(
                 "QPushButton { background-color: #4CAF50; color: white; border: none;"
-                "border-radius: 6px; padding: 8px 18px; font-size: 13px; font-weight: bold; }"
+                "border-radius: 6px; padding: 8px 18px; font-size: 15px; font-weight: bold; }"
                 "QPushButton:hover { background-color: #388E3C; }"
             )
             submit_btn.clicked.connect(self.submit_requested)
@@ -643,7 +765,7 @@ class TeachResultView(QWidget):
         score_lbl = QLabel(f"{score:.0%}")
         score_lbl.setStyleSheet(
             f"background-color: {mastery_color(score)}; color: white;"
-            "padding: 3px 12px; border-radius: 9px; font-size: 13px; font-weight: bold;"
+            "padding: 3px 12px; border-radius: 9px; font-size: 15px; font-weight: bold;"
         )
         head.addWidget(score_lbl)
         head.addStretch()
@@ -652,19 +774,19 @@ class TeachResultView(QWidget):
         if feedback:
             fb = QLabel(feedback)
             fb.setWordWrap(True)
-            fb.setStyleSheet("font-size: 13px; color: #37474F;")
+            fb.setStyleSheet("font-size: 15px; color: #37474F;")
             lay.addWidget(fb)
 
         if reference:
             ref_title = QLabel(_t("eval_reference"))
             ref_title.setStyleSheet(
-                "font-size: 11.5px; font-weight: bold; color: #6A1B9A; margin-top: 2px;"
+                "font-size: 13.5px; font-weight: bold; color: #6A1B9A; margin-top: 2px;"
             )
             lay.addWidget(ref_title)
             ref = QLabel(reference)
             ref.setWordWrap(True)
             ref.setStyleSheet(
-                "font-size: 12.5px; color: #37474F; background-color: #EDE7F6;"
+                "font-size: 14.5px; color: #37474F; background-color: #EDE7F6;"
                 "border-radius: 6px; padding: 8px;"
             )
             lay.addWidget(ref)
@@ -672,16 +794,52 @@ class TeachResultView(QWidget):
         if gap:
             gap_title = QLabel(_t("eval_gap"))
             gap_title.setStyleSheet(
-                "font-size: 11.5px; font-weight: bold; color: #C62828; margin-top: 2px;"
+                "font-size: 13.5px; font-weight: bold; color: #C62828; margin-top: 2px;"
             )
             lay.addWidget(gap_title)
             gp = QLabel(gap)
             gp.setWordWrap(True)
             gp.setStyleSheet(
-                "font-size: 12.5px; color: #B71C1C; background-color: #FFEBEE;"
+                "font-size: 14.5px; color: #B71C1C; background-color: #FFEBEE;"
                 "border-radius: 6px; padding: 8px;"
             )
             lay.addWidget(gp)
+
+        # Keep the learner moving after feedback.  These actions are explicit
+        # and local to the result card, so the user does not need to return to
+        # the concept selector after every answer.
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        next_btn = QPushButton(_t("learn_next"))
+        next_btn.setStyleSheet(
+            "QPushButton { background-color: #1565C0; color: white; border: none;"
+            "border-radius: 6px; padding: 6px 12px; font-size: 14px; font-weight: 600; }"
+            "QPushButton:hover { background-color: #0D47A1; }"
+        )
+        next_btn.clicked.connect(self.next_requested.emit)
+        actions.addWidget(next_btn)
+
+        retry_btn = QPushButton(_t("learn_retry"))
+        retry_btn.setStyleSheet(
+            "QPushButton { background-color: white; color: #6A1B9A;"
+            "border: 1px solid #CE93D8; border-radius: 6px;"
+            "padding: 6px 12px; font-size: 14px; }"
+            "QPushButton:hover { background-color: #F3E5F5; }"
+        )
+        retry_btn.clicked.connect(self.retry_requested.emit)
+        actions.addWidget(retry_btn)
+
+        vary_btn = QPushButton(_t("learn_vary"))
+        vary_btn.setStyleSheet(
+            "QPushButton { background-color: white; color: #00695C;"
+            "border: 1px solid #80CBC4; border-radius: 6px;"
+            "padding: 6px 12px; font-size: 14px; }"
+            "QPushButton:hover { background-color: #E0F2F1; }"
+        )
+        vary_btn.clicked.connect(self.vary_requested.emit)
+        actions.addWidget(vary_btn)
+        actions.addStretch()
+        lay.addLayout(actions)
 
         root.insertWidget(root.count() - 1, card)
 
@@ -750,7 +908,7 @@ class TeachResultView(QWidget):
         lay.addWidget(_sec_title(title, title_c))
         b = QLabel(body)
         b.setWordWrap(True)
-        b.setStyleSheet(f"font-size: 12.5px; color: {text_c};")
+        b.setStyleSheet(f"font-size: 14.5px; color: {text_c};")
         lay.addWidget(b)
 
         row = QHBoxLayout()
@@ -759,7 +917,7 @@ class TeachResultView(QWidget):
         btn.setStyleSheet(
             f"QPushButton {{ background-color: {btn_bg}; color: white;"
             "border: none; border-radius: 6px; padding: 7px 16px;"
-            "font-size: 12.5px; font-weight: bold; }"
+            "font-size: 14.5px; font-weight: bold; }"
             f"QPushButton:hover {{ background-color: {btn_hover}; }}"
         )
         btn.clicked.connect(
@@ -799,7 +957,7 @@ class TeachResultView(QWidget):
         lay.addWidget(_sec_title(title, "#0D47A1"))
         b = QLabel(body)
         b.setWordWrap(True)
-        b.setStyleSheet("font-size: 12.5px; color: #0D2B45;")
+        b.setStyleSheet("font-size: 14.5px; color: #0D2B45;")
         lay.addWidget(b)
 
         row = QHBoxLayout()
@@ -807,7 +965,7 @@ class TeachResultView(QWidget):
         btn = QPushButton(_t("harness_transfer_adopt"))
         btn.setStyleSheet(
             "QPushButton { background-color: #1565C0; color: white; border: none;"
-            "border-radius: 6px; padding: 7px 16px; font-size: 12.5px;"
+            "border-radius: 6px; padding: 7px 16px; font-size: 14.5px;"
             "font-weight: bold; }"
             "QPushButton:hover { background-color: #0D47A1; }"
         )
@@ -819,6 +977,53 @@ class TeachResultView(QWidget):
         lay.addLayout(row)
 
         root.insertWidget(root.count() - 1, card)
+
+    def append_doubt_strip(
+        self, concept_anoms: list, open_count: int = 0
+    ) -> bool:
+        """Teacher-model "doubt" strip: what the system is unsure about.
+
+        Renders only when there is something to say (matched anomalies for
+        this concept, or open anomalies elsewhere in the asset) — a fully
+        resolved asset shows nothing. Informational, not actionable: lighter
+        than the amber evolution card.
+        """
+        concept_anoms = list(concept_anoms or [])
+        if not concept_anoms and open_count <= 0:
+            return False
+        root = self.layout()
+        card = QFrame()
+        card.setStyleSheet(
+            "QFrame { background-color: #FFF8E1; border-left: 3px solid "
+            "#F9A825; border-radius: 4px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(4)
+
+        lay.addWidget(_sec_title(_t("doubt_section"), "#B45309"))
+
+        if concept_anoms:
+            for an in concept_anoms:
+                # t() falls back to the raw key when missing: strip the
+                # prefix so an unknown kind still reads as its own code
+                kind_key = f"kind_{an.kind}"
+                kind = _t(kind_key)
+                if kind == kind_key:
+                    kind = str(getattr(an, "kind", "") or "")
+                desc = str(getattr(an, "description", "") or "")[:80]
+                line = QLabel(_t("doubt_matched", kind=kind, desc=desc))
+                line.setWordWrap(True)
+                line.setStyleSheet("font-size: 13.5px; color: #6B4E0E;")
+                lay.addWidget(line)
+        else:
+            line = QLabel(_t("doubt_none", n=open_count))
+            line.setWordWrap(True)
+            line.setStyleSheet("font-size: 13.5px; color: #6B4E0E;")
+            lay.addWidget(line)
+
+        root.insertWidget(root.count() - 1, card)
+        return True
 
     def append_harness_history(self, events: list[dict], limit: int = 5) -> None:
         """Append an evolution history block (audit trail) to the teach area.
@@ -877,42 +1082,224 @@ class TeachResultView(QWidget):
             )
             b = QLabel(line)
             b.setWordWrap(True)
-            b.setStyleSheet("font-size: 11.5px; color: #37474F;")
+            b.setStyleSheet("font-size: 13.5px; color: #37474F;")
             lay.addWidget(b)
 
         root.insertWidget(root.count() - 1, card)
 
     # -- related concepts --------------------------------------------------------
-    def set_neighbors(self, neighbors: list[tuple[str, str, str]]) -> None:
-        """Show related concepts as chips (label, name, concept_id).
+    def set_neighbors(
+        self, neighbors: list[tuple[str, str, str] | tuple[str, str, str, str]]
+    ) -> None:
+        """Show a mini knowledge graph centred on the current concept.
 
-        Clicking a chip emits ``neighbor_clicked(name)`` so the learner can
-        follow the knowledge network concept by concept.
+        The current concept sits in the middle, surrounded by its direct
+        neighbours arranged radially. Edges are coloured by semantic type
+        (prereq / causes / contrast / part-of / is_a / related) with arrow
+        direction. Clickable chips below provide quick navigation.
+
+        Each entry is ``(label, name, concept_id)`` or the richer
+        ``(label, name, concept_id, relation_type)``; the short form is
+        normalized here so both callers keep working.
+
+        This gives the learner constant "you are here" context during the
+        lesson — no need to switch back to the graph view.
         """
         if not neighbors:
             return
+        # Normalize both the documented 3-tuple and the richer 4-tuple
+        # (relation type) forms once, so the rest of the pipeline can rely
+        # on a stable shape.
+        normalized: list[tuple[str, str, str, str]] = []
+        for n in neighbors:
+            if len(n) == 4:
+                label, name, cid, rtype = n
+            else:
+                label, name, cid = n
+                rtype = ""
+            normalized.append((label, name, cid, rtype))
+        neighbors = normalized
+
+        from expert_anything.core.decoder import classify_relation, REL_SEMANTICS
+
         root = self.layout()
         t = QLabel(_t("related_concepts"))
-        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #0c4a6e;")
+        t.setStyleSheet("font-size: 14px; font-weight: bold; color: #0c4a6e;")
         root.insertWidget(root.count() - 1, t)
 
-        chips = QWidget()
-        chips_lay = QHBoxLayout(chips)
-        chips_lay.setContentsMargins(0, 0, 0, 0)
-        chips_lay.setSpacing(6)
-        for label, name, _cid in neighbors:
+        # Build the mini-graph SVG
+        svg = self._build_minigraph_svg(neighbors)
+        try:
+            from PySide6.QtSvgWidgets import QSvgWidget
+
+            graph_widget = QSvgWidget()
+            graph_widget.load(bytes(svg, "utf-8"))
+            graph_widget.setMinimumHeight(210)
+            graph_widget.setStyleSheet(
+                "QSvgWidget { background-color: #FAFBFC; border: 1px solid #E0E0E0;"
+                "border-radius: 8px; }"
+            )
+            root.insertWidget(root.count() - 1, graph_widget)
+        except ImportError:
+            # Fallback: skip graph if QtSvg isn't available
+            pass
+
+        # Clickable chips below the graph for quick navigation
+        chips_row = QWidget()
+        chips_lay2 = QHBoxLayout(chips_row)
+        chips_lay2.setContentsMargins(0, 8, 0, 0)
+        chips_lay2.setSpacing(6)
+        for label, name, _cid, rtype in neighbors[:6]:
+            sem = classify_relation(label or "", rtype or "")
+            sem_info = REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])
+            color = sem_info["color"]
             chip = QPushButton(name)
             chip.setToolTip(label or _t("related_concepts"))
             chip.setStyleSheet(
-                "QPushButton { background-color: #E1F0FA; color: #0369A1;"
-                "border: 1px solid #BAE6FD; border-radius: 12px; padding: 4px 12px;"
-                "font-size: 11.5px; }"
-                "QPushButton:hover { background-color: #BAE6FD; }"
+                f"QPushButton {{ background-color: {color}12; color: {color};"
+                f"border: 1px solid {color}40; border-radius: 10px; padding: 3px 10px;"
+                "font-size: 13px; }"
+                f"QPushButton:hover {{ background-color: {color}25; }}"
             )
             chip.clicked.connect(lambda checked, n=name: self.neighbor_clicked.emit(n))
-            chips_lay.addWidget(chip)
-        chips_lay.addStretch()
-        root.insertWidget(root.count() - 1, chips)
+            chips_lay2.addWidget(chip)
+        chips_lay2.addStretch()
+        root.insertWidget(root.count() - 1, chips_row)
+
+    def _build_minigraph_svg(self, neighbors: list) -> str:
+        """Generate an SVG mini-graph: central concept + radial neighbours.
+
+        Left side = prerequisites / sources (what you need first).
+        Right side = dependents / targets (what this unlocks).
+        Edges are coloured by semantic type with arrowheads showing direction.
+        """
+        from expert_anything.core.decoder import classify_relation, REL_SEMANTICS
+        import math
+
+        W, H = 540, 200
+        cx, cy = W // 2, H // 2
+        center_r = 38
+        node_r = 28
+
+        # Separate incoming (prerequisites / sources) and outgoing (dependents)
+        incoming = []  # (name, sem, color) — concept depends on these
+        outgoing = []  # (name, sem, color) — these depend on the concept
+        for label, name, _cid, rtype in neighbors[:10]:
+            sem = classify_relation(label or "", rtype or "")
+            sem_info = REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])
+            color = sem_info["color"]
+            if sem in ("prereq", "causes", "is_a", "part_of"):
+                incoming.append((name, sem, color))
+            else:
+                outgoing.append((name, sem, color))
+
+        # Balance both sides visually
+        if not incoming and outgoing:
+            half = max(1, len(outgoing) // 2)
+            incoming = outgoing[:half]
+            outgoing = outgoing[half:]
+        elif not outgoing and incoming:
+            half = max(1, len(incoming) // 2)
+            outgoing = incoming[:half]
+            incoming = incoming[half:]
+
+        svg_parts = [
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
+        ]
+
+        # Arrow marker
+        svg_parts.append("""
+            <defs>
+                <marker id="mg-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+                        markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill="#90A4AE"/>
+                </marker>
+            </defs>
+        """)
+
+        # Place nodes on left and right arcs
+        def place_arc(items: list, side: str) -> list:
+            n = len(items)
+            if n == 0:
+                return []
+            result = []
+            arc_r = 130
+            total_angle = 100  # degrees
+            start_angle = -total_angle / 2
+            step = total_angle / max(n - 1, 1)
+            for i, (name, sem, color) in enumerate(items):
+                angle_deg = start_angle + i * step
+                angle = angle_deg * math.pi / 180
+                if side == "left":
+                    x = cx - arc_r * math.cos(angle)
+                else:
+                    x = cx + arc_r * math.cos(angle)
+                y = cy + arc_r * 0.7 * math.sin(angle)
+                result.append((x, y, name, sem, color))
+            return result
+
+        left_nodes = place_arc(incoming, "left")
+        right_nodes = place_arc(outgoing, "right")
+
+        # Draw edges first (behind nodes)
+        for nx, ny, _name, _sem, color in left_nodes:
+            svg_parts.append(
+                f'<line x1="{nx + node_r:.1f}" y1="{ny:.1f}" '
+                f'x2="{cx - center_r:.1f}" y2="{cy:.1f}" '
+                f'stroke="{color}" stroke-width="2" '
+                f'stroke-linecap="round" marker-end="url(#mg-arrow)"/>'
+            )
+
+        for nx, ny, _name, _sem, color in right_nodes:
+            svg_parts.append(
+                f'<line x1="{cx + center_r:.1f}" y1="{cy:.1f}" '
+                f'x2="{nx - node_r:.1f}" y2="{ny:.1f}" '
+                f'stroke="{color}" stroke-width="2" '
+                f'stroke-linecap="round" marker-end="url(#mg-arrow)"/>'
+            )
+
+        # Side labels
+        if left_nodes:
+            svg_parts.append(
+                f'<text x="20" y="24" fill="#6B7280" font-size="10.5px" '
+                f'font-family="Segoe UI, sans-serif">← {_t("minigraph_prereqs")}</text>'
+            )
+        if right_nodes:
+            svg_parts.append(
+                f'<text x="{W - 20}" y="24" fill="#6B7280" font-size="10.5px" '
+                f'text-anchor="end" font-family="Segoe UI, sans-serif">'
+                f"{_t('minigraph_nexts')} →</text>"
+            )
+
+        # Draw center concept (current lesson focus)
+        svg_parts.append(
+            f'<circle cx="{cx}" cy="{cy}" r="{center_r}" '
+            f'fill="#1565C0" stroke="#0D47A1" stroke-width="3"/>'
+        )
+        svg_parts.append(
+            f'<text x="{cx}" y="{cy + 4}" text-anchor="middle" '
+            f'fill="white" font-size="11" font-weight="bold" '
+            f'font-family="Segoe UI, sans-serif">●</text>'
+        )
+
+        # Draw neighbour nodes
+        for nx, ny, name, _sem, color in left_nodes + right_nodes:
+            svg_parts.append(
+                f'<circle cx="{nx:.1f}" cy="{ny:.1f}" r="{node_r}" '
+                f'fill="white" stroke="{color}" stroke-width="2"/>'
+            )
+            max_chars = 7
+            display_name = (
+                name if len(name) <= max_chars else name[: max_chars - 1] + "…"
+            )
+            svg_parts.append(
+                f'<text x="{nx:.1f}" y="{ny + 3}" text-anchor="middle" '
+                f'fill="#374151" font-size="10px" font-weight="500" '
+                f'font-family="Segoe UI, sans-serif">{display_name}</text>'
+            )
+
+        svg_parts.append("</svg>")
+        return "\n".join(svg_parts)
 
     # -- quick self-test ----------------------------------------------------------
     def _build_quiz_area(self) -> None:
@@ -926,16 +1313,16 @@ class TeachResultView(QWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(6)
         t = QLabel(_t("quiz_title"))
-        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #6A1B9A;")
+        t.setStyleSheet("font-size: 14px; font-weight: bold; color: #6A1B9A;")
         lay.addWidget(t)
         hint = QLabel(_t("quiz_hint"))
         hint.setWordWrap(True)
-        hint.setStyleSheet("font-size: 11.5px; color: #7B5A9E;")
+        hint.setStyleSheet("font-size: 13.5px; color: #7B5A9E;")
         lay.addWidget(hint)
         self._quiz_btn = QPushButton(_t("quiz_start"))
         self._quiz_btn.setStyleSheet(
             "QPushButton { background-color: #6A1B9A; color: white; border: none;"
-            "border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: bold; }"
+            "border-radius: 6px; padding: 6px 14px; font-size: 14px; font-weight: bold; }"
             "QPushButton:hover { background-color: #4A148C; }"
         )
         self._quiz_btn.clicked.connect(self.quiz_requested)
@@ -946,7 +1333,7 @@ class TeachResultView(QWidget):
         """Render a generated quiz (or a hint when generation failed)."""
         if quiz is None:
             t = QLabel(_t("quiz_failed"))
-            t.setStyleSheet("font-size: 12px; color: #9E9E9E; padding: 6px;")
+            t.setStyleSheet("font-size: 14px; color: #9E9E9E; padding: 6px;")
             self.layout().insertWidget(self.layout().count() - 1, t)
             return
         qtype = quiz.get("type")
@@ -965,7 +1352,7 @@ class TeachResultView(QWidget):
         )
         badge.setStyleSheet(
             "background-color: #AB47BC; color: white; padding: 2px 10px;"
-            "border-radius: 8px; font-size: 10px; font-weight: bold;"
+            "border-radius: 8px; font-size: 12px; font-weight: bold;"
         )
         head.addWidget(badge)
         head.addStretch()
@@ -973,7 +1360,7 @@ class TeachResultView(QWidget):
 
         q = QLabel(quiz.get("question", ""))
         q.setWordWrap(True)
-        q.setStyleSheet("font-size: 13px; color: #37474F; font-weight: bold;")
+        q.setStyleSheet("font-size: 15px; color: #37474F; font-weight: bold;")
         lay.addWidget(q)
 
         self._quiz_data = quiz
@@ -987,7 +1374,7 @@ class TeachResultView(QWidget):
                 b.setStyleSheet(
                     "QPushButton { background-color: white; color: #6A1B9A;"
                     "border: 1px solid #CE93D8; border-radius: 6px; padding: 6px 18px;"
-                    "font-size: 12.5px; }"
+                    "font-size: 14.5px; }"
                     "QPushButton:hover { background-color: #F3E5F5; }"
                 )
                 b.clicked.connect(lambda checked, v=val: self._check_quiz(v))
@@ -996,14 +1383,14 @@ class TeachResultView(QWidget):
             lay.addLayout(row)
         else:
             self._quiz_order_label = QLabel("")
-            self._quiz_order_label.setStyleSheet("font-size: 12px; color: #6A1B9A;")
+            self._quiz_order_label.setStyleSheet("font-size: 14px; color: #6A1B9A;")
             lay.addWidget(self._quiz_order_label)
             for i, opt in enumerate(quiz.get("options", [])):
                 b = QPushButton(f"{i + 1}. {opt}")
                 b.setStyleSheet(
                     "QPushButton { background-color: white; color: #37474F;"
                     "border: 1px solid #E1BEE7; border-radius: 6px; padding: 5px 10px;"
-                    "font-size: 12px; text-align: left; }"
+                    "font-size: 14px; text-align: left; }"
                     "QPushButton:hover { background-color: #F3E5F5; }"
                 )
                 b.clicked.connect(lambda checked, idx=i: self._pick_order(idx))
@@ -1011,7 +1398,7 @@ class TeachResultView(QWidget):
             check = QPushButton(_t("quiz_check"))
             check.setStyleSheet(
                 "QPushButton { background-color: #6A1B9A; color: white; border: none;"
-                "border-radius: 6px; padding: 5px 14px; font-size: 12px; }"
+                "border-radius: 6px; padding: 5px 14px; font-size: 14px; }"
             )
             check.clicked.connect(lambda: self._check_quiz(self._quiz_answer))
             lay.addWidget(check, 0, Qt.AlignmentFlag.AlignRight)
@@ -1056,7 +1443,7 @@ class TeachResultView(QWidget):
         v = QLabel(f"{verdict}  ({score:.0%})")
         v.setStyleSheet(
             f"color: {'#2E7D32' if score >= 0.6 else '#C62828'};"
-            "font-size: 12.5px; font-weight: bold;"
+            "font-size: 14.5px; font-weight: bold;"
         )
         head.addWidget(v)
         head.addStretch()
@@ -1068,7 +1455,7 @@ class TeachResultView(QWidget):
         if expl:
             e = QLabel(expl)
             e.setWordWrap(True)
-            e.setStyleSheet("font-size: 12px; color: #37474F;")
+            e.setStyleSheet("font-size: 14px; color: #37474F;")
             rl.addWidget(e)
         self.layout().insertWidget(self.layout().count() - 1, result)
         self.quiz_result.emit(float(score))
@@ -1085,16 +1472,16 @@ class TeachResultView(QWidget):
         lay.setContentsMargins(12, 10, 12, 10)
         lay.setSpacing(6)
         t = QLabel(_t("practice_title"))
-        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #2E7D32;")
+        t.setStyleSheet("font-size: 14px; font-weight: bold; color: #2E7D32;")
         lay.addWidget(t)
         hint = QLabel(_t("practice_hint"))
         hint.setWordWrap(True)
-        hint.setStyleSheet("font-size: 11.5px; color: #558B2F;")
+        hint.setStyleSheet("font-size: 13.5px; color: #558B2F;")
         lay.addWidget(hint)
         self._practice_btn = QPushButton(_t("practice_start"))
         self._practice_btn.setStyleSheet(
             "QPushButton { background-color: #2E7D32; color: white; border: none;"
-            "border-radius: 6px; padding: 6px 14px; font-size: 12px; font-weight: bold; }"
+            "border-radius: 6px; padding: 6px 14px; font-size: 14px; font-weight: bold; }"
             "QPushButton:hover { background-color: #1B5E20; }"
         )
         self._practice_btn.clicked.connect(self.practice_requested)
@@ -1105,7 +1492,7 @@ class TeachResultView(QWidget):
         """Render the hands-on task with an answer box."""
         if task is None:
             t = QLabel(_t("practice_failed"))
-            t.setStyleSheet("font-size: 12px; color: #9E9E9E; padding: 6px;")
+            t.setStyleSheet("font-size: 14px; color: #9E9E9E; padding: 6px;")
             self.layout().insertWidget(self.layout().count() - 1, t)
             return
         card = QFrame()
@@ -1120,20 +1507,20 @@ class TeachResultView(QWidget):
         badge = QLabel(_t("practice_badge"))
         badge.setStyleSheet(
             "background-color: #2E7D32; color: white; padding: 2px 10px;"
-            "border-radius: 8px; font-size: 10px; font-weight: bold;"
+            "border-radius: 8px; font-size: 12px; font-weight: bold;"
         )
         lay.addWidget(badge)
 
         tk = QLabel(task.get("task", ""))
         tk.setWordWrap(True)
-        tk.setStyleSheet("font-size: 13px; color: #1B5E20; font-weight: bold;")
+        tk.setStyleSheet("font-size: 15px; color: #1B5E20; font-weight: bold;")
         lay.addWidget(tk)
 
         hint = task.get("hint", "")
         if hint:
             h = QLabel(f"{_t('practice_hint_label')} {hint}")
             h.setWordWrap(True)
-            h.setStyleSheet("font-size: 11.5px; color: #558B2F; font-style: italic;")
+            h.setStyleSheet("font-size: 13.5px; color: #558B2F; font-style: italic;")
             lay.addWidget(h)
 
         self._practice_answer = QTextEdit()
@@ -1141,14 +1528,14 @@ class TeachResultView(QWidget):
         self._practice_answer.setMinimumHeight(90)
         self._practice_answer.setStyleSheet(
             "QTextEdit { border: 1px solid #A5D6A7; border-radius: 6px;"
-            "padding: 8px; font-size: 12.5px; background-color: white; }"
+            "padding: 8px; font-size: 14.5px; background-color: white; }"
         )
         lay.addWidget(self._practice_answer)
 
         submit = QPushButton(_t("practice_submit"))
         submit.setStyleSheet(
             "QPushButton { background-color: #2E7D32; color: white; border: none;"
-            "border-radius: 6px; padding: 6px 16px; font-size: 12.5px; font-weight: bold; }"
+            "border-radius: 6px; padding: 6px 16px; font-size: 14.5px; font-weight: bold; }"
             "QPushButton:hover { background-color: #1B5E20; }"
         )
         submit.clicked.connect(
@@ -1174,26 +1561,26 @@ class TeachResultView(QWidget):
         v = QLabel(f"{verdict}  ({score:.0%})")
         v.setStyleSheet(
             f"color: {'#2E7D32' if score >= 0.6 else '#C62828'};"
-            "font-size: 12.5px; font-weight: bold;"
+            "font-size: 14.5px; font-weight: bold;"
         )
         lay.addWidget(v)
         fb = result.get("feedback", "")
         if fb:
             f = QLabel(fb)
             f.setWordWrap(True)
-            f.setStyleSheet("font-size: 12px; color: #37474F;")
+            f.setStyleSheet("font-size: 14px; color: #37474F;")
             lay.addWidget(f)
         ref = result.get("reference", "")
         if ref:
             rt = QLabel(_t("eval_reference"))
             rt.setStyleSheet(
-                "font-size: 11px; font-weight: bold; color: #2E7D32; margin-top: 2px;"
+                "font-size: 13px; font-weight: bold; color: #2E7D32; margin-top: 2px;"
             )
             lay.addWidget(rt)
             r = QLabel(ref)
             r.setWordWrap(True)
             r.setStyleSheet(
-                "font-size: 12px; color: #37474F; background-color: #F1F8E9;"
+                "font-size: 14px; color: #37474F; background-color: #F1F8E9;"
                 "border-radius: 6px; padding: 8px;"
             )
             lay.addWidget(r)
@@ -1213,7 +1600,7 @@ class TeachResultView(QWidget):
         lay.setSpacing(6)
 
         t = QLabel(_t("followup_title"))
-        t.setStyleSheet("font-size: 12px; font-weight: bold; color: #37474F;")
+        t.setStyleSheet("font-size: 14px; font-weight: bold; color: #37474F;")
         lay.addWidget(t)
 
         self._followup_input = QTextEdit()
@@ -1221,14 +1608,14 @@ class TeachResultView(QWidget):
         self._followup_input.setMaximumHeight(64)
         self._followup_input.setStyleSheet(
             "QTextEdit { border: 1px solid #BDBDBD; border-radius: 6px;"
-            "padding: 6px; font-size: 12.5px; background-color: white; }"
+            "padding: 6px; font-size: 14.5px; background-color: white; }"
         )
         lay.addWidget(self._followup_input)
 
         ask_btn = QPushButton(_t("ask"))
         ask_btn.setStyleSheet(
             "QPushButton { background-color: #0284C7; color: white; border: none;"
-            "border-radius: 6px; padding: 7px 18px; font-size: 12.5px; font-weight: bold; }"
+            "border-radius: 6px; padding: 7px 18px; font-size: 14.5px; font-weight: bold; }"
             "QPushButton:hover { background-color: #0369A1; }"
         )
         ask_btn.clicked.connect(self._ask)
@@ -1253,13 +1640,13 @@ class TeachResultView(QWidget):
         q_lbl.setWordWrap(True)
         q_lbl.setStyleSheet(
             "background-color: #E1F5FE; color: #01579B; border-radius: 8px;"
-            "padding: 8px 10px; font-size: 12.5px;"
+            "padding: 8px 10px; font-size: 14.5px;"
         )
         a_lbl = QLabel(answer)
         a_lbl.setWordWrap(True)
         a_lbl.setStyleSheet(
             "background-color: #F5F5F5; color: #37474F; border-radius: 8px;"
-            "padding: 8px 10px; font-size: 12.5px;"
+            "padding: 8px 10px; font-size: 14.5px;"
         )
         q_row = QHBoxLayout()
         q_row.addStretch()
