@@ -18,6 +18,7 @@ import math
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QGraphicsEllipseItem,
     QGraphicsLineItem,
     QGraphicsPathItem,
     QGraphicsScene,
@@ -858,6 +859,11 @@ class KnowledgeGraphView(QGraphicsView):
             self._edge_items[key] = line
 
         # nodes -------------------------------------------------------------
+        unanchored_ids: set[str] = set()
+        if getattr(self, "_show_unanchored_marks", True):
+            for c in self._asset.concepts:
+                if not (getattr(c, "locations", None) or []):
+                    unanchored_ids.add(c.id)
         for cid, name, role in self._nodes:
             if cid not in pos:
                 continue
@@ -914,9 +920,26 @@ class KnowledgeGraphView(QGraphicsView):
             # the orange dashed ring, but the tooltip removes any guesswork
             if cid in self._frontier_ids:
                 tip = "🎯 " + _t("frontier_tip_prefix") + "\n\n" + tip
+            if cid in unanchored_ids:
+                tip += "\n\n◌ " + _t("unanchored_tip")
             item.setToolTip(tip)
             scene.addItem(item)
             self._node_items[cid] = item
+
+            # provenance mark: concepts without a source anchor (template
+            # enrichment or unmatched evidence) get a small hollow ring at
+            # the top-left corner — visual channel distinct from the dashed
+            # frontier ring and thick anomaly border. Parented to the node
+            # so it follows drag / float motion.
+            if cid in unanchored_ids:
+                mark = QGraphicsEllipseItem(QRectF(-3.5, -3.5, 7, 7))
+                mpen = QPen(_hex("#90A4AE"), 1.6)
+                mark.setPen(mpen)
+                mark.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+                mark.setParentItem(item)
+                mark.setPos(-bw / 2, -bh / 2)
+                mark.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+                mark.setZValue(2)
 
             # learning-frontier ring (does not capture mouse events)
             if cid in self._frontier_ids:

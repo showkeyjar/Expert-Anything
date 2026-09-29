@@ -305,6 +305,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Learning frontier",
         "ja": "学習境界",
     },
+    "legend_unanchored": {
+        "zh-CN": "无原文锚点",
+        "en": "No source anchor",
+        "ja": "原文アンカーなし",
+    },
+    "unanchored_tip": {
+        "zh-CN": "此概念暂无原文锚点：由领域模板补全，或其证据未能在原文中定位。",
+        "en": "This concept has no source anchor: filled in by a domain template, or its evidence could not be located in the source text.",
+        "ja": "この概念には原文アンカーがありません。ドメインテンプレートで補完されたか、証拠を原文中に定位できませんでした。",
+    },
     "nav_import": {
         "zh-CN": "📥 导入知识资产",
         "en": "📥 Import",

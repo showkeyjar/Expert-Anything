@@ -131,6 +131,41 @@ class TestSource(unittest.TestCase):
         sv.scroll_to_concept(cid)
         self.assertGreater(sv.textCursor().position(), 0)
 
+    def test_unanchored_concept_mark(self):
+        """Concepts without source locations get a hollow-ring corner mark
+        plus a tooltip hint; anchored concepts carry neither."""
+        from PySide6.QtWidgets import QGraphicsEllipseItem
+        from expert_anything.core.i18n import t as _t
+
+        gv = self.win._graph_view
+        asset = self.win.get_asset()
+        target = asset.concepts[0]
+        target.locations = []  # simulate a template-enriched concept
+        gv.set_asset(asset)
+        item = gv._node_items.get(target.id)
+        self.assertIsNotNone(item)
+        self.assertIn(_t("unanchored_tip"), item.toolTip())
+        corner_marks = [
+            it for it in gv.scene().items()
+            if isinstance(it, QGraphicsEllipseItem)
+        ]
+        self.assertTrue(corner_marks, "no hollow-ring mark rendered")
+        target_top_left = item.mapRectToScene(item.boundingRect()).topLeft()
+        mark_pos = [
+            m.scenePos() for m in corner_marks
+            if (m.scenePos() - target_top_left).manhattanLength() < 30
+        ]
+        self.assertTrue(mark_pos, "mark not placed at the node corner")
+
+        # an anchored concept must NOT carry the tooltip hint
+        anchored = next(
+            (c for c in asset.concepts if c.locations), None
+        )
+        if anchored is not None:
+            self.assertNotIn(
+                _t("unanchored_tip"), gv._node_items[anchored.id].toolTip()
+            )
+
     def test_evidence_margin_marks(self):
         """Lines serving as grounded evidence carry a reverse anchor mark
         (evidence://<cid>) that hops back to the concept when clicked."""

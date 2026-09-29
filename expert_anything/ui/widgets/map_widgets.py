@@ -33,6 +33,7 @@ class MapLegend(QFrame):
         node_row.addWidget(self._chip("#E1E4E8", "#E67828", solid=1, dashed=True, text=_t("legend_frontier")))
         node_row.addWidget(self._chip("#E1E4E8", "#E67828", solid=3, text=_t("legend_anomaly")))
         node_row.addWidget(self._chip("#E1E4E8", "#0284C7", solid=3, text=_t("legend_current")))
+        node_row.addWidget(self._chip("#FFFFFF", "#90A4AE", solid=1, dashed=True, text="◌ " + _t("legend_unanchored")))
         node_row.addStretch()
         outer.addLayout(node_row)
 
