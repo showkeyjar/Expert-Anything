@@ -98,6 +98,11 @@ Do not build a simple RAG chatbot.
    `evidence://<cid>` 边注标记（🏷 概念名，浅蓝小胶囊，同行同概念去重），
    点击经 `_on_anchor` 走 `concept_anchor_clicked` 同信号跳概念面板——
    读者在原文里能看到"此段是哪个概念的证据"并能一跳回概念；
+   **锚点覆盖率可见**：教师视图在状态/时间行后显示证据锚定率
+   （`teacher_anchor_rate`：pct + n/total，≥80% 绿 / ≥50% 橙 / 更低红），
+   覆盖不满时灰字列出无锚概念名（`teacher_unanchored_list`，前 5 个 + …，
+   与图谱 ◌ 角标同一套 `c.locations` 真相源）——教师模型页能直接看出
+   "这份资产里有多少概念是模板补全/证据未定位的"；
    演示数据由 regen_all 生成时 evidence 必须逐字切片自 source_text
    （模板 evidence 是改写句，不得进入资产——`_stamp_locations` 永远可锚定）。
    **点击一个概念必须给读者"位置感"，绝不孤点**——详情侧栏/面板须展示：
@@ -255,12 +260,19 @@ Do not build a simple RAG chatbot.
 
 ## 工程纪律
 
-- **测试前置**：每次改进后跑 `python run_tests.py --quick`（446 用例；无 PySide6 时 UI 层整层跳过）
+- **测试前置**：每次改进后跑 `python run_tests.py --quick`（455 用例，~23s；无 PySide6 时 UI 层整层跳过）
   —— 分层：core / data / ui（需 PySide6，缺失时整层跳过）/ llm（有 key 自动跑），
   外加常驻的 runner 回归；i18n 键完整性（三语齐全 + 字面键已定义 + 动态家族非空 + 死键零基线：新死键=回归）由 `tests/test_i18n_integrity.py` 常驻守卫（已注册进 runner core 层；
   2026-09-29 二轮清理：修正语料规则（包内 `_` 前缀模块如 `ui/widgets/_helpers.py` 误排除，
   复活 tag_stuck 等 4 键）后删除 104 个被现行键族取代的死键，键表 718→614，
   `KNOWN_DEAD_BASELINE` 清零，仅 `doubt_*`/`action_path*` 5 键挂 `PENDING_WIRING` 待功能落地）；
+  **测试纪律（防静默遮蔽）**：unittest 同名方法后定义者覆盖前者——曾把 `test_save_load_delete`
+  误改名撞上既有 `test_load_asset_reads_single_file`，旧断言静默失活一轮才被发现；
+  测试类内新增方法前先 grep 同名方法。
+  **UI 断言口径（DeferredDelete）**：视图 `_rebuild` 用 `deleteLater()`，旧控件在
+  `processEvents()` 后仍留在对象树（DeferredDelete 事件默认不被处理）——`findChildren`
+  精确计数断言前必须 `QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)`
+  先 flush，否则数到已摘除的旧控件；
   `data/_demo` 缺 `assets/` 或 `learner.json` 时 data 层模块内自动跳过；
   测试用演示数据临时副本，绝不污染真实数据。
 - **依赖缺失的表现**：`pypdf`（`requirements.txt` 已声明 `>=4.0`）缺失时
@@ -272,8 +284,12 @@ Do not build a simple RAG chatbot.
   / `main.py`（入口 + MainWindow 外壳，把视图构建与信号路由委托给 `ui/views`、`ui/view_manager.py`）。
 - 数据本地优先：`data/`（gitignore），`data/_demo` 为演示数据，**不入库**；
   用仓库根目录 `python regen_all.py` 重建（确定性、离线、幂等，从内置领域模板
-  生成 2 个资产 + teacher 模型 + learner.json；缺 `assets/` 与 `learner.json` 时
-  data 层用例自动跳过，重建后转通过）。
+  生成 2 个资产 + teacher 模型 + learner.json；落盘前对每个资产
+  `_stamp_locations`——演示资产自带锚点，load 时回填只是安全网；
+  缺 `assets/` 与 `learner.json` 时 data 层用例自动跳过，重建后转通过）。
+  **存量资产锚点回填**：`storage.load_assets()`/`load_asset` 对 concepts 全无
+  locations 的旧资产调 `_ensure_locations` 保守回填（重新 stamp）；已有锚点
+  （含 PDF 页码）一律不动——页码无法离线重算，覆盖即数据丢失。
 - LLM 可插拔：OpenAI 兼容端点，缺 key 自动确定性降级并明确标注。
 
 ## 模块职责

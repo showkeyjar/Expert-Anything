@@ -1182,6 +1182,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Generated: {t}",
         "ja": "生成: {t}",
     },
+    "teacher_anchor_rate": {
+        "zh-CN": "证据锚定率: {pct}（{n}/{total}）",
+        "en": "Evidence anchored: {pct} ({n}/{total})",
+        "ja": "証拠アンカー率: {pct}（{n}/{total}）",
+    },
+    "teacher_unanchored_list": {
+        "zh-CN": "无锚点: {names}",
+        "en": "No anchor: {names}",
+        "ja": "アンカーなし: {names}",
+    },
     "recheck": {"zh-CN": "重新自检", "en": "Re-check", "ja": "再チェック"},
     "recheck_needs_llm": {
         "zh-CN": "（需要配置 LLM 才能重新自检）",

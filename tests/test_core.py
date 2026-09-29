@@ -826,6 +826,58 @@ class TestCompareIncorporate(unittest.TestCase):
 # storage
 # --------------------------------------------------------------------------- #
 class TestStorage(unittest.TestCase):
+    def test_load_backfills_missing_locations(self):
+        """Assets persisted without source anchors (older regen / pre-stamping
+        imports) get locations backfilled on load; existing anchors (with
+        page numbers) are never recomputed."""
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as td:
+            from expert_anything.core import config
+            from expert_anything.core.models import SourceLocation
+            old = config.DATA_DIR
+            config.DATA_DIR = Path(td)
+            config.ASSETS_DIR = config.DATA_DIR / "assets"
+            try:
+                asset = extract_knowledge(SAMPLE, "agent-memory.md", llm=None)
+                # simulate a legacy asset: strip all anchors before persisting
+                for c in asset.concepts:
+                    c.locations = []
+                storage.save_asset(asset)
+
+                loaded = storage.load_assets()
+                self.assertEqual(len(loaded), 1)
+                anchored = [c for c in loaded[0].concepts if c.locations]
+                self.assertTrue(
+                    anchored, "legacy asset not backfilled on load"
+                )
+                loc = anchored[0].locations[0]
+                self.assertGreaterEqual(loc.char_start, 0)
+                self.assertGreaterEqual(loc.line, 1)
+                self.assertEqual(
+                    loc.snippet[:40],
+                    (anchored[0].evidence or [""])[0][:40],
+                )
+
+                # conservative path: an asset that already has anchors keeps
+                # them verbatim (page numbers must survive a reload)
+                legacy = loaded[0]
+                keep = legacy.concepts[0]
+                keep.locations = [
+                    SourceLocation(
+                        char_start=0, char_end=5, chapter="x",
+                        snippet="frozen", line=1, page=3,
+                    )
+                ]
+                storage.save_asset(legacy)
+                reloaded = storage.load_assets()[0]
+                self.assertEqual(reloaded.concepts[0].locations[0].page, 3)
+                self.assertEqual(
+                    reloaded.concepts[0].locations[0].snippet, "frozen"
+                )
+            finally:
+                config.DATA_DIR = old
+                config.ASSETS_DIR = old / "assets"
+
     def test_save_load_delete(self):
         import tempfile as _tf
         with _tf.TemporaryDirectory() as td:

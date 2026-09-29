@@ -139,6 +139,30 @@ class TeacherView(QWidget):
             lbl.setStyleSheet("font-size: 14px; color: #666;")
             layout.addWidget(lbl)
 
+        # Source-provenance coverage: how many concepts carry a grounded
+        # anchor (rest are template-enriched / unlocatable — marked ◌ in graph)
+        asset = self._main.get_asset()
+        if asset is not None and asset.concepts:
+            anchored = [c for c in asset.concepts if c.locations]
+            rate = len(anchored) / len(asset.concepts)
+            pct = f"{rate:.0%}"
+            rate_lbl = QLabel(
+                self._main._t(
+                    "teacher_anchor_rate",
+                    pct=pct, n=len(anchored), total=len(asset.concepts),
+                )
+            )
+            color = "#2E7D32" if rate >= 0.8 else "#E65100" if rate >= 0.5 else "#C62828"
+            rate_lbl.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {color};")
+            layout.addWidget(rate_lbl)
+            missing = [c.name for c in asset.concepts if not c.locations]
+            if missing and rate < 1.0:
+                shown = "、".join(missing[:5]) + ("…" if len(missing) > 5 else "")
+                miss_lbl = QLabel(self._main._t("teacher_unanchored_list", names=shown))
+                miss_lbl.setWordWrap(True)
+                miss_lbl.setStyleSheet("font-size: 13px; color: #90A4AE;")
+                layout.addWidget(miss_lbl)
+
         btn_layout = QHBoxLayout()
         recheck_btn = QPushButton(self._main._t("recheck"))
         recheck_btn.setStyleSheet("""

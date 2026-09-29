@@ -189,7 +189,13 @@ def main() -> int:
     else:
         import_sample_state = f"kept (already exists: {IMPORT_SAMPLE.name})"
 
-    for ad in assets:
+    from expert_anything.core.extraction import _stamp_locations
+    from expert_anything.core.models import KnowledgeAsset
+
+    for i, ad in enumerate(assets):
+        # stamp locations before persisting so the demo assets carry their
+        # own anchors (load-time backfill is the safety net, not the source)
+        assets[i] = ad = _stamp_locations(KnowledgeAsset.from_dict(ad)).to_dict()
         aid = ad["asset_id"]
         _write_json(ASSETS_DIR / f"{aid}.json", ad)
         _write_json(ASSETS_DIR / f"teacher_{aid}.json", teacher_dict_for(ad))

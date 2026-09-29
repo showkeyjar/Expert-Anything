@@ -244,6 +244,59 @@ class TestTeacherView(unittest.TestCase):
         # view builds and shows the teacher data status
         self.assertTrue(win.teacher_view)
 
+    def test_anchor_rate_displayed(self):
+        """Teacher view surfaces source-provenance coverage and lists the
+        unanchored (template-enriched / unlocatable) concepts."""
+        from PySide6.QtWidgets import QLabel
+        from expert_anything.core.extraction import _stamp_locations
+        from expert_anything.core.i18n import t as _t
+
+        win = load_main_window()
+        win.content_stack.setCurrentIndex(6)
+
+        def anchor_labels():
+            return [
+                l for l in win.teacher_view.findChildren(QLabel)
+                if _t("teacher_anchor_rate", pct="", n=0, total=0)[:6] in l.text()
+                or "证据锚定率" in l.text() or "Evidence anchored" in l.text()
+                or "証拠アンカー率" in l.text()
+            ]
+
+        asset = win.get_asset()
+        self.assertIsNotNone(asset)
+        # demo assets regenerate with verbatim evidence -> fully anchored
+        self.assertTrue(
+            all(c.locations for c in asset.concepts),
+            "demo concepts should be stamped (regen_all guarantees verbatim)",
+        )
+        rate_labels = anchor_labels()
+        self.assertEqual(len(rate_labels), 1)
+        self.assertIn("100%", rate_labels[0].text())
+        self.assertNotIn("无锚点", rate_labels[0].text())
+
+        # simulate a template-enriched (unanchored) concept
+        target = asset.concepts[0]
+        target.locations = []
+        win.teacher_view.refresh()
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication
+        # deleteLater() posts a DeferredDelete event that plain
+        # processEvents() swallows — flush it or the stale label lingers
+        # in the object tree and findChildren() counts it twice.
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+        QApplication.processEvents()
+        rate_labels = anchor_labels()
+        self.assertEqual(len(rate_labels), 1)
+        self.assertNotIn("100%", rate_labels[0].text())
+        missing = [
+            l for l in win.teacher_view.findChildren(QLabel)
+            if target.name in l.text()
+        ]
+        self.assertTrue(missing, "unanchored concept name not listed")
+
+        # restore for other tests sharing the window/asset
+        _stamp_locations(asset)
+
 
 class TestDirtyPayloads(unittest.TestCase):
     def test_null_payload(self):

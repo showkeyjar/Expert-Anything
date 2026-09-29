@@ -58,6 +58,19 @@ def save_asset(asset: KnowledgeAsset) -> None:
     _write_json_atomic(path, asset.to_dict())
 
 
+def _ensure_locations(asset: KnowledgeAsset) -> KnowledgeAsset:
+    """Backfill source anchors for assets persisted before evidence-location
+    stamping existed (or written by older regen tools). Conservative: assets
+    that already carry any location are left untouched — PDF page numbers
+    are not recoverable from a re-stamp without page offsets.
+    """
+    if asset.concepts and not any(c.locations for c in asset.concepts):
+        from expert_anything.core.extraction import _stamp_locations
+
+        _stamp_locations(asset)
+    return asset
+
+
 def load_assets() -> list[KnowledgeAsset]:
     if not config.ASSETS_DIR.exists():
         return []
@@ -71,7 +84,7 @@ def load_assets() -> list[KnowledgeAsset]:
             continue
         try:
             data = json.loads(file.read_text(encoding="utf-8"))
-            assets.append(KnowledgeAsset.from_dict(data))
+            assets.append(_ensure_locations(KnowledgeAsset.from_dict(data)))
         except Exception:  # corrupt file resilience — stay audible, not fatal
             logging.getLogger("expert_anything.storage").warning(
                 "skipping unreadable asset file: %s", file.name
@@ -89,7 +102,7 @@ def load_asset(asset_id: str) -> KnowledgeAsset | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-        return KnowledgeAsset.from_dict(data)
+        return _ensure_locations(KnowledgeAsset.from_dict(data))
     except Exception:
         logging.getLogger("expert_anything.storage").warning(
             "asset file unreadable: %s", path.name
