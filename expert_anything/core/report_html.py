@@ -222,6 +222,35 @@ def build_html_report(assets: dict, learner: dict,
     # ---------- trace audit (claim-level: mastery -> recorded attempts) ----------
     audit_html = _build_trace_audit(history, learner)
 
+    # ---------- error book (low-score evaluations) ----------
+    from expert_anything.core.learner import weak_history
+    weak_entries = weak_history(learner)
+    error_rows = []
+    for we in weak_entries[:10]:
+        name = _escape(we.get("concept", "?"))
+        score = float(we.get("score", 0))
+        pct = f"{score:.0%}"
+        color = _color_for_mastery(score)
+        fb = _escape(str(we.get("feedback", ""))[:80])
+        error_rows.append(
+            f"<tr><td>{name}</td>"
+            f"<td class='num' style='color:{color};font-weight:600'>{pct}</td>"
+            f"<td>{fb}</td></tr>"
+        )
+    error_book_html = ""
+    if error_rows:
+        error_book_html = (
+            "<div class='card'>"
+            f"<h2>📒 {_escape(t('error_book_title').replace('📒 ', ''))}</h2>"
+            f"<p class='muted'>{_escape(t('error_book_count', n=len(weak_entries)))}</p>"
+            "<table class='tbl'>"
+            "<thead><tr><th>" + _escape(t("history_col_concept")) +
+            "</th><th class='num'>" + _escape(t("history_col_score")) +
+            "</th><th>" + _escape(t("history_col_feedback")) +
+            "</th></tr></thead><tbody>" + "".join(error_rows) + "</tbody></table>"
+            "</div>"
+        )
+
     # ---------- assemble ----------
     title_txt = _escape(t("report_title"))
     generated = _escape(t("report_generated", t=datetime_now()))
@@ -347,6 +376,8 @@ def build_html_report(assets: dict, learner: dict,
     <h2>{history_lbl}</h2>
     {hist_html}
   </section>
+
+  {error_book_html}
 
   <section class="card">
     <h2>{audit_lbl}</h2>

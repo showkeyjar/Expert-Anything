@@ -320,10 +320,13 @@ class TestTeachScenePipeline(unittest.TestCase):
         self.assertTrue(bool(v), v.reason)
 
     def test_other_styles_have_no_scene(self):
+        # Every fallback style now includes a visual scene (scene key),
+        # so the learner gets a diagram regardless of teaching style.
         asset = _asset()
         tutor = Tutor(asset, llm=None)
         lesson = tutor.teach(asset.concepts[0], style="example")
-        self.assertNotIn("scene", lesson)
+        self.assertIn("scene", lesson)
+        self.assertTrue(lesson["scene"].get("nodes"))
 
 
 if __name__ == "__main__":

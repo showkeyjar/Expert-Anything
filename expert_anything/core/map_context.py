@@ -28,13 +28,26 @@ def _concept_map(asset: KnowledgeAsset) -> dict[str, object]:
 
 
 def _rel_neighbors(asset: KnowledgeAsset, cid: str) -> list[dict]:
-    """Directed relation neighbours: [{id, name, label, dir}] (out/in)."""
+    """Directed relation neighbours: [{id, name, label, dir, sem, sem_label, sem_color}].
+
+    Each entry carries the semantic classification (causes / part-of / …)
+    so the UI can colour-code pills and comparison points by structural
+    meaning, not just by raw label text.
+    """
+    from expert_anything.core.decoder import classify_relation, REL_SEMANTICS
+
     out = []
     for r in asset.relations or []:
         if r.source == cid and r.target != cid:
-            out.append({"id": r.target, "label": r.label or "", "dir": "out"})
+            sem = classify_relation(r.label or "", getattr(r, "type", "") or "")
+            si = REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])
+            out.append({"id": r.target, "label": r.label or "", "dir": "out",
+                        "sem": sem, "sem_label": si["label"], "sem_color": si["color"]})
         elif r.target == cid and r.source != cid:
-            out.append({"id": r.source, "label": r.label or "", "dir": "in"})
+            sem = classify_relation(r.label or "", getattr(r, "type", "") or "")
+            si = REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])
+            out.append({"id": r.source, "label": r.label or "", "dir": "in",
+                        "sem": sem, "sem_label": si["label"], "sem_color": si["color"]})
     return out
 
 
@@ -154,7 +167,10 @@ def next_level(asset: KnowledgeAsset, concept_id: str,
         mastery = _mastery_for(asset, learner_state, cc.name)
         out.append({"id": r["id"], "name": cc.name,
                     "label": r["label"] or _t("edge_related"),
-                    "dir": r["dir"], "mastery": mastery})
+                    "dir": r["dir"], "mastery": mastery,
+                    "sem": r.get("sem", "related"),
+                    "sem_label": r.get("sem_label", _t("rel_related")),
+                    "sem_color": r.get("sem_color", "#78909C")})
     for cid in path_neighbors:
         if len(out) >= max_n:
             break
@@ -207,7 +223,8 @@ def compare_concepts(asset: KnowledgeAsset, id_a: str, id_b: str,
     def _rel_label(rel: dict) -> str:
         cc = asset.concept_by_id(rel["id"])
         arrow = "→" if rel["dir"] == "out" else "←"
-        return f"{arrow} {rel['label'] or _t('edge_related')}　{cc.name if cc else rel['id']}"
+        sem_label = rel.get("sem_label", _t("rel_related"))
+        return f"{arrow} [{sem_label}] {rel['label'] or _t('edge_related')}　{cc.name if cc else rel['id']}"
 
     # teacher-note differences (only what each side uniquely claims)
     note_diff: dict = {"prereq_only_a": [], "prereq_only_b": [],
@@ -269,14 +286,93 @@ def compare_concepts(asset: KnowledgeAsset, id_a: str, id_b: str,
     if not hint:
         hint = _t("compare_hint_default")
 
+    # ---- direct relation between A and B -----------------------------------
+    direct_rel = None
+    for r in asset.relations or []:
+        if (r.source == id_a and r.target == id_b) or \
+           (r.source == id_b and r.target == id_a):
+            from expert_anything.core.decoder import classify_relation, REL_SEMANTICS
+            sem = classify_relation(r.label or "", getattr(r, "type", "") or "")
+            si = REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])
+            direct_rel = {
+                "label": r.label or "",
+                "sem": sem,
+                "sem_label": si["label"],
+                "sem_color": si["color"],
+                "a_to_b": r.source == id_a,
+            }
+            break
+
+    # ---- learning order recommendation -------------------------------------
+    # Based on prereq/causes chain: if A is an ancestor of B in the dependency
+    # graph, learn A first; if B is an ancestor of A, learn B first.
+    _ORDER_SEMS = {"prereq", "causes", "is_a"}
+    def _is_ancestor(ancestor_id: str, descendant_id: str) -> bool:
+        """BFS: is ancestor_id a prerequisite/cause of descendant_id?"""
+        visited = set()
+        queue = [descendant_id]
+        while queue:
+            cur = queue.pop(0)
+            if cur == ancestor_id:
+                return True
+            if cur in visited:
+                continue
+            visited.add(cur)
+            for r in asset.relations or []:
+                if r.target == cur and r.source != cur:
+                    sem = "related"
+                    try:
+                        from expert_anything.core.decoder import classify_relation
+                        sem = classify_relation(r.label or "", getattr(r, "type", "") or "")
+                    except Exception:
+                        pass
+                    if sem in _ORDER_SEMS and r.source not in visited:
+                        queue.append(r.source)
+        return False
+
+    learn_order = ""  # "a_first", "b_first", or ""
+    if _is_ancestor(id_a, id_b):
+        learn_order = "a_first"
+    elif _is_ancestor(id_b, id_a):
+        learn_order = "b_first"
+
+    # ---- evidence depth comparison -----------------------------------------
+    ev_a = len(ca.evidence)
+    ev_b = len(cb.evidence)
+    evidence_gap = ev_a - ev_b
+
+    # ---- actionable learning suggestions ------------------------------------
+    suggestions: list[str] = []
+    if learn_order == "a_first" and ma < 0.6:
+        suggestions.append(_t("compare_suggest_prereq", name=ca.name))
+    elif learn_order == "b_first" and mb < 0.6:
+        suggestions.append(_t("compare_suggest_prereq", name=cb.name))
+
+    if direct_rel and direct_rel["sem"] == "contrast":
+        suggestions.append(_t("compare_suggest_contrast"))
+
+    if shared and len(shared) >= 2:
+        bridge_names = "、".join(
+            asset.concept_by_id(i).name if asset.concept_by_id(i) else i
+            for i in shared[:2]
+        )
+        suggestions.append(_t("compare_suggest_bridge", names=bridge_names))
+
+    if learner_state and abs(ma - mb) >= 0.3:
+        weak_name = ca.name if ma < mb else cb.name
+        suggestions.append(_t("compare_suggest_review_weak", name=weak_name))
+
+    if not suggestions:
+        suggestions.append(_t("compare_suggest_default"))
+
     return {
         "a": {"id": id_a, "name": ca.name,
               "chapter": getattr(ca, "chapter", ""),
-              "definition": ta, "evidence_count": len(ca.evidence),
+              "definition": ta, "evidence_count": ev_a,
               "mastery": ma},
         "b": {"id": id_b, "name": cb.name,
               "chapter": getattr(cb, "chapter", ""),
-              "definition": tb, "evidence_count": len(cb.evidence),
+              "definition": tb, "evidence_count": ev_b,
               "mastery": mb},
         "similarity": round(sim, 2),
         "shared_neighbors": [
@@ -289,4 +385,8 @@ def compare_concepts(asset: KnowledgeAsset, id_a: str, id_b: str,
         "note_diff": note_diff,
         "points": points,
         "learning_hint": hint,
+        "direct_rel": direct_rel,
+        "learn_order": learn_order,
+        "evidence_gap": evidence_gap,
+        "suggestions": suggestions,
     }

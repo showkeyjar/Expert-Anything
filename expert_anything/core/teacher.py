@@ -20,6 +20,7 @@ in well-established background to fill gaps, but such content is *labelled*
 (source="external") so the source-grounding guarantee is never silently
 broken.
 """
+
 from __future__ import annotations
 
 import json
@@ -29,9 +30,13 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-from expert_anything.core.llm import LLMClient, Message, chat_json
+from expert_anything.core.domain_templates import (
+    detect_domain_from_title,
+    domain_concept_skeleton,
+)
+from expert_anything.core.llm import LLMClient, Message, parse_llm_json, chat_json
 from expert_anything.core.models import KnowledgeAsset
-from expert_anything.core.prompt_registry import get_prompt
+from expert_anything.core.prompt_registry import get_domain_prompt, get_prompt
 from expert_anything.core import i18n
 
 _t = i18n.t
@@ -48,14 +53,18 @@ def _new_id(prefix: str) -> str:
 class ConceptNote:
     concept_id: str
     name: str
-    significance: str = ""          # 为什么重要
+    significance: str = ""  # 为什么重要
     prerequisites: list[str] = field(default_factory=list)
     misconceptions: list[str] = field(default_factory=list)
     connections: list[str] = field(default_factory=list)
     external_notes: list[str] = field(default_factory=list)  # 引入的外部补充,标注来源
-    external_concepts: list[str] = field(default_factory=list)  # LLM 压缩层的相关外部概念
-    learner_signals: list[str] = field(default_factory=list)  # 学生真实作答中暴露的困惑/错点
-    note: str = ""                  # 系统综合理解
+    external_concepts: list[str] = field(
+        default_factory=list
+    )  # LLM 压缩层的相关外部概念
+    learner_signals: list[str] = field(
+        default_factory=list
+    )  # 学生真实作答中暴露的困惑/错点
+    note: str = ""  # 系统综合理解
 
     def to_dict(self) -> dict:
         return {
@@ -90,13 +99,13 @@ class ConceptNote:
 @dataclass
 class Anomaly:
     id: str
-    kind: str                      # contradiction | undefined_term | logical_gap | surprising_claim
+    kind: str  # contradiction | undefined_term | logical_gap | surprising_claim
     description: str
-    location: str = ""            # 原文片段 / 位置
-    severity: str = "medium"      # low | medium | high | info
-    status: str = "open"         # open | investigating | resolved | surfaced_to_student
+    location: str = ""  # 原文片段 / 位置
+    severity: str = "medium"  # low | medium | high | info
+    status: str = "open"  # open | investigating | resolved | surfaced_to_student
     resolution: str = ""
-    source: str = "internal"      # internal | external
+    source: str = "internal"  # internal | external
 
     def to_dict(self) -> dict:
         return {
@@ -127,7 +136,7 @@ class Anomaly:
 @dataclass
 class TeacherModel:
     asset_id: str
-    status: str = "pending"        # pending | done | fallback | failed
+    status: str = "pending"  # pending | done | fallback | failed
     method: str = ""
     synthesized_at: str = ""
     concept_notes: list[ConceptNote] = field(default_factory=list)
@@ -156,7 +165,9 @@ class TeacherModel:
             status=d.get("status", "pending"),
             method=d.get("method", ""),
             synthesized_at=d.get("synthesized_at", ""),
-            concept_notes=[ConceptNote.from_dict(x) for x in d.get("concept_notes", [])],
+            concept_notes=[
+                ConceptNote.from_dict(x) for x in d.get("concept_notes", [])
+            ],
             anomalies=[Anomaly.from_dict(x) for x in d.get("anomalies", [])],
         )
 
@@ -179,42 +190,56 @@ def kind_label(kind: str) -> str:
 
 
 def _parse_json(text: str) -> dict:
-    """Tolerant JSON extraction from an LLM response (strips ```json fences)."""
-    if not text:
-        return {}
-    s = text.strip()
-    # strip code fences
-    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\s*```$", "", s)
-    try:
-        return json.loads(s)
-    except json.JSONDecodeError:
-        pass
-    # fall back: grab the outermost {...} block
-    m = re.search(r"\{.*\}", s, flags=re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            return {}
-    return {}
+    """Tolerant JSON extraction (canonical implementation: llm.parse_llm_json)."""
+    return parse_llm_json(text)
 
 
-def _build_user_prompt(asset: KnowledgeAsset, concepts=None) -> str:
+def _build_user_prompt(
+    asset: KnowledgeAsset, concepts=None, domain_id: str | None = None
+) -> str:
+    """Render the teacher user prompt for one batch of concepts.
+
+    ``domain_id`` selects the domain-specific teacher template (Phase 3).  When
+    it is ``None`` the domain is detected from the asset title; when nothing is
+    detected (or the domain has no translation) the generic ``teacher_user``
+    template is used and the rendered request is byte-identical to before.
+    """
     concept_lines = []
-    for c in (concepts if concepts is not None else asset.concepts):
+    for c in concepts if concepts is not None else asset.concepts:
         ev = ";".join(c.evidence[:1]) if c.evidence else "(无证据)"
         concept_lines.append(
             f"- {c.name}:{c.definition or c.summary or '(无定义)'} | 证据:{ev}"
         )
     concepts_block = "\n".join(concept_lines) if concept_lines else "(无概念)"
+
+    # Build the relation network block so the LLM teacher can see *what
+    # kind* of connection each relation is — significance and prerequisites
+    # are much better when the model knows "A causes B" vs "A is a part of B".
+    from expert_anything.core.decoder import classify_relation, REL_SEMANTICS
+
+    rel_lines = []
+    for r in asset.relations or []:
+        src = asset.concept_by_id(r.source)
+        tgt = asset.concept_by_id(r.target)
+        if not src or not tgt:
+            continue
+        sem = classify_relation(r.label or "", getattr(r, "type", "") or "")
+        sem_label = REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])["label"]
+        rel_lines.append(f"- [{sem_label}] {src.name} {r.label or '关联'} → {tgt.name}")
+    relations_block = "\n".join(rel_lines) if rel_lines else "(无显式关系)"
     source_snippet = asset.source_text[:4000]
-    # Build the user prompt using the registry's teacher_user template
-    tmpl = get_prompt("teacher_user")
+    # Build the user prompt using the registry's teacher_user template (or its
+    # domain variant). The skeleton is guidance for naming/organising notes —
+    # it is never a fact source, hence the explicit "not a source" wording.
+    if domain_id is None:
+        domain_id = detect_domain_from_title(getattr(asset, "title", "") or "")
+    tmpl = get_domain_prompt("teacher_user", domain_id)
     return tmpl.format(
         title=asset.title,
         concept_list=concepts_block,
+        relations=relations_block,
         source_snippets=source_snippet,
+        concept_skeleton=domain_concept_skeleton(domain_id),
     )
 
 
@@ -227,7 +252,12 @@ def _assemble(asset: KnowledgeAsset, data: dict, method: str) -> TeacherModel:
         if not cid:
             # concept name may have drifted; best-effort match by inclusion
             cid = next(
-                (cc.id for cc in asset.concepts if cc.name.lower() in name.lower() or name.lower() in cc.name.lower()),
+                (
+                    cc.id
+                    for cc in asset.concepts
+                    if cc.name.lower() in name.lower()
+                    or name.lower() in cc.name.lower()
+                ),
                 "",
             )
         if not cid:
@@ -237,11 +267,19 @@ def _assemble(asset: KnowledgeAsset, data: dict, method: str) -> TeacherModel:
                 concept_id=cid,
                 name=name,
                 significance=(c.get("significance") or "").strip(),
-                prerequisites=[x for x in (c.get("prerequisites") or []) if str(x).strip()],
-                misconceptions=[x for x in (c.get("misconceptions") or []) if str(x).strip()],
+                prerequisites=[
+                    x for x in (c.get("prerequisites") or []) if str(x).strip()
+                ],
+                misconceptions=[
+                    x for x in (c.get("misconceptions") or []) if str(x).strip()
+                ],
                 connections=[x for x in (c.get("connections") or []) if str(x).strip()],
-                external_notes=[x for x in (c.get("external_notes") or []) if str(x).strip()],
-                external_concepts=[x for x in (c.get("external_concepts") or []) if str(x).strip()],
+                external_notes=[
+                    x for x in (c.get("external_notes") or []) if str(x).strip()
+                ],
+                external_concepts=[
+                    x for x in (c.get("external_concepts") or []) if str(x).strip()
+                ],
                 note=(c.get("note") or "").strip(),
             )
         )
@@ -280,9 +318,64 @@ def _assemble(asset: KnowledgeAsset, data: dict, method: str) -> TeacherModel:
 
 
 def _fallback(asset: KnowledgeAsset) -> TeacherModel:
-    """No LLM: build empty notes for every concept and one informational
-    anomaly telling the user that self-learning requires a key."""
-    notes = [ConceptNote(concept_id=c.id, name=c.name) for c in asset.concepts]
+    """No LLM: build deterministic notes from the relation network so the
+    teacher model still has *some* self-understanding layer. The notes are
+    not as deep as LLM-generated ones, but they give the learner structural
+    context (significance from relation count, prerequisites from prereq-type
+    edges, connections from all neighbours) rather than blank emptiness."""
+    from expert_anything.core.decoder import classify_relation, REL_SEMANTICS
+
+    # Build per-concept relation maps
+    by_cid: dict[str, list] = {}  # cid -> list of (other_name, label, sem, dir)
+    for r in asset.relations or []:
+        sem = classify_relation(r.label or "", getattr(r, "type", "") or "")
+        src_c = asset.concept_by_id(r.source)
+        tgt_c = asset.concept_by_id(r.target)
+        # Validate endpoints by the asset's own concept index: dangling
+        # relations (IDs that no longer exist) are skipped, never assumed.
+        if not src_c or not tgt_c:
+            continue
+        by_cid.setdefault(r.source, []).append(
+            (tgt_c.name, r.label or "关联", sem, "out")
+        )
+        by_cid.setdefault(r.target, []).append(
+            (src_c.name, r.label or "关联", sem, "in")
+        )
+
+    notes: list[ConceptNote] = []
+    for c in asset.concepts:
+        rels = by_cid.get(c.id, [])
+        prereqs = [n for n, _, sem, d in rels if sem == "prereq" and d == "in"]
+        # significance: derived from relation count and dominant semantic type
+        if rels:
+            sem_counts: dict[str, int] = {}
+            for _, _, sem, _ in rels:
+                sem_counts[sem] = sem_counts.get(sem, 0) + 1
+            dom_sem = max(sem_counts, key=lambda k: sem_counts[k])
+            dom_label = REL_SEMANTICS.get(dom_sem, REL_SEMANTICS["related"])["label"]
+            sig = f"该概念有 {len(rels)} 条关系，以「{dom_label}」为主。"
+        else:
+            sig = ""
+
+        # connections: all neighbour names with their semantic label
+        connections = []
+        seen = set()
+        for n, label, sem, _ in rels:
+            if n not in seen:
+                seen.add(n)
+                sem_label = REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])["label"]
+                connections.append(f"[{sem_label}] {n}")
+
+        notes.append(
+            ConceptNote(
+                concept_id=c.id,
+                name=c.name,
+                significance=sig,
+                prerequisites=prereqs,
+                connections=connections,
+            )
+        )
+
     return TeacherModel(
         asset_id=asset.asset_id,
         status="fallback",
@@ -322,6 +415,10 @@ def build_teacher_model(
         # overflows agnes-2.0-flash and degrades to 'failed'). Each batch
         # yields notes + anomalies which are merged into one TeacherModel.
         BATCH = 12
+        # Domain detection once per asset (deterministic, title-based): with a
+        # detected domain both prompts use their domain variants; otherwise the
+        # generic prompts are used exactly as before.
+        domain_id = detect_domain_from_title(asset.title or "")
         merged_data: dict = {"concept_notes": [], "anomalies": []}
         total_batches = (len(asset.concepts) + BATCH - 1) // BATCH
         for b in range(total_batches):
@@ -332,8 +429,15 @@ def build_teacher_model(
                 # the plain text response with the tolerant _parse_json instead.
                 content = llm.chat(
                     [
-                        Message("system", get_prompt("teacher_system")),
-                        Message("user", _build_user_prompt(asset, concepts=chunk)),
+                        Message(
+                            "system", get_domain_prompt("teacher_system", domain_id)
+                        ),
+                        Message(
+                            "user",
+                            _build_user_prompt(
+                                asset, concepts=chunk, domain_id=domain_id
+                            ),
+                        ),
                     ],
                     temperature=0.3,
                     max_tokens=3500,
@@ -349,12 +453,16 @@ def build_teacher_model(
                 pass
             if on_progress:
                 on_progress(
-                    "selflearn", b + 1, total_batches,
+                    "selflearn",
+                    b + 1,
+                    total_batches,
                     _t("teacher_batch_progress", b=b + 1, t=total_batches),
                 )
         tm = _assemble(asset, merged_data, method="teacher_self_learn_v1")
         if on_progress:
-            on_progress("selflearn", 0, 0, _t("teacher_self_learning_done", n=len(tm.anomalies)))
+            on_progress(
+                "selflearn", 0, 0, _t("teacher_self_learning_done", n=len(tm.anomalies))
+            )
         return tm
     except Exception:
         # Graceful degradation: never fail the import on a self-learn hiccup.
@@ -465,7 +573,9 @@ def incorporate_learner_signal(
     promote it into a real system anomaly and refine the concept's
     misconceptions. Returns the (mutated) TeacherModel; caller persists it."""
     if teacher is None:
-        teacher = TeacherModel(asset_id=asset.asset_id, status="fallback", method="lazy_init")
+        teacher = TeacherModel(
+            asset_id=asset.asset_id, status="fallback", method="lazy_init"
+        )
 
     c = asset.concept_by_id(concept_id)
     cname = c.name if c is not None else "(未知概念)"
@@ -492,6 +602,57 @@ def incorporate_learner_signal(
             source="internal",
         )
     )
+
+    # 1b) Structural anomaly detection via relation semantics (zero LLM cost).
+    # If this concept scores poorly but its prerequisite(s) score well, or
+    # vice versa (dependent scores well but prerequisite is weak), that's a
+    # logical gap worth flagging — either the prerequisite was never properly
+    # learned, or the dependency's "mastery" is superficial.
+    from expert_anything.core.decoder import classify_relation
+    from expert_anything.core.learner import load as _load_learner, normalize as _norm
+
+    try:
+        _lst = _load_learner()
+        _mm = _lst.get("concepts", {})
+    except Exception:
+        _mm = {}
+    _prereq_issues = 0
+    _prereq_names: list[str] = []
+    for r in getattr(asset, "relations", []) or []:
+        sem = classify_relation(r.label or "", getattr(r, "type", "") or "")
+        if sem not in ("prereq", "causes"):
+            continue
+        # source → target means: source is prerequisite for target
+        if r.target == concept_id:
+            prereq_id = r.source
+            prereq_c = asset.concept_by_id(prereq_id)
+            if prereq_c:
+                prereq_m = float(_mm.get(_norm(prereq_c.name), {}).get("mastery", 0.0))
+                # If concept scored poorly AND its prereq is also weak, that's
+                # expected — not an anomaly. The anomaly is when the concept
+                # was *thought* to be okay but its foundation isn't, OR when
+                # the concept scores high but the prereq doesn't (impossible).
+                if score >= 0.6 and prereq_m < 0.4:
+                    _prereq_issues += 1
+                    _prereq_names.append(prereq_c.name)
+    if _prereq_issues > 0:
+        _gap_sev = "high" if _prereq_issues >= 2 else "medium"
+        teacher.anomalies.append(
+            Anomaly(
+                id=_new_id("an"),
+                kind="logical_gap",
+                description=(
+                    f"「{cname}」评估得分 {score:.2f},但其前提概念"
+                    f"{'、'.join(_prereq_names[:3])}掌握度不足。"
+                    f"这可能意味着学习者对「{cname}」的理解停留在表面,"
+                    f"尚未真正建立在基础之上。建议先复习前提概念。"
+                ),
+                location=cname,
+                severity=_gap_sev,
+                status="surfaced_to_student",
+                source="internal",
+            )
+        )
 
     # 2) LLM reflection for deeper convergence (may reveal a material gap).
     if llm is not None and c is not None:
@@ -565,7 +726,9 @@ def incorporate_stuck_signal(
     its style. Deterministic, no LLM; caller persists.
     """
     if teacher is None:
-        teacher = TeacherModel(asset_id=asset.asset_id, status="fallback", method="lazy_init")
+        teacher = TeacherModel(
+            asset_id=asset.asset_id, status="fallback", method="lazy_init"
+        )
     c = asset.concept_by_id(concept_id)
     cname = c.name if c is not None else "(未知概念)"
     note = teacher.concept_note_by_id(concept_id)
@@ -634,6 +797,7 @@ def incorporate_comparison(
 
     if comparison is None:
         from expert_anything.core.map_context import compare_concepts
+
         try:
             comparison = compare_concepts(
                 asset, id_a, id_b, teacher=teacher, learner_state=learner_state
@@ -684,8 +848,9 @@ def incorporate_comparison(
             f"掌握度({m_low:.0%})明显低于「{high_name}」({m_high:.0%})。"
             f"已建议优先补学并提入教学排序。"
         )
-        if not any(a.kind == "learner_gap" and a.description == desc
-                   for a in teacher.anomalies):
+        if not any(
+            a.kind == "learner_gap" and a.description == desc for a in teacher.anomalies
+        ):
             teacher.anomalies.append(
                 Anomaly(
                     id=_new_id("an"),
@@ -702,7 +867,9 @@ def incorporate_comparison(
     return teacher
 
 
-def anomaly_concept_ids(asset: KnowledgeAsset, teacher: TeacherModel | None) -> set[str]:
+def anomaly_concept_ids(
+    asset: KnowledgeAsset, teacher: TeacherModel | None
+) -> set[str]:
     """Concept ids that are touched by at least one open/investigating anomaly."""
     ids: set[str] = set()
     if not teacher:
@@ -719,6 +886,35 @@ def anomaly_concept_ids(asset: KnowledgeAsset, teacher: TeacherModel | None) -> 
             if c.name in an.description or c.name in (an.location or ""):
                 ids.add(c.id)
     return ids
+
+
+def concept_anomalies(
+    concept, teacher: TeacherModel | None, limit: int = 3
+) -> list[Anomaly]:
+    """Actionable anomalies touching *this one* concept, severity-first.
+
+    Same matching rule as :func:`anomaly_concept_ids` (concept name appears
+    in the anomaly description or location; actionable = open/investigating,
+    plus learner-gap anomalies already surfaced to the student). Severity
+    order high > medium > low > info; unknown severities sort last.
+    """
+    if not teacher or concept is None:
+        return []
+    order = {"high": 0, "medium": 1, "low": 2, "info": 3}
+    hits: list[Anomaly] = []
+    for an in teacher.anomalies:
+        actionable = an.status in ("open", "investigating")
+        surfaced_gap = (
+            an.kind == "learner_gap" and an.status == "surfaced_to_student"
+        )
+        if not (actionable or surfaced_gap):
+            continue
+        if concept.name and (
+            concept.name in an.description or concept.name in (an.location or "")
+        ):
+            hits.append(an)
+    hits.sort(key=lambda a: order.get(a.severity, 9))
+    return hits[:limit]
 
 
 def anomaly_prioritized_path(

@@ -159,6 +159,24 @@ def hierarchy_neighbors(asset: KnowledgeAsset, concept_id: str) -> tuple[list[st
         elif relation.source == concept_id and relation.target not in children:
             children.append(relation.target)
     valid = {c.id for c in asset.concepts}
+    # Deterministic EPUB extraction may have a sound chapter structure but no
+    # semantic LLM relations. In that case a click must still descend into the
+    # selected chapter's ordered sections. Treat the first concept in a
+    # chapter as its chapter node; subsequent headings use it as parent and
+    # expose the following headings as a bounded next level.
+    if not parents and not children:
+        current = asset.concept_by_id(concept_id)
+        chapter = getattr(current, "chapter", "") if current else ""
+        if chapter:
+            order = [c.id for c in asset.concepts
+                     if getattr(c, "chapter", "") == chapter]
+            if len(order) > 1 and concept_id in order:
+                index = order.index(concept_id)
+                if index == 0:
+                    children = order[1:9]
+                else:
+                    parents = order[:1]
+                    children = order[index + 1:index + 5]
     return ([cid for cid in parents if cid in valid],
             [cid for cid in children if cid in valid])
 
@@ -178,21 +196,39 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
     id_to_name = {c.id: c.name for c in asset.concepts}
 
     if focus_id is None:
-        keep = [cid for cid in all_ids if cid in id_to_name][:16]
+        structural_only = bool(asset.relations) and all(
+            str(getattr(r, "type", "") or "").lower()
+            in {"contains", "parent-child", "parent_child", "child"}
+            for r in asset.relations
+        )
+        if structural_only:
+            # Overview = one root per chapter, not the first N concepts in
+            # document order. This is both faster and cognitively legible;
+            # sections/leaves appear when the learner focuses a chapter.
+            chapter_roots: list[str] = []
+            seen_chapters: set[str] = set()
+            for concept in asset.concepts:
+                chapter = getattr(concept, "chapter", "") or ""
+                if chapter and chapter not in seen_chapters:
+                    seen_chapters.add(chapter)
+                    chapter_roots.append(concept.id)
+            keep = chapter_roots[:24] or all_ids[:16]
+        else:
+            keep = [cid for cid in all_ids if cid in id_to_name][:16]
         nodes = [(cid, id_to_name[cid], "normal") for cid in keep]
         keep_set = set(keep)
-        edges: list[tuple[str, str, str]] = []
+        edges: list[tuple[str, str, str, str]] = []
         for r in asset.relations:
             if r.source in keep_set and r.target in keep_set and r.source != r.target:
-                edges.append((r.source, r.target, r.label or ""))
+                edges.append((r.source, r.target, r.label or "", getattr(r, "type", "") or ""))
         if len(edges) < 4:
             # sparse relations -> backfill the learning-path skeleton so the
             # graph always shows a visible "how to study this" structure.
             seq = [cid for cid in asset.learning_path if cid in keep_set]
-            have = {(s, t) for s, t, _ in edges}
+            have = {(s, t) for s, t, _, _ in edges}
             for a, b in zip(seq, seq[1:]):
                 if (a, b) not in have and (b, a) not in have:
-                    edges.append((a, b, _t("graph_path_edge")))
+                    edges.append((a, b, _t("graph_path_edge"), "prereq"))
         return nodes, edges
 
     # --- focus mode --------------------------------------------------------
@@ -299,9 +335,22 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
     edges = []
     for r in asset.relations:
         if r.source in keep_set and r.target in keep_set and r.source != r.target:
-            edges.append((r.source, r.target, r.label or ""))
+            edges.append((r.source, r.target, r.label or "", getattr(r, "type", "") or ""))
+    # In a source-only asset, hierarchy_neighbors() derives chapter/section
+    # structure from the ordered headings. Materialize those edges in the
+    # focused view so the child nodes are not merely a second row of unrelated
+    # boxes.
+    if focus_id is not None:
+        parent_ids, child_ids = hierarchy_neighbors(asset, focus_id)
+        have = {(s, t) for s, t, _label, _rtype in edges}
+        for parent_id in parent_ids:
+            if (parent_id, focus_id) not in have:
+                edges.append((parent_id, focus_id, _t("rel_part_of"), "contains"))
+        for child_id in child_ids:
+            if (focus_id, child_id) not in have:
+                edges.append((focus_id, child_id, _t("rel_part_of"), "contains"))
     for c2 in context:
-        edges.append((focus_id, c2, _t("graph_path_edge")))
+        edges.append((focus_id, c2, _t("graph_path_edge"), "related"))
     # if the ego network has almost no relation edges, add learning-path
     # neighbours — or same-chapter brothers — as faint context so the focused
     # view is never a lone node (context additions are kept inside `keep`
@@ -315,58 +364,58 @@ def _select_nodes(asset: KnowledgeAsset, focus_id: str | None) -> tuple[list[tup
             keep.append(c2)
             keep_set.add(c2)
             nodes.append((c2, id_to_name[c2], "context"))
-            edges.append((focus_id, c2, _t("graph_path_edge")))
+            edges.append((focus_id, c2, _t("graph_path_edge"), "related"))
     return nodes, edges
 
 
 def _radial_layout(nodes, focus_id: str | None) -> tuple[dict[str, tuple[float, float]], int, int]:
-    """Focus-centric layout. Returns (pos, width, height)."""
+    """Focus-centric layout with explicit reading order.
+
+    The old ring layout made a focused concept look like a radial mind map:
+    parents, children and path context all shared one circle, so labels and
+    edges crossed in ways that hid the learning sequence.  Use rows instead:
+    parent → focus → children/neighbours → context.  Within each row the
+    source order is retained and nodes are evenly spaced.
+    """
     focus = [n for n in nodes if n[2] == "focus"]
-    # Structural drill nodes must participate in the radial layout too.
-    # Previously child/parent roles were rendered without a ring position,
-    # which made a drilled map appear nearly empty or collapse to 2-3 nodes.
-    neighbors = [n for n in nodes if n[2] in {"neighbor", "child", "parent"}]
-    context = [n for n in nodes if n[2] == "context"]
+    if not focus:
+        return {}, 640, 360
 
-    if not neighbors and not context:
-        # single isolated concept
-        cx = MARGIN + FBOX_W / 2
-        cy = MARGIN + 26 + FBOX_H / 2
-        pos = {focus[0][0]: (cx, cy)}
-        w = int(cx * 2 + MARGIN)
-        h = int(cy + FBOX_H / 2 + MARGIN)
-        return pos, w, h
+    def chunks(items, size=8):
+        return [items[i:i + size] for i in range(0, len(items), size)]
 
-    # ring radii
-    r1 = FBOX_H / 2 + BOX_H / 2 + 62          # inner ring (relation neighbours)
-    r2 = r1 + CBOX_H / 2 + BOX_H / 2 + 52     # outer ring (path context)
-    if not neighbors:
-        r1, r2 = r2, r2  # only context -> use one ring at r2
-
-    ring_r = max(r1, r2)
-    # half-sizes for bounding-box clearance (use the larger of w/h for safety)
-    max_half_w = max(FBOX_W, BOX_W, CBOX_W) / 2
-    max_half_h = max(FBOX_H, BOX_H, CBOX_H) / 2
-    title_h = 26
-
-    # compute image size first so the centre sits well inside
-    w = int(2 * (MARGIN + ring_r + max_half_w + MARGIN))
-    h = int(title_h + 2 * (MARGIN + ring_r + max_half_h + MARGIN))
-    cx = w / 2
-    cy = title_h + MARGIN + ring_r + max_half_h
-
+    rows = []
+    rows.extend(chunks([n for n in nodes if n[2] == "parent"]))
+    rows.append(focus[:1])
+    rows.extend(chunks([n for n in nodes if n[2] == "child"]))
+    rows.extend(chunks([n for n in nodes if n[2] == "neighbor"]))
+    rows.extend(chunks([n for n in nodes if n[2] == "context"]))
+    rows = [row for row in rows if row]
+    max_count = max(len(row) for row in rows)
+    gap = 22
+    side = 64
+    w = max(760, max_count * (BOX_W + gap) + side * 2)
+    row_gap = 58
+    row_heights = [
+        FBOX_H if any(n[2] == "focus" for n in row) else BOX_H
+        for row in rows
+    ]
+    h = int(sum(row_heights) + row_gap * (len(rows) - 1) + 72)
+    center_x = w / 2
     pos: dict[str, tuple[float, float]] = {}
-    pos[focus[0][0]] = (cx, cy)
-    n = len(neighbors)
-    for i, (cid, _, _) in enumerate(neighbors):
-        ang = -math.pi / 2 + (2 * math.pi * i / n if n else 0)
-        pos[cid] = (cx + r1 * math.cos(ang), cy + r1 * math.sin(ang))
-    m = len(context)
-    for i, (cid, _, _) in enumerate(context):
-        ang = -math.pi / 2 + (2 * math.pi * (i + 0.5) / m if m else 0)
-        pos[cid] = (cx + r2 * math.cos(ang), cy + r2 * math.sin(ang))
-
-    return pos, w, h
+    y = 36
+    for row, row_h in zip(rows, row_heights):
+        total = len(row) * BOX_W + max(0, len(row) - 1) * gap
+        start_x = center_x - total / 2 + BOX_W / 2
+        for index, (cid, _name, role) in enumerate(row):
+            # Keep the focus node visually centred even though it is wider.
+            node_w = FBOX_W if role == "focus" else BOX_W
+            x = center_x if role == "focus" and len(row) == 1 else (
+                start_x + index * (BOX_W + gap)
+            )
+            pos[cid] = (x, y + row_h / 2)
+        y += row_h + row_gap
+    return pos, int(w), int(h)
 
 
 def _layered_layout(nodes, edges) -> dict[str, tuple[float, float]]:
@@ -375,7 +424,7 @@ def _layered_layout(nodes, edges) -> dict[str, tuple[float, float]]:
     layer: dict[str, int] = {i: 0 for i in ids}
     for _ in range(len(ids) + 2):
         changed = False
-        for s, t, _ in edges:
+        for s, t, _, _ in edges:
             if s in layer and t in layer and layer[t] < layer[s] + 1:
                 layer[t] = layer[s] + 1
                 changed = True
@@ -465,7 +514,8 @@ def _render(
         return [cx - hh[0], cy - hh[1], cx + hh[0], cy + hh[1]], hh
 
     # edges first (under nodes)
-    for s, t, lbl in edges:
+    from expert_anything.core.decoder import rel_semantic_color, classify_relation
+    for s, t, lbl, rtype in edges:
         if s not in pos or t not in pos:
             continue
         is_context = lbl == "路径相邻"
@@ -480,7 +530,7 @@ def _render(
         elif is_anom:
             color = EDGE_ANOMALY
         else:
-            color = EDGE
+            color = rel_semantic_color(lbl or "", rtype or "")
         width = 2
         draw.line([p1, p2], fill=color, width=width)
         if not is_context:

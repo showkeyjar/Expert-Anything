@@ -8,12 +8,13 @@ warn the user that depth is limited.
 from __future__ import annotations
 
 import concurrent.futures
+import functools
 import json
 import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from expert_anything.core.llm import LLMClient, Message, chat_json
+from expert_anything.core.llm import LLMClient, Message, parse_llm_json, chat_json
 from expert_anything.core.models import (
     Chapter,
     Concept,
@@ -21,8 +22,12 @@ from expert_anything.core.models import (
     Relation,
     SourceLocation,
 )
+from expert_anything.core.domain_templates import (
+    detect_domain_from_title,
+    domain_concept_skeleton,
+)
 from expert_anything.core.parsers import title_from
-from expert_anything.core.prompt_registry import get_prompt
+from expert_anything.core.prompt_registry import get_domain_prompt
 from expert_anything.core import i18n
 _t = i18n.t
 
@@ -51,30 +56,8 @@ def _ground_evidence(text: str, evidence: list[str], name: str) -> list[str]:
 
 
 def _parse_json(text: str) -> dict:
-    """Tolerant JSON extraction from an LLM response.
-
-    Many OpenAI-compatible endpoints wrap JSON in ```json fences or include
-    prose around it. A naive json.loads would throw and - because
-    extract_knowledge swallows exceptions - silently fall back to the
-    placeholder heuristic, which is exactly the 'everything is empty' bug.
-    So we strip fences and grab the outermost {...} block before parsing.
-    """
-    if not text:
-        return {}
-    s = text.strip()
-    s = re.sub(r"^```(?:json)?\s*", "", s, flags=re.IGNORECASE)
-    s = re.sub(r"\s*```$", "", s)
-    try:
-        return json.loads(s)
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r"\{.*\}", s, flags=re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            return {}
-    return {}
+    """Tolerant JSON extraction (canonical implementation: llm.parse_llm_json)."""
+    return parse_llm_json(text)
 
 
 def _norm(name: str) -> str:
@@ -111,7 +94,7 @@ def _as_str_list(v) -> list[str]:
 
 def _extract_with_llm(
     text: str, filename: str, llm: LLMClient, on_progress=None,
-    page_offsets: list[int] | None = None,
+    page_offsets: list[int] | None = None, domain_id: str | None = None,
 ) -> KnowledgeAsset:
     """Single- or multi-call extraction.
 
@@ -123,13 +106,28 @@ def _extract_with_llm(
 
     `on_progress(stage, current, total, message)` is called to drive a progress
     bar in the UI so long extractions do not look like a freeze.
+
+    `domain_id` selects the domain-specific prompts (Phase 3): ``None`` (default)
+    auto-detects the domain from the asset title, an explicit id forces that
+    domain, and ``""`` disables domain prompts.  Without a detected domain the
+    generic prompts are used unchanged; with one, the template concept skeleton
+    is injected as alignment guidance only — grounding checks in `_assemble`
+    stay exactly as strict.
     """
+    # Domain detection: title-based, deterministic, no extra LLM call. The
+    # skeleton is rendered once and reused for every chunk.
+    if domain_id is None:
+        domain_id = detect_domain_from_title(title_from(text, filename))
+    concept_skeleton = domain_concept_skeleton(domain_id)
     CHUNK = 9000
     OVERLAP = 600
     if len(text) <= CHUNK + OVERLAP:
         if on_progress:
             on_progress("extract", 0, 1, _t("ext_analyzing"))
-        data = _call_extract(llm, text[: CHUNK + OVERLAP])
+        data = _call_extract(
+            llm, text[: CHUNK + OVERLAP],
+            domain_id=domain_id, concept_skeleton=concept_skeleton,
+        )
         if not data:
             raise ValueError(_t("ext_llm_failed"))
         asset = _assemble(data, text, filename, method="llm_extraction_v1",
@@ -147,50 +145,67 @@ def _extract_with_llm(
     total = len(chunks)
     if on_progress:
         on_progress("extract", 0, total, _t("ext_chunks_start", n=total))
-    # Run chunk extractions concurrently (bounded pool) so wall-clock time drops
-    # roughly by the worker count instead of doing N serial LLM calls. Each worker
-    # only reads its chunk + the shared (stateless) client; results are merged
-    # back in the main thread via as_completed, so there is no shared-state race.
+    # Run chunk extractions concurrently, but never let network completion order
+    # define the knowledge model. Store each result by its source chunk index,
+    # then merge in document order so concepts, first definitions and paths are
+    # deterministic across runs while retaining the parallel latency benefit.
     done = 0
+    chunk_results: list[dict | None] = [None] * total
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, total)) as pool:
-        futures = [pool.submit(_call_extract, llm, ch) for ch in chunks]
+        # Bind the domain prompt inputs with partial() so the executor keeps
+        # receiving the same (fn, llm, chunk) call shape as before.
+        extract_chunk = functools.partial(
+            _call_extract, domain_id=domain_id, concept_skeleton=concept_skeleton,
+        )
+        futures = {
+            pool.submit(extract_chunk, llm, chunk): index
+            for index, chunk in enumerate(chunks)
+        }
         for fut in concurrent.futures.as_completed(futures):
-            d = fut.result() if not fut.exception() else None
-            if d:
-                for c in d.get("concepts", []):
-                    nm = _as_str(c.get("name"))
-                    if not nm:
-                        continue
-                    key = _norm(nm)
-                    existing = next(
-                        (x for x in merged["concepts"] if _norm(x["name"]) == key), None
-                    )
-                    if existing is not None:
-                        for ev in _as_str_list(c.get("evidence")):
-                            if ev and ev not in existing["evidence"]:
-                                existing["evidence"].append(ev)
-                        continue
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    merged["concepts"].append(
-                        {
-                            "name": nm,
-                            "definition": _as_str(c.get("definition")),
-                            "evidence": _as_str_list(c.get("evidence")),
-                        }
-                    )
-                for r in d.get("relations", []):
-                    merged["relations"].append(r)
-                for p in d.get("learning_path", []):
-                    if (p or "").strip() and (p.strip() not in merged["learning_path"]):
-                        merged["learning_path"].append(p.strip())
+            index = futures[fut]
+            chunk_results[index] = fut.result() if not fut.exception() else None
             done += 1
             if on_progress:
+                extracted = sum(
+                    len(result.get("concepts", []))
+                    for result in chunk_results
+                    if result
+                )
                 on_progress(
                     "extract", done, total,
-                    _t("ext_chunk_progress", d=done, t=total, n=len(merged["concepts"])),
+                    _t("ext_chunk_progress", d=done, t=total, n=extracted),
                 )
+
+    for d in chunk_results:
+        if not d:
+            continue
+        for c in d.get("concepts", []):
+            nm = _as_str(c.get("name"))
+            if not nm:
+                continue
+            key = _norm(nm)
+            existing = next(
+                (x for x in merged["concepts"] if _norm(x["name"]) == key), None
+            )
+            if existing is not None:
+                for ev in _as_str_list(c.get("evidence")):
+                    if ev and ev not in existing["evidence"]:
+                        existing["evidence"].append(ev)
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            merged["concepts"].append(
+                {
+                    "name": nm,
+                    "definition": _as_str(c.get("definition")),
+                    "evidence": _as_str_list(c.get("evidence")),
+                }
+            )
+        merged["relations"].extend(d.get("relations", []))
+        for p in _as_str_list(d.get("learning_path", [])):
+            if p not in merged["learning_path"]:
+                merged["learning_path"].append(p)
     if not merged["concepts"]:
         raise ValueError(_t("ext_chunks_failed"))
     # Drop TOC-like noise concepts (chapter/section headings) so the focused
@@ -215,9 +230,25 @@ def _extract_with_llm(
     return asset
 
 
-def _call_extract(llm: LLMClient, snippet: str) -> dict:
-    system = get_prompt("extraction_system")
-    user = get_prompt("extraction_user").format(chunk_text=snippet)
+def _call_extract(
+    llm: LLMClient, snippet: str,
+    domain_id: str | None = None, concept_skeleton: str = "",
+) -> dict:
+    """One extraction call.
+
+    With a detected ``domain_id`` that has a registered prompt variant, the
+    domain-specific system/user prompts are used and the template's concept
+    skeleton is injected as *alignment guidance*.  Otherwise the generic prompts
+    are used and the request is byte-identical to the pre-Phase-3 behaviour.
+
+    Grounding is enforced entirely in :func:`_assemble` (verbatim evidence,
+    hallucinated concepts dropped); a domain prompt never relaxes those checks,
+    and the skeleton is explicitly labelled as "not a knowledge source" there.
+    """
+    system = get_domain_prompt("extraction_system", domain_id)
+    user = get_domain_prompt("extraction_user", domain_id).format(
+        chunk_text=snippet, concept_skeleton=concept_skeleton
+    )
     return chat_json(
         llm,
         [Message("system", system), Message("user", user)],
@@ -240,7 +271,8 @@ def _assign_chapters(asset: "KnowledgeAsset") -> "KnowledgeAsset":
     """Deterministically attach each concept to a chapter.
 
     Uses the first evidence's position in the source: the nearest preceding
-    heading line (``1.2 Some Title`` style) becomes the chapter. If the text
+    chapter heading becomes the chapter. Section headings and numbered prose
+    are deliberately not treated as chapters. If the text
     has no detectable headings, the source is split into 6 equal parts named
     Part 1..6. Concepts whose evidence was already grounded keep LLM-provided
     chapters; this is a source-location light (P0-3), independent of LLM.
@@ -253,7 +285,11 @@ def _assign_chapters(asset: "KnowledgeAsset") -> "KnowledgeAsset":
     heads: list[tuple[int, str]] = []
     for i, ln in enumerate(lines):
         s = ln.strip()
-        if re.match(r"^\d+(\.\d+)*\s+[A-Za-z]", s) and len(s) < 80 and not s.startswith("http"):
+        if (
+            re.match(r"^(chapter|part|unit|section)\b", s, re.I)
+            or re.match(r"^第\s*\d+\s*章\b", s)
+            or re.match(r"^附录\s*[A-ZＡ-Ｚ一二三四五六七八九十0-9]", s, re.I)
+        ) and len(s) < 100 and not s.startswith("http"):
             heads.append((i, s[:80]))
     if len(heads) < 2:
         n = len(lines) or 1
@@ -341,23 +377,23 @@ def _assemble(
 ) -> KnowledgeAsset:
     concepts: list[Concept] = []
     name_to_id: dict[str, str] = {}
-    lowered = text.lower()
     for c in data.get("concepts", []):
         name = _as_str(c.get("name"))
         if not name:
             continue
         evidence = _ground_evidence(text, _as_str_list(c.get("evidence")), name)
-        # Hallucination guard: drop concepts whose name does not appear in the
-        # source AND have no grounded evidence. They are almost certainly
-        # invented terms the model slipped in despite the prompt.
-        if not evidence and _norm(name) not in lowered:
+        # A concept without a verbatim source span cannot be located, audited or
+        # safely taught.  _ground_evidence may recover a sentence containing the
+        # exact concept name, but if that also fails the candidate is rejected.
+        if not evidence:
             continue
         cid = _new_id("c")
         name_to_id[_norm(name)] = cid
         definition = _as_str(c.get("definition"))
-        # If the model gave no definition but we have evidence, derive a stub
-        # from the first evidence sentence instead of leaving it empty.
-        if not definition and evidence:
+        # The project treats definition as source-grounded content, not an LLM
+        # paraphrase.  Keep it only when it is a literal source span; otherwise
+        # use the already validated evidence as the conservative definition.
+        if not definition or definition not in text:
             definition = evidence[0][:200]
         concepts.append(
             Concept(
@@ -373,15 +409,26 @@ def _assemble(
     relations: list[Relation] = []
     for r in data.get("relations", []):
         s, t = _norm(r.get("source", "")), _norm(r.get("target", ""))
-        if s in name_to_id and t in name_to_id and s != t:
+        relation_evidence = _as_str(r.get("evidence"))
+        # Relations affect the graph, prerequisite order and adaptive path, so
+        # accepting an unsupported edge is more harmful than omitting one.
+        # Require the LLM-provided evidence to be a verbatim source span, just
+        # as concept evidence is required to be grounded.
+        if (
+            s in name_to_id
+            and t in name_to_id
+            and s != t
+            and relation_evidence
+            and relation_evidence in text
+        ):
             relations.append(
                 Relation(
                     id=_new_id("r"),
                     source=name_to_id[s],
                     target=name_to_id[t],
                     label=_as_str(r.get("label")),
-                    type="related",
-                    evidence=_as_str(r.get("evidence")),
+                    type=_as_str(r.get("type")) or "related",
+                    evidence=relation_evidence,
                 )
             )
 
@@ -440,36 +487,173 @@ def _fallback(
     if not paragraphs:
         paragraphs = [s.strip() for s in re.split(r"(?<=[。!?.!?])\s+", text) if len(s.strip()) >= 20]
 
-    heading_lines = [
-        l.strip()
-        for l in text.splitlines()
-        if (l.startswith("#") and 2 <= len(l.strip()) <= 80)
-        or re.match(r"^\d+(\.\d+)*\s+[A-Za-z一-鿿]", l.strip())
-    ]
+    # EPUB books often contain hundreds of numbered lines in tables and prose
+    # (for example ``0.2 ...`` at the beginning of a paragraph).  Treat only
+    # short, actual heading-shaped lines as structure, and keep chapter-level
+    # Chinese headings used by this book family as well.
+    raw_lines = text.splitlines()
+    heading_rows: list[tuple[int, str, int]] = []
+    for line_no, raw_line in enumerate(raw_lines):
+        s = raw_line.strip()
+        if not s or len(s) > 100:
+            continue
+        # _extract_html_blocks surrounds real h1-h6 blocks with blank lines.
+        # Requiring blank lines on both sides prevents the first paragraph
+        # after a heading from being mistaken for another heading merely
+        # because it follows a heading boundary.
+        prev_blank = line_no > 0 and not raw_lines[line_no - 1].strip()
+        next_blank = line_no + 1 < len(raw_lines) and not raw_lines[line_no + 1].strip()
+        semantic_heading = (
+            (prev_blank and next_blank)
+            or (line_no == 0 and next_blank)
+            or (prev_blank and line_no == len(raw_lines) - 1)
+        )
+        if s.startswith("#") and len(s.lstrip("# ")) >= 2:
+            heading_rows.append((line_no, re.sub(r"^#+\s*", "", s), 0))
+            continue
+        chapter_match = re.match(r"^第\s*\d+\s*章\s*(.*)$", s)
+        if chapter_match:
+            chapter_title = chapter_match.group(1).strip()
+            if (
+                semantic_heading
+                and chapter_title
+                and not re.fullmatch(r"[\d. /]+", chapter_title)
+                and "/" not in chapter_title
+                and not any(mark in s for mark in "。！？“”‘’；")
+                and len(s) <= 60
+            ):
+                heading_rows.append((line_no, s, 0))
+            continue
+        appendix_match = re.match(r"^附录\s*[A-ZＡ-Ｚ一二三四五六七八九十0-9]+\s*(.*)$", s, re.I)
+        if appendix_match:
+            if (
+                semantic_heading
+                and appendix_match.group(1).strip()
+                and not any(mark in s for mark in "。！？“”‘’；")
+                and len(s) <= 60
+            ):
+                heading_rows.append((line_no, s, 0))
+            continue
+        m = re.match(r"^(\d+(?:\.\d+)*)\s+\S", s)
+        if m:
+            # Keep chapter, first-level and second-level section headings.
+            # The latter is important for technical books: stopping at four
+            # headings per chapter made the fallback look like a table of
+            # contents teaser rather than a usable knowledge index.
+            level = m.group(1).count(".")
+            # A short heading may contain a colon, but prose-like quotes,
+            # sentence punctuation, or a slash are strong signals that this is
+            # a numbered paragraph/reference rather than a section title.
+            looks_like_prose = any(mark in s for mark in "。！？“”‘’/；")
+            if (
+                semantic_heading
+                and level <= 2
+                and "." in m.group(1)
+                and len(s) <= 60
+                and not looks_like_prose
+            ):
+                heading_rows.append((line_no, s, level + 1))
+            continue
+
+        # EPUBs commonly use semantic h3/h4 headings without a numeric
+        # prefix (for example “午餐一：可复制性” or “延迟限制带宽”). Once the
+        # parser has preserved a real heading boundary, keep these short,
+        # punctuation-light lines as leaf concepts too. Long/sentence-like
+        # paragraphs remain excluded.
+        if (
+            semantic_heading
+            and len(s) <= 60
+            and not any(mark in s for mark in "。！？“”‘’/；")
+            and not s.startswith(("http://", "https://"))
+        ):
+            # Unnumbered semantic headings are most often h3 leaf sections in
+            # this EPUB family. Keeping them one level below numbered h2
+            # headings preserves the useful chapter → subsection → leaf walk.
+            heading_rows.append((line_no, s, 3))
+
+    # De-duplicate repeated references that happen to look like headings. Keep
+    # every real chapter and a bounded but broad set of sections per chapter;
+    # this keeps the graph readable while retaining the book's structure.
+    seen_headings: set[str] = set()
+    unique_rows: list[tuple[int, str, int]] = []
+    for row in heading_rows:
+        key = row[1].lower()
+        if key in seen_headings:
+            continue
+        seen_headings.add(key)
+        unique_rows.append(row)
+    chapter_rows = [row for row in unique_rows if row[2] == 0]
+    if chapter_rows:
+        selected_rows = []
+        for index, chapter in enumerate(chapter_rows):
+            selected_rows.append(chapter)
+            start = chapter[0]
+            end = chapter_rows[index + 1][0] if index + 1 < len(chapter_rows) else 10**12
+            sections = [
+                row for row in unique_rows
+                if row[2] > 0 and start < row[0] < end
+            ][:80]
+            selected_rows.extend(sections)
+    else:
+        selected_rows = unique_rows[:80]
+    heading_lines = [row[1] for row in selected_rows]
 
     concepts: list[Concept] = []
     name_to_id: dict[str, str] = {}
+    structural_rows: list[tuple[str, int, str]] = []
 
     def _first_sentence(p: str) -> str:
         return re.split(r"(?<=[。!?.!?])\s*", p)[0].strip()
 
-    if heading_lines:
-        for i, h in enumerate(heading_lines[:12]):
+    if selected_rows:
+        current_chapter_title = ""
+        for i, (line_no, h, _level) in enumerate(selected_rows):
+            if _level == 0:
+                current_chapter_title = h[:80]
             name = re.sub(r"^#+\s*", "", h).strip()
-            name = re.sub(r"^\d+(\.\d+)*\s*", "", name).strip() or f"章节 {i + 1}"
+            name = re.sub(r"^\d+(\.\d+)*\s*", "", name).strip()
+            name = re.sub(r"^第\s*\d+\s*章\s*", "", name).strip()
+            name = name or f"章节 {i + 1}"
             cid = _new_id("c")
             name_to_id[name.lower()] = cid
-            ev = [s[:360] for s in paragraphs if name[:4] and name[:4].lower() in s.lower()][:3]
+            # Evidence should describe the selected heading's nearby section,
+            # not repeat the first paragraph of the whole book for every node.
+            following: list[str] = []
+            for next_line in raw_lines[line_no + 1:]:
+                candidate = next_line.strip()
+                if not candidate:
+                    if following:
+                        break
+                    continue
+                if any(candidate == other[1] for other in selected_rows):
+                    break
+                following.append(candidate)
+                if len(" ".join(following)) >= 360:
+                    break
+            # Keep the first physical source line as evidence. Joining several
+            # XHTML lines would create text that is not literally present in
+            # source_text and would break source-location highlighting.
+            block = following[0].strip() if following else ""
+            ev = [block[:360]] if block else []
             if not ev and paragraphs:
                 ev = [paragraphs[min(i, len(paragraphs) - 1)][:360]]
             concepts.append(
                 Concept(
                     id=cid,
                     name=name,
-                    definition=(ev[0][:200] if ev else ""),
+                    definition=(
+                        re.split(r"(?<=[。.!?])\s*", ev[0])[0][:200]
+                        if ev else ""
+                    ),
                     evidence=ev,
+                    # The selected heading already carries its structural
+                    # chapter. Set it directly instead of recovering it from
+                    # evidence text, which may be repeated elsewhere in a
+                    # book and otherwise jumps concepts into the wrong chapter.
+                    chapter=current_chapter_title,
                 )
             )
+            structural_rows.append((cid, _level, h))
     else:
         # No headings: chunk the body into small groups of sentences so a long
         # single-block document (typical pasted/PDF text) still yields several
@@ -489,11 +673,33 @@ def _fallback(
                 Concept(id=cid, name=name, definition=_first_sentence(block)[:200], evidence=[block[:360]])
             )
 
-    # Relations need semantic understanding -> only meaningful with an LLM.
+    # Even without an LLM, heading nesting is a source-grounded relation:
+    # the parent heading contains the following subsection. Preserve it so a
+    # learner can walk from chapter -> section -> leaf instead of stopping at
+    # the first overview row. Semantic relations still require the LLM path.
     relations: list[Relation] = []
+    hierarchy_stack: list[tuple[int, str]] = []
+    for cid, level, heading in structural_rows:
+        while hierarchy_stack and hierarchy_stack[-1][0] >= level:
+            hierarchy_stack.pop()
+        if hierarchy_stack:
+            parent_id = hierarchy_stack[-1][1]
+            relations.append(
+                Relation(
+                    id=_new_id("r"),
+                    source=parent_id,
+                    target=cid,
+                    label=_t("rel_part_of"),
+                    type="contains",
+                    evidence=heading,
+                )
+            )
+        hierarchy_stack.append((level, cid))
     chapters = (
-        [Chapter(id=_new_id("ch"), title=h, order=i) for i, h in enumerate(heading_lines[:12])]
-        if heading_lines
+        [Chapter(id=_new_id("ch"), title=h, order=i) for i, h in enumerate(
+            [h for _line, h, level in selected_rows if level == 0]
+        )]
+        if selected_rows
         else []
     )
     asset = KnowledgeAsset(
@@ -515,14 +721,21 @@ def _fallback(
 
 def extract_knowledge(
     text: str, filename: str, llm: LLMClient | None = None, on_progress=None,
-    page_offsets: list[int] | None = None,
+    page_offsets: list[int] | None = None, domain_id: str | None = None,
 ) -> KnowledgeAsset:
+    """Extract a knowledge model from ``text``.
+
+    ``domain_id`` is passed through to the LLM path (``None`` = auto-detect from
+    the title, ``""`` = force generic prompts).  The deterministic fallback is
+    domain-agnostic on purpose: it must stay source-only.
+    """
     if not text.strip():
         raise ValueError(_t("ext_no_content"))
     if llm is not None:
         try:
             return _extract_with_llm(
-                text, filename, llm, on_progress=on_progress, page_offsets=page_offsets
+                text, filename, llm, on_progress=on_progress,
+                page_offsets=page_offsets, domain_id=domain_id,
             )
         except Exception:
             # Degrade gracefully: never fail the import on an LLM hiccup.

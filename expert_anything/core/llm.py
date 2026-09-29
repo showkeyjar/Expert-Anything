@@ -23,12 +23,16 @@ class LLMError(RuntimeError):
     """Raised when the endpoint returns an error or is unreachable."""
 
 
-def _parse_json(text: str) -> dict:
+def parse_llm_json(text: str) -> dict:
     """Tolerant JSON extraction from an LLM response.
 
     Many OpenAI-compatible endpoints wrap JSON in ```json fences or include
     prose around it. We strip fences and grab the outermost {...} block before
     parsing so a fenced/verbose response still yields the object we want.
+
+    Single canonical implementation: extraction.py / teacher.py / tutor.py
+    previously carried near-identical copies (AGENTS.md #11 - long prompts with
+    json_mode can return fenced or prose-wrapped output; parse tolerantly).
     """
     if not text:
         return {}
@@ -46,6 +50,10 @@ def _parse_json(text: str) -> dict:
         except json.JSONDecodeError:
             return {}
     return {}
+
+
+# Backwards-compatible alias for pre-existing internal/test references.
+_parse_json = parse_llm_json
 
 
 @dataclass

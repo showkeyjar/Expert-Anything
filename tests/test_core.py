@@ -12,13 +12,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from expert_anything.core import learner, storage
-from expert_anything.core.extraction import extract_knowledge, _assemble, _fallback
+from expert_anything.core.extraction import (
+    extract_knowledge,
+    _assemble,
+    _extract_with_llm,
+    _fallback,
+)
 from expert_anything.core.learner import (
     adaptive_path,
+    dependency_chain,
     due_for_review,
+    mastery_prediction,
     normalize,
     record_evaluation,
     register_asset,
+    set_study_goal,
+    study_goal_progress,
     weaknesses,
 )
 from expert_anything.core.models import Concept, KnowledgeAsset, Relation
@@ -106,6 +115,47 @@ class TestParsers(unittest.TestCase):
         text = extract_from_bytes(buf.getvalue(), "a.epub")
         self.assertIn("epub 正文内容", text)
 
+    def test_epub_uses_spine_order_and_preserves_blocks(self):
+        buf = io.BytesIO()
+        container = (
+            '<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="OPS/package.opf"/></rootfiles></container>'
+        )
+        opf = (
+            '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">'
+            '<manifest><item id="late" href="late.xhtml" media-type="application/xhtml+xml"/>'
+            '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+            '<item id="first" href="first.xhtml" media-type="application/xhtml+xml"/></manifest>'
+            '<spine><itemref idref="first"/><itemref idref="late"/><itemref idref="nav"/></spine>'
+            '</package>'
+        )
+        with zipfile.ZipFile(buf, "w") as z:
+            # Deliberately write in the wrong order: archive order is not book order.
+            z.writestr("OPS/late.xhtml", "<html><body><h1>第二章</h1><p>后面的段落。</p></body></html>")
+            z.writestr("META-INF/container.xml", container)
+            z.writestr("OPS/nav.xhtml", "<html><body><nav>目录 噪声</nav></body></html>")
+            z.writestr("OPS/package.opf", opf)
+            z.writestr("OPS/first.xhtml", "<html><head><title>隐藏标题</title></head><body><h1>第一章</h1><p>第一段。</p><p>第二段。</p></body></html>")
+        text = extract_from_bytes(buf.getvalue(), "book.epub")
+        self.assertLess(text.index("第一章"), text.index("第二章"))
+        self.assertIn("第一段。\n第二段。", text)
+        self.assertNotIn("目录 噪声", text)
+
+    def test_epub_headings_are_preserved_for_structural_fallback(self):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr(
+                "book.xhtml",
+                "<html><body><h1>第 1 章 总览</h1><p>章节正文。</p>"
+                "<h2>1.1 核心概念</h2><p>核心概念正文。</p>"
+                "<p>1.2 这是一段正文，不是标题。</p></body></html>",
+            )
+        text = extract_from_bytes(buf.getvalue(), "book.epub")
+        asset = extract_knowledge(text, "book.epub", llm=None)
+        self.assertEqual(asset.concepts[0].name, "总览")
+        self.assertIn("核心概念", [c.name for c in asset.concepts])
+        self.assertNotIn("这是一段正文，不是标题", [c.name for c in asset.concepts])
+
     def test_html_extraction(self):
         text = extract_from_bytes(b"<html><body><p>html text</p></body></html>", "a.html")
         self.assertIn("html text", text)
@@ -178,6 +228,8 @@ class TestExtraction(unittest.TestCase):
             "learning_path": ["Alpha", "Beta"],
         }
         asset = _assemble(data, text, "x.md", "test")
+        self.assertEqual(len(asset.relations), 1)
+        self.assertIn(asset.relations[0].evidence, text)
         by_name = {c.name: c for c in asset.concepts}
         alpha = by_name["Alpha"]
         self.assertTrue(alpha.locations, "Alpha should have a source location")
@@ -188,6 +240,110 @@ class TestExtraction(unittest.TestCase):
         alpha2 = Concept.from_dict(alpha.to_dict())
         self.assertEqual(len(alpha2.locations), len(alpha.locations))
         self.assertEqual(alpha2.locations[0].char_start, loc.char_start)
+
+    def test_assemble_rejects_concept_without_grounded_evidence(self):
+        text = "正文只讨论其他内容，没有提供目标术语的解释。"
+        data = {
+            "concepts": [
+                {
+                    "name": "Alpha",
+                    "definition": "LLM 编造的定义。",
+                    "evidence": ["这段证据并不存在。"],
+                },
+            ],
+        }
+        asset = _assemble(data, text, "x.md", "test")
+        self.assertEqual(asset.concepts, [])
+        self.assertEqual(asset.learning_path, [])
+
+    def test_assemble_replaces_ungrounded_definition_with_evidence(self):
+        text = "Alpha 是基础概念。"
+        data = {
+            "concepts": [
+                {
+                    "name": "Alpha",
+                    "definition": "Alpha 是宇宙中最强大的机制。",
+                    "evidence": [text],
+                },
+            ],
+        }
+        asset = _assemble(data, text, "x.md", "test")
+        self.assertEqual(asset.concepts[0].definition, text)
+        self.assertIn(asset.concepts[0].definition, text)
+
+    def test_assemble_rejects_relation_without_grounded_evidence(self):
+        text = "Alpha 是基础概念。Beta 是另一个概念。"
+        data = {
+            "concepts": [
+                {"name": "Alpha", "evidence": ["Alpha 是基础概念。"]},
+                {"name": "Beta", "evidence": ["Beta 是另一个概念。"]},
+            ],
+            "relations": [
+                {
+                    "source": "Alpha",
+                    "target": "Beta",
+                    "label": "依赖",
+                    "evidence": "Beta 必须先依赖 Alpha 才能工作。",
+                },
+            ],
+        }
+        asset = _assemble(data, text, "x.md", "test")
+        self.assertEqual(asset.relations, [])
+
+    def test_chunked_extraction_merges_in_source_order_not_completion_order(self):
+        from unittest import mock
+
+        text = "A" * 9000 + "\n" + "B" * 2000
+        chunks = ["chunk-0", "chunk-1"]
+        results = [
+            {
+                "concepts": [{"name": "Alpha", "definition": "Alpha", "evidence": ["A" * 80]}],
+                "relations": [],
+                "learning_path": ["Alpha"],
+            },
+            {
+                "concepts": [{"name": "Beta", "definition": "Beta", "evidence": ["B" * 80]}],
+                "relations": [],
+                "learning_path": ["Beta"],
+            },
+        ]
+
+        class _Future:
+            def __init__(self, index):
+                self.index = index
+
+            def exception(self):
+                return None
+
+            def result(self):
+                return results[self.index]
+
+        class _Pool:
+            def __init__(self, max_workers):
+                self.max_workers = max_workers
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def submit(self, fn, llm, chunk):
+                return _Future(chunks.index(chunk))
+
+        with mock.patch("expert_anything.core.extraction._split_text", return_value=chunks), \
+             mock.patch("expert_anything.core.extraction.concurrent.futures.ThreadPoolExecutor", _Pool), \
+             mock.patch(
+                 "expert_anything.core.extraction.concurrent.futures.as_completed",
+                 side_effect=lambda futures: list(reversed(futures)),
+             ):
+            asset = _extract_with_llm(text, "long.txt", object())
+
+        self.assertEqual([c.name for c in asset.concepts], ["Alpha", "Beta"])
+        self.assertEqual(
+            [asset.concept_by_id(cid).name for cid in asset.learning_path],
+            ["Alpha", "Beta"],
+        )
 
     def test_concept_from_dict_tolerates_missing_locations(self):
         c = Concept.from_dict({"name": "X"})
@@ -300,6 +456,38 @@ class TestLearner(unittest.TestCase):
         self.assertNotIn("Strong New", due)
         self.assertNotIn("Never", due)
 
+    def test_due_for_review_accepts_legacy_naive_timestamp(self):
+        old = datetime.now(timezone.utc) - timedelta(days=2)
+        state = {"concepts": {
+            "legacy": {
+                "name": "Legacy",
+                "mastery": 0.4,
+                "updated_at": old.replace(tzinfo=None).isoformat(),
+            },
+        }}
+        due = due_for_review(state)
+        self.assertEqual([item["name"] for item in due], ["Legacy"])
+
+    def test_due_for_review_scopes_asset_and_resolves_graph_ids(self):
+        now = datetime.now(timezone.utc) - timedelta(days=2)
+        asset = _asset_with_relations()
+        state = {
+            "concepts": {
+                "a": {"name": "A", "mastery": 0.8,
+                      "updated_at": now.isoformat()},
+                "b": {"name": "B", "mastery": 0.3,
+                      "updated_at": now.isoformat()},
+                "outside": {"name": "Outside", "mastery": 0.3,
+                            "updated_at": now.isoformat()},
+            },
+            "history": [],
+        }
+        due = due_for_review(state, asset=asset)
+        self.assertEqual({item["name"] for item in due}, {"A", "B"})
+        a = next(item for item in due if item["name"] == "A")
+        self.assertEqual(a["id"], "c1")
+        self.assertTrue(a["prereq_weak"])
+
     def test_unregister_asset_cleans(self):
         state = {}
         asset = _asset_with_relations()
@@ -310,6 +498,103 @@ class TestLearner(unittest.TestCase):
 
     def test_normalize(self):
         self.assertEqual(normalize("  Agent-Memory / "), "agent memory")
+
+    # -- mastery prediction -------------------------------------------------
+    def test_mastery_prediction_no_data(self):
+        state = {"concepts": {}, "history": []}
+        pred = mastery_prediction(state, "Foo")
+        self.assertEqual(pred["trend"], "unknown")
+        self.assertFalse(pred["will_achieve"])
+        self.assertEqual(pred["sessions_needed"], -1)
+
+    def test_mastery_prediction_rising(self):
+        state = {
+            "concepts": {"foo": {"name": "Foo", "mastery": 0.4}},
+            "history": [
+                {"concept": "Foo", "score": 0.7},
+                {"concept": "Foo", "score": 0.5},
+                {"concept": "Foo", "score": 0.2},
+            ],
+        }
+        pred = mastery_prediction(state, "Foo")
+        self.assertEqual(pred["trend"], "rising")
+        self.assertTrue(pred["will_achieve"])
+        self.assertGreater(pred["predicted_mastery"], 0.4)
+        self.assertGreater(pred["sessions_needed"], 0)
+
+    def test_mastery_prediction_already_mastered(self):
+        state = {
+            "concepts": {"foo": {"name": "Foo", "mastery": 0.8}},
+            "history": [{"concept": "Foo", "score": 0.9}],
+        }
+        pred = mastery_prediction(state, "Foo")
+        self.assertEqual(pred["sessions_needed"], 0)
+
+    def test_mastery_prediction_falling(self):
+        state = {
+            "concepts": {"foo": {"name": "Foo", "mastery": 0.3}},
+            "history": [
+                {"concept": "Foo", "score": 0.1},
+                {"concept": "Foo", "score": 0.4},
+                {"concept": "Foo", "score": 0.7},
+            ],
+        }
+        pred = mastery_prediction(state, "Foo")
+        self.assertEqual(pred["trend"], "falling")
+        self.assertFalse(pred["will_achieve"])
+
+    def test_mastery_prediction_uses_normalized_concept_name(self):
+        state = {
+            "concepts": {"agent memory": {"name": "Agent-Memory", "mastery": 0.4}},
+            "history": [
+                {"concept": "Agent-Memory", "score": 0.8},
+                {"concept": "agent memory", "score": 0.2},
+            ],
+        }
+        pred = mastery_prediction(state, " Agent / Memory ")
+        self.assertEqual(pred["trend"], "rising")
+
+    # -- study goal ----------------------------------------------------------
+    def test_study_goal_set_and_progress(self):
+        state = {
+            "concepts": {
+                "a": {"name": "A", "mastery": 0.7},
+                "b": {"name": "B", "mastery": 0.2},
+            },
+        }
+        goal = set_study_goal(state, 3, days=7)
+        self.assertEqual(goal["target"], 3)
+        self.assertEqual(goal["baseline_mastered"], 1)
+        prog = study_goal_progress(state)
+        self.assertTrue(prog["active"])
+        self.assertEqual(prog["baseline"], 1)
+        self.assertEqual(prog["current"], 1)
+        self.assertEqual(prog["delta"], 0)
+
+    def test_study_goal_progress_no_goal(self):
+        state = {}
+        prog = study_goal_progress(state)
+        self.assertFalse(prog["active"])
+
+    # -- dependency chain ---------------------------------------------------
+    def test_dependency_chain_traces_prereqs(self):
+        asset = _asset_with_relations()
+        chain = dependency_chain(asset, "c3")
+        ids = [item["id"] for item in chain]
+        self.assertIn("c1", ids)
+        self.assertIn("c2", ids)
+        self.assertIn("c3", ids)
+        # c3 is the target (depth 0); c1 is the root (depth 2)
+        c3_item = next(i for i in chain if i["id"] == "c3")
+        self.assertEqual(c3_item["depth"], 0)
+        c1_item = next(i for i in chain if i["id"] == "c1")
+        self.assertEqual(c1_item["depth"], 2)
+
+    def test_dependency_chain_no_prereqs(self):
+        asset = _asset_with_relations()
+        chain = dependency_chain(asset, "c1")
+        self.assertEqual(len(chain), 1)
+        self.assertEqual(chain[0]["id"], "c1")
 
 
 # --------------------------------------------------------------------------- #
@@ -339,26 +624,35 @@ class TestTutor(unittest.TestCase):
         self.assertIn("feedback", r)
         self.assertIn("reference", r)
         self.assertIn("gap", r)
-        self.assertEqual(r["reference"], "")
+        # keyword-matching fallback now provides the definition as reference
+        self.assertTrue(len(r["reference"]) > 0 or r["reference"] == "")
 
-    def test_followup_without_llm_returns_hint(self):
+    def test_followup_without_llm_returns_structured_answer(self):
         r = self.tutor.follow_up(self.concept, "为什么？")
-        self.assertIn("未接入 LLM", r)
+        self.assertIsInstance(r, str)
+        self.assertTrue(len(r) > 10)  # not just a placeholder
 
-    def test_generate_practice_without_llm_returns_none(self):
+    def test_generate_practice_without_llm_returns_fallback(self):
         r = self.tutor.generate_practice(self.concept)
-        self.assertIsNone(r)
+        self.assertIsNotNone(r)
+        self.assertIn("task", r)
+        self.assertIn("hint", r)
+        self.assertIn("reference", r)
+        self.assertEqual(r["concept"], self.concept.name)
 
-    def test_evaluate_practice_without_llm_returns_placeholder(self):
+    def test_evaluate_practice_without_llm_returns_keyword_score(self):
         r = self.tutor.evaluate_practice(self.concept, "task desc", "learner answer")
         self.assertIn("score", r)
         self.assertIn("feedback", r)
-        self.assertEqual(r["score"], 0.5)
+        self.assertIn("reference", r)
+        self.assertTrue(0.0 <= r["score"] <= 1.0)
         self.assertIn("未接入 LLM", r["feedback"])
 
-    def test_generate_quiz_without_llm_returns_none(self):
+    def test_generate_quiz_without_llm_returns_fallback(self):
         r = self.tutor.generate_quiz(self.concept)
-        self.assertIsNone(r)
+        self.assertIsNotNone(r)
+        self.assertIn(r["type"], ("true_false", "ordering"))
+        self.assertEqual(r["concept"], self.concept.name)
 
 
 # --------------------------------------------------------------------------- #
@@ -391,6 +685,39 @@ class TestTeacher(unittest.TestCase):
             status="open"))
         ids = anomaly_concept_ids(self.asset, tm)
         self.assertIn(self.asset.concepts[0].id, ids)
+
+    def test_concept_anomalies_matching_and_order(self):
+        from expert_anything.core.teacher import Anomaly, concept_anomalies
+        name = self.asset.concepts[0].name
+        tm = TeacherModel(asset_id="x")
+        tm.anomalies.extend([
+            Anomaly(id="a-low", kind="logical_gap",
+                    description=f"{name} 的次要疑点", severity="low",
+                    status="open"),
+            Anomaly(id="a-high", kind="contradiction",
+                    description=f"{name} 与后文矛盾", severity="high",
+                    status="open"),
+            Anomaly(id="a-resolved", kind="surprising_claim",
+                    description=f"{name} 的反常主张", severity="high",
+                    status="resolved"),
+            Anomaly(id="a-other", kind="undefined_term",
+                    description="别的概念术语未定义", severity="high",
+                    status="open"),
+            Anomaly(id="a-surfaced", kind="learner_gap",
+                    description=f"{name} 相关的学习者差距", severity="medium",
+                    status="surfaced_to_student"),
+        ])
+        hits = concept_anomalies(self.asset.concepts[0], tm)
+        got = [a.id for a in hits]
+        # severity-first; resolved filtered out; other-concept filtered out;
+        # surfaced learner_gap kept (still needs remediation)
+        self.assertEqual(got, ["a-high", "a-surfaced", "a-low"])
+        self.assertEqual(concept_anomalies(None, tm), [])
+        self.assertEqual(concept_anomalies(self.asset.concepts[0], None), [])
+        self.assertEqual(
+            [a.id for a in concept_anomalies(self.asset.concepts[0], tm, limit=1)],
+            ["a-high"],
+        )
 
 
 def _star_asset():
@@ -517,6 +844,61 @@ class TestStorage(unittest.TestCase):
             finally:
                 config.DATA_DIR = old
                 config.ASSETS_DIR = old / "assets"
+
+    def test_load_asset_reads_single_file(self):
+        import tempfile as _tf
+        with _tf.TemporaryDirectory() as td:
+            from expert_anything.core import config
+            old = config.DATA_DIR
+            config.DATA_DIR = Path(td)
+            config.ASSETS_DIR = config.DATA_DIR / "assets"
+            config.ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+            try:
+                asset = extract_knowledge(SAMPLE, "agent-memory.md", llm=None)
+                storage.save_asset(asset)
+                # a corrupt second file must not break single-file loads
+                (config.ASSETS_DIR / "broken.json").write_text(
+                    "{not json", encoding="utf-8"
+                )
+                got = storage.load_asset(asset.asset_id)
+                self.assertIsNotNone(got)
+                self.assertEqual(got.asset_id, asset.asset_id)
+                self.assertIsNone(storage.load_asset("missing-id"))
+                self.assertIsNone(storage.load_asset("broken"))
+                # corrupt files are skipped, not fatal, in the listing
+                names = [a.asset_id for a in storage.load_assets()]
+                self.assertIn(asset.asset_id, names)
+                self.assertNotIn("broken", names)
+            finally:
+                config.DATA_DIR = old
+                config.ASSETS_DIR = old / "assets"
+
+    def test_atomic_write_preserves_previous_file_on_replace_failure(self):
+        import tempfile as _tf
+        from unittest import mock
+
+        with _tf.TemporaryDirectory() as td:
+            path = Path(td) / "learner.json"
+            path.write_text('{"version": 1}', encoding="utf-8")
+            with mock.patch(
+                "expert_anything.core.storage.os.replace",
+                side_effect=OSError("simulated replace failure"),
+            ):
+                with self.assertRaises(OSError):
+                    storage._write_json_atomic(path, {"version": 2})
+
+            self.assertEqual(path.read_text(encoding="utf-8"), '{"version": 1}')
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
+
+    def test_atomic_write_replaces_with_valid_json(self):
+        import json
+        import tempfile as _tf
+
+        with _tf.TemporaryDirectory() as td:
+            path = Path(td) / "learner.json"
+            storage._write_json_atomic(path, {"history": [{"score": 0.8}]})
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["history"][0]["score"], 0.8)
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
 
 
 if __name__ == "__main__":

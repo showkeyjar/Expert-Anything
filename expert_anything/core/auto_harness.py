@@ -282,11 +282,11 @@ def _prov_teach(tool: str, args: dict, ctx: dict) -> dict:
 
 
 def _prov_scene(tool: str, args: dict, ctx: dict) -> dict:
-    """图示解码槽位：复用 decoder.fallback_scene / check_scene 确定性渲染。"""
+    """图示解码槽位：优先领域专用场景，否则回退 decoder 通用场景（确定性渲染）。"""
     concept = ctx["concept"]
     asset = ctx["asset"]
     if asset is not None:
-        spec = _decoder.fallback_scene(asset, concept)
+        spec = _decoder.scene_for_concept(asset, concept)
     else:
         v, spec = _decoder.check_scene({
             "title": f"「{concept.name}」的知识结构",

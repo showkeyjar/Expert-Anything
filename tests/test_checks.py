@@ -200,7 +200,7 @@ class TestTeachAdmissionLoop(unittest.TestCase):
         ])
         t = Tutor(_asset(), llm)
         res = t.teach(c)
-        self.assertEqual(len(llm.calls), 2)  # retried once
+        self.assertEqual(len(llm.calls), 3)  # 2 lesson attempts + 1 scene decode
         self.assertIn("未通过系统代码校验", llm.calls[1][1].content)  # failure quoted
         self.assertTrue(len(res["explanation"]) > 12)
         self.assertEqual(t._recent_lessons[-1]["name"], c.name)

@@ -120,5 +120,50 @@ class TestLLMTeacher(unittest.TestCase):
             self.assertTrue(note.concept_id)
 
 
+# Phase 3: the domain-specific prompt path (docs/电力交易领域学习方案.md).
+# The title carries "电力" so domain detection selects the electricity
+# prompts; the skeleton is guidance only, so grounding rules must still hold.
+ELECTRICITY_TEXT = """# 电力市场交易体系
+
+两级市场架构：中国电力市场实行省级市场与区域市场两级运作。
+省级电力交易中心：负责省内交易组织的日常运营。
+现货交易：包括日前市场、日内市场和实时平衡市场。
+"""
+
+
+@unittest.skipUnless(HAS_LLM, "EXPERTANYTHING_LLM_API_KEY not configured")
+class TestLLMDomainPrompts(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.llm = LLMClient.from_config(
+            config.LLM_API_KEY, config.LLM_BASE_URL, config.LLM_MODEL
+        )
+        cls.asset = extract_knowledge(
+            ELECTRICITY_TEXT, "电力市场交易体系.md", llm=cls.llm
+        )
+
+    def test_domain_extraction_stays_grounded(self):
+        asset = self.asset
+        self.assertEqual(asset.method, "llm_extraction_v1")
+        self.assertTrue(asset.concepts, "domain extraction produced no concepts")
+        for c in asset.concepts:
+            self.assertTrue(c.evidence, f"{c.name} has no evidence")
+            for ev in c.evidence:
+                self.assertIn(ev, ELECTRICITY_TEXT, "evidence not verbatim from source")
+        # Domain guidance must never fabricate source-external concepts.
+        names = {c.name for c in asset.concepts}
+        self.assertNotIn("量子纠缠", names)
+        self.assertTrue(
+            any(c.name in ELECTRICITY_TEXT for c in asset.concepts),
+            "no concept name appears in the source",
+        )
+
+    def test_domain_teacher_notes_cover_asset_concepts(self):
+        tm = build_teacher_model(self.asset, llm=self.llm)
+        self.assertIn(tm.status, ("done", "failed"))
+        for note in tm.concept_notes:
+            self.assertTrue(note.concept_id)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

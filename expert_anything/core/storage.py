@@ -6,6 +6,9 @@ plus a single learner.json for the (cross-asset) learner model.
 from __future__ import annotations
 
 import json
+import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -14,13 +17,45 @@ from expert_anything.core.models import KnowledgeAsset
 from expert_anything.core.teacher import TeacherModel
 
 
+def _write_json_atomic(path: Path, data: Any) -> None:
+    """Persist JSON without exposing readers to a partially written file.
+
+    The learner history is the learning loop's source of truth.  A crash while
+    replacing it must leave either the previous complete document or the new
+    complete document, never a truncated one.  The temporary file lives in the
+    same directory so ``os.replace`` stays atomic on supported local filesystems.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    except Exception:
+        if temp_path is not None:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+
+
 def save_asset(asset: KnowledgeAsset) -> None:
     config.ensure_dirs()
     path = config.ASSETS_DIR / f"{asset.asset_id}.json"
-    path.write_text(
-        json.dumps(asset.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _write_json_atomic(path, asset.to_dict())
 
 
 def load_assets() -> list[KnowledgeAsset]:
@@ -32,16 +67,34 @@ def load_assets() -> list[KnowledgeAsset]:
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     ):
+        if file.name.startswith("teacher_"):
+            continue
         try:
             data = json.loads(file.read_text(encoding="utf-8"))
             assets.append(KnowledgeAsset.from_dict(data))
-        except Exception:  # pragma: no cover - corrupt file resilience
+        except Exception:  # corrupt file resilience — stay audible, not fatal
+            logging.getLogger("expert_anything.storage").warning(
+                "skipping unreadable asset file: %s", file.name
+            )
             continue
     return assets
 
 
 def load_asset(asset_id: str) -> KnowledgeAsset | None:
-    return next((a for a in load_assets() if a.asset_id == asset_id), None)
+    """Single-file read (was: full load_assets() + linear filter)."""
+    if not asset_id:
+        return None
+    path = config.ASSETS_DIR / f"{asset_id}.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return KnowledgeAsset.from_dict(data)
+    except Exception:
+        logging.getLogger("expert_anything.storage").warning(
+            "asset file unreadable: %s", path.name
+        )
+        return None
 
 
 def delete_asset(asset_id: str) -> None:
@@ -53,9 +106,7 @@ def delete_asset(asset_id: str) -> None:
 
 def save_learner(state: dict) -> None:
     config.ensure_dirs()
-    config.LEARNER_FILE.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    _write_json_atomic(config.LEARNER_FILE, state)
 
 
 def load_learner() -> dict:
@@ -70,10 +121,7 @@ def load_learner() -> dict:
 def save_teacher(asset_id: str, model: TeacherModel) -> None:
     config.ensure_dirs()
     path = config.ASSETS_DIR / f"teacher_{asset_id}.json"
-    path.write_text(
-        json.dumps(model.to_dict(), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    _write_json_atomic(path, model.to_dict())
 
 
 def load_teacher(asset_id: str) -> TeacherModel | None:
@@ -84,8 +132,3 @@ def load_teacher(asset_id: str) -> TeacherModel | None:
         return TeacherModel.from_dict(json.loads(path.read_text(encoding="utf-8")))
     except Exception:  # pragma: no cover
         return None
-
-
-def _coerce(value: Any) -> Any:
-    # dataclasses.asdict can leave non-serialisable objects; we only store dicts.
-    return value

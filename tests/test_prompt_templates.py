@@ -39,6 +39,7 @@ class PromptTemplateFormatTest(unittest.TestCase):
         tmpl = get_prompt("teacher_user", default=None)
         self.assertIsNotNone(tmpl)
         out = tmpl.format(title=sentinel, concept_list="- 概念A：定义A",
+                          relations="- [前提] 概念A 依赖 → 概念B",
                           source_snippets="原文片段")
         self.assertIn(sentinel, out)
 
@@ -105,7 +106,8 @@ class PromptTemplateFormatTest(unittest.TestCase):
         sentinel = "ZZ_PRAC_EVID_331"
         tmpl = get_prompt("tutor_practice_user", default=None)
         self.assertIsNotNone(tmpl, "tutor_practice_user must exist in registry")
-        out = tmpl.format(name="概念X", defn="定义X", evidence=f"- {sentinel}")
+        out = tmpl.format(name="概念X", defn="定义X", evidence=f"- {sentinel}",
+                          relations="- [前提] 概念A → 概念B")
         self.assertIn(sentinel, out)
         self.assertNotIn("tutor_practice_user", out)
 

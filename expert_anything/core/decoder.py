@@ -43,6 +43,114 @@ ROW_GAP_Y = 28
 MARGIN_X = 26
 MARGIN_Y = 26
 
+# --- relation semantic classification ----------------------------------------
+# Six semantic relation types, each with its own visual identity so that
+# the learner can read the structure at a glance instead of seeing a
+# uniform "everything is connected" blob.
+
+REL_SEMANTICS = {
+    "is_a":       {"label": "是一种",   "arrow": "normal", "color": "#42A5F5"},
+    "part_of":    {"label": "组成部分",  "arrow": "diamond", "color": "#66BB6A"},
+    "causes":     {"label": "导致",     "arrow": "normal", "color": "#EF5350"},
+    "prereq":     {"label": "前提",     "arrow": "normal", "color": "#AB47BC"},
+    "contrast":   {"label": "对比",     "arrow": "none",   "color": "#FF9800"},
+    "related":    {"label": "关联",     "arrow": "normal", "color": "#78909C"},
+}
+
+# keyword patterns per semantic type (Chinese + English, matched case-insensitive)
+_REL_PATTERNS = {
+    "is_a": [
+        "是一种", "属于", "是指", "即", "就是", "属于一种", "是一种…", "是…的一种",
+        "即…", "是…的", "is a", "is an", "type of", "kind of", "subclass", "subtype",
+    ],
+    "part_of": [
+        "包含", "组成", "构成", "分为", "包括", "由...组成", "由…组成", "部分",
+        "属于…的一部分", "构成…", "包含在", "consists of", "composed of", "includes",
+        "part of", "component of", "member of",
+    ],
+    "causes": [
+        "导致", "引起", "产生", "造成", "使得", "影响", "引发", "促使", "带来",
+        "致使", "促成", "造成…", "导致…", "causes", "leads to", "results in",
+        "affects", "triggers", "produces", "induces",
+    ],
+    "prereq": [
+        "前提", "先决", "需要", "依赖", "基础", "基于", "需要先", "取决于", "先…后",
+        "前置", "先修", "必要条件", "先…然后", " prerequisite", "requires",
+        "depends on", "based on", "before", "precondition", "needs",
+    ],
+    "contrast": [
+        "对比", "区别", "不同", "相比", "与...不同", "与…不同", "不同于", "相对于",
+        "而非", "而不是", "代替", "替代", "相反", "反之", "反之亦然",
+        "compare", "contrast", "difference", "unlike", "versus", "vs", "alternative",
+    ],
+}
+
+
+# LLM-extracted type strings → our semantic keys
+_REL_TYPE_ALIASES = {
+    "prerequisite": "prereq",
+    "prereq": "prereq",
+    "requires": "prereq",
+    "depends": "prereq",
+    "dependency": "prereq",
+    "includes": "part_of",
+    "included": "part_of",
+    "part_of": "part_of",
+    "partof": "part_of",
+    "contains": "part_of",
+    "composed": "part_of",
+    "composition": "part_of",
+    "compares": "contrast",
+    "contrast": "contrast",
+    "compare": "contrast",
+    "comparison": "contrast",
+    "different": "contrast",
+    "causes": "causes",
+    "cause": "causes",
+    "effect": "causes",
+    "result": "causes",
+    "sequence": "prereq",
+    "process": "prereq",
+    "is_a": "is_a",
+    "isa": "is_a",
+    "subtype": "is_a",
+    "inheritance": "is_a",
+    "related": "related",
+    "relation": "related",
+    "association": "related",
+}
+
+
+def classify_relation(label: str, rel_type: str = "") -> str:
+    """Classify a relation's semantic type from its label text and/or type.
+
+    Returns one of the keys in REL_SEMANTICS. Falls back to "related" when
+    no pattern matches. The check is lightweight — substring matching on
+    the label text + alias lookup on the type field, no LLM needed.
+    """
+    rt = (rel_type or "").strip().lower()
+    if rt:
+        # Model defaults often serialize an untyped edge as ``related``.
+        # That value must not hide a more informative natural-language label.
+        if rt in REL_SEMANTICS and rt != "related":
+            return rt
+        if rt in _REL_TYPE_ALIASES and _REL_TYPE_ALIASES[rt] != "related":
+            return _REL_TYPE_ALIASES[rt]
+    text = (label or "").strip().lower()
+    if not text:
+        return "related"
+    for sem, patterns in _REL_PATTERNS.items():
+        for pat in patterns:
+            if pat.lower() in text:
+                return sem
+    return "related"
+
+
+def rel_semantic_color(label: str, rel_type: str = "") -> str:
+    """Return the edge colour for a relation based on its semantic type."""
+    sem = classify_relation(label, rel_type)
+    return REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])["color"]
+
 # palette per node kind: fill / stroke / text
 KIND_COLORS = {
     "box": ("#E3F2FD", "#42A5F5", "#0D47A1"),
@@ -134,6 +242,7 @@ def check_scene(spec: Any) -> tuple[CheckResult, dict | None]:
         edges.append({
             "from": src, "to": dst,
             "label": _as_str(e.get("label"))[:12],
+            "type": _as_str(e.get("type")),
             "dashed": _as_bool(e.get("dashed")),
         })
 
@@ -211,7 +320,7 @@ def _layout(spec: dict) -> None:
     # node geometry from label length (never from the LLM)
     for n in nodes:
         n["w"] = NODE_W
-        n["h"] = max(46, 18 + len(_wrap_label(n["label"])) * 16)
+        n["h"] = max(52, 22 + len(_wrap_label(n["label"])) * 18)
 
     depth = {n["id"]: 0 for n in nodes}
     for _ in range(len(nodes)):  # bounded relaxation — cycles can't loop
@@ -233,7 +342,8 @@ def _layout(spec: dict) -> None:
     columns = [layers[k] for k in keys]
     n_cols = len(columns)
 
-    if n_cols <= 4:
+    max_layer_size = max((len(col) for col in columns), default=0)
+    if n_cols <= 4 and max_layer_size <= 3:
         # horizontal pipeline: layers as columns, each vertically centered
         canvas_w = max(
             CANVAS_W, 2 * MARGIN_X + n_cols * NODE_W + (n_cols - 1) * 36)
@@ -252,22 +362,33 @@ def _layout(spec: dict) -> None:
                 c["x"], c["y"] = int(x), int(y)
                 y += c["h"] + ROW_GAP_Y
     else:
-        # vertical flow: layers as rows (long chains stay readable)
+        # A sparse overview often has no edges, so every node lands in one
+        # layer. A long chain can also produce many layers. In both cases a
+        # single vertical column wastes the canvas and makes labels tiny.
+        # Flatten the deterministic layer order into a compact reading grid.
+        ordered = [node for col in columns for node in col]
+        grid_cols = min(4, max(2, int(len(ordered) ** 0.5 + 0.5)))
         col_gap_x = 36
         row_gap_y = 34
         canvas_w = max(
             CANVAS_W,
-            2 * MARGIN_X + max(len(col) for col in columns) * NODE_W
-            + (max(len(col) for col in columns) - 1) * col_gap_x,
+            2 * MARGIN_X + grid_cols * NODE_W
+            + (grid_cols - 1) * col_gap_x,
         )
+        rows = (len(ordered) + grid_cols - 1) // grid_cols
+        row_heights = [
+            max((ordered[i]["h"] for i in range(r * grid_cols, min((r + 1) * grid_cols, len(ordered)))), default=46)
+            for r in range(rows)
+        ]
         y = MARGIN_Y
-        for col in columns:
-            row_h = max(c["h"] for c in col)
-            total_w = len(col) * NODE_W + (len(col) - 1) * col_gap_x
+        for r in range(rows):
+            row_h = row_heights[r]
+            row_nodes = ordered[r * grid_cols:(r + 1) * grid_cols]
+            total_w = len(row_nodes) * NODE_W + (len(row_nodes) - 1) * col_gap_x
             x = (canvas_w - total_w) / 2
-            for c in col:
+            for c in row_nodes:
                 c["x"] = int(x)
-                c["y"] = int(y + (row_h - c["h"]) / 2)  # center in the row
+                c["y"] = int(y + (row_h - c["h"]) / 2)
                 x += NODE_W + col_gap_x
             y += row_h + row_gap_y
         canvas_h = y - row_gap_y + MARGIN_Y
@@ -348,25 +469,33 @@ def _quad_path(x1: float, y1: float, x2: float, y2: float,
 
 def _edge_shapes(e: dict, s: dict, t: dict, lit: bool) -> str:
     """Edge path + floating label chip. ``lit`` highlights edges touching the
-    active node (orange, thicker)."""
+    active node. Edge colour is derived from the relation's semantic type
+    so the learner can read structural meaning at a glance."""
     x1, y1, x2, y2 = _edge_anchor(s, t)
     cx, cy, d = _quad_path(x1, y1, x2, y2)
-    color = "#F57C00" if lit else "#8FA5B8"
-    width = 2.4 if lit else 1.7
+    base_color = rel_semantic_color(e.get("label", ""), e.get("type", ""))
+    color = "#F57C00" if lit else base_color
+    width = 2.6 if lit else 1.8
     dash = ' stroke-dasharray="6,4"' if e.get("dashed") else ""
+    # contrast relations get double-dashed style (no directionality)
+    sem = classify_relation(e.get("label", ""), e.get("type", ""))
+    if sem == "contrast":
+        dash = ' stroke-dasharray="4,3,1,3"'
     parts = [
         f'<path d="{d}" fill="none" stroke="{color}" stroke-width="{width}"'
         f'{dash} stroke-linecap="round" marker-end="url(#ar)"/>',
     ]
     if e.get("label"):
         mx, my = cx, cy - 6
+        label_bg = "#FFF3E0" if lit else "#FFFFFF"
+        label_border = "#FFB74D" if lit else base_color
+        label_text = "#E65100" if lit else base_color
         parts.append(
             f'<rect x="{mx - len(e["label"]) * 6 - 4:.0f}" y="{my - 11:.0f}" '
             f'width="{len(e["label"]) * 12 + 8:.0f}" height="17" rx="8" '
-            f'fill="{"#FFF3E0" if lit else "#FFFFFF"}" stroke="'
-            f'{"#FFB74D" if lit else "#D7E1EC"}" stroke-width="1" opacity="0.96"/>'
+            f'fill="{label_bg}" stroke="{label_border}" stroke-width="1" opacity="0.96"/>'
             f'<text x="{mx:.0f}" y="{my:.0f}" text-anchor="middle" '
-            f'font-size="11" font-weight="600" fill="{"#E65100" if lit else "#546E7A"}">'
+            f'font-size="11" font-weight="600" fill="{label_text}">'
             + _esc(e["label"]) + "</text>")
     return "".join(parts)
 
@@ -395,7 +524,7 @@ def _node_shapes(n: dict) -> str:
     for ln in lines:
         parts.append(
             f'<text x="{x + nw / 2:.0f}" y="{ty:.0f}" text-anchor="middle" '
-            f'font-size="12.5" font-weight="600" fill="{color}">'
+            f'font-size="15" font-weight="600" fill="{color}">'
             + _esc(ln) + "</text>")
         ty += line_h
     return "".join(parts)
@@ -494,7 +623,8 @@ def render_step_svgs(spec: dict) -> list[dict]:
 
 # --- interactive HTML -------------------------------------------------------
 
-def render_interactive_html(spec: dict, concept: str = "", source_title: str = "") -> str:
+def render_interactive_html(spec: dict, concept: str = "", source_title: str = "",
+                            definition: str = "", evidence: list[str] | None = None) -> str:
     """Self-contained offline HTML: progressive knowledge representation.
 
     Levels (minimal cognitive cost first — nothing animates by default):
@@ -640,6 +770,44 @@ def render_interactive_html(spec: dict, concept: str = "", source_title: str = "
 
     title = _esc(spec.get("title") or concept)
     head = _esc(" · ".join(x for x in (concept, source_title) if x))
+    # Build semantic legend chips for the HTML export
+    _legend_parts = []
+    for _sem_key, _sem_info in REL_SEMANTICS.items():
+        _c = _sem_info["color"]
+        _lbl = _esc(t("rel_" + _sem_key))
+        _legend_parts.append(
+            f'<span style="font-size:11px;color:#fff;background:{_c};'
+            f'border-radius:8px;padding:2px 8px;">{_lbl}</span>'
+        )
+    _legend_chips = "\n      ".join(_legend_parts)
+    # Build definition + evidence block (source-grounded, not just visuals)
+    _def_ev_html = ""
+    if definition or evidence:
+        _parts = []
+        if definition:
+            _parts.append(
+                f'<div style="margin-bottom:10px;">'
+                f'<div style="font-size:10px;font-weight:700;color:#5B7290;'
+                f'letter-spacing:1px;margin-bottom:4px;">{_esc(t("definition_label"))}</div>'
+                f'<div style="font-size:13.5px;line-height:1.6;color:#1C2B3A;">'
+                f'{_esc(definition)}</div></div>'
+            )
+        if evidence:
+            _ev_items = "".join(
+                f'<li style="margin-bottom:4px;font-size:12.5px;line-height:1.5;'
+                f'color:#37474F;">{_esc(ev[:120])}</li>'
+                for ev in evidence[:3]
+            )
+            _parts.append(
+                f'<div><div style="font-size:10px;font-weight:700;color:#5B7290;'
+                f'letter-spacing:1px;margin-bottom:4px;">{_esc(t("evidence_label"))}</div>'
+                f'<ul style="margin:0;padding-left:18px;">{_ev_items}</ul></div>'
+            )
+        _def_ev_html = (
+            '<section class="card" style="padding:14px 18px;">\n    '
+            + "\n    ".join(_parts)
+            + "\n  </section>"
+        )
     # progressive representation (L1 → L2): overview first, minimal cognitive
     # cost; step animation and the game are opt-in upgrades, never defaults.
     return f"""<!DOCTYPE html>
@@ -769,6 +937,7 @@ def render_interactive_html(spec: dict, concept: str = "", source_title: str = "
     <h1>{title}</h1>
     <div class="sub">{head}</div>
   </div>
+  {_def_ev_html}
   <section class="card">
     <div class="card-head">
       <h2>{_esc(t("decoder_card_title"))}</h2>
@@ -786,6 +955,13 @@ def render_interactive_html(spec: dict, concept: str = "", source_title: str = "
         <button id="play">&#9654; {_esc(t("decoder_play"))}</button>
         <button id="next">{_esc(t("decoder_next"))} &#8250;</button>
       </span>
+    </div>
+  </section>
+  <section class="card" style="padding:14px 18px;">
+    <div style="font-size:11px;font-weight:700;color:#8D6E63;letter-spacing:1px;
+                margin-bottom:8px;">{_esc(t("rel_legend_title"))}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+      {_legend_chips}
     </div>
   </section>
   {game_html}
@@ -911,48 +1087,336 @@ showStatic();
 
 # --- deterministic fallback scene -------------------------------------------
 
+def _split_definition(definition: str) -> list[str]:
+    """Extract key phrases from a concept definition for scene nodes.
+
+    Splits on Chinese/English sentence boundaries and semicolons, then picks
+    the most informative phrases (by length and content density).
+    """
+    if not definition or len(definition.strip()) < 10:
+        return []
+    raw = re.split(r"[；;。！？\n]|(?:即[为是])|(?:是指)|(?::=)|(?::)", definition)
+    phrases = []
+    for p in raw:
+        p = p.strip().strip("，,。.；;：:、 ")
+        if len(p) >= 4 and len(p) <= 40:
+            phrases.append(p)
+    return phrases[:5]
+
+
 def fallback_scene(asset, concept) -> dict:
-    """No-LLM deterministic scene: the concept in the centre, its relation
-    neighbours around it — a spec that always passes check_scene."""
+    """No-LLM deterministic scene built from concept definition + evidence + relations.
+
+    Three layers of structure (tried in order, combined into one scene):
+    1. Definition phrases — key clauses from the concept's own definition
+    2. Relation neighbours — connected concepts from the knowledge graph
+    3. Evidence fragments — source-text snippets for grounding
+
+    Includes a sort game (evidence ordering) when enough evidence exists,
+    so the "play" layer of see-play-master works even without LLM.
+    """
     center = {"id": "c0", "label": concept.name[:20], "kind": "current"}
     nodes = [center]
     edges = []
     steps = [{"caption": f"定位「{concept.name}」——它居中高亮", "show": ["c0"], "active": "c0"}]
-    i = 0
+
+    # Layer 1: definition phrases as component nodes
+    def_phrases = _split_definition(getattr(concept, "definition", "") or "")
+    for j, phrase in enumerate(def_phrases[:3]):
+        nid = f"d{j+1}"
+        nodes.append({"id": nid, "label": phrase[:24], "kind": "note"})
+        edges.append({"from": "c0", "to": nid, "label": "定义", "dashed": False})
+        steps.append({
+            "caption": f"定义要素：{phrase[:30]}",
+            "show": ["c0", nid], "active": nid,
+        })
+
+    # Layer 2: relation neighbours
+    rel_count = 0
     for r in (getattr(asset, "relations", None) or []):
         other = None
         if r.source == concept.id:
             other = asset.concept_by_id(r.target)
         elif r.target == concept.id:
             other = asset.concept_by_id(r.source)
-        if other is None or i >= 4:
+        if other is None or rel_count >= 3:
             continue
-        i += 1
-        nid = f"c{i}"
+        rel_count += 1
+        nid = f"r{rel_count}"
         nodes.append({"id": nid, "label": other.name[:20], "kind": "box"})
         edges.append({"from": "c0" if r.target == concept.id else nid,
                       "to": nid if r.target == concept.id else "c0",
-                      "label": (r.label or "")[:10], "dashed": False})
-        steps.append({"caption": f"「{other.name[:14]}」——{(r.label or '关联')[:16]}",
+                      "label": (r.label or "关联")[:10],
+                      "type": getattr(r, "type", "") or "",
+                      "dashed": False})
+        steps.append({"caption": f"关联概念：{other.name[:14]}——{(r.label or '关联')[:16]}",
                       "show": ["c0", nid], "active": nid})
-    while len(nodes) < MIN_NODES:
-        i += 1
-        nodes.append({"id": f"c{i}", "label": f"相关概念 {i - 4}", "kind": "note"})
-    # the admission gate requires >= MIN_STEPS — concepts without relations
-    # still get a "read the evidence, restate it" closing step.
-    if len(steps) < MIN_STEPS:
+
+    # Layer 3: evidence as note nodes (for grounding)
+    evidence = getattr(concept, "evidence", None) or []
+    for k, ev in enumerate(evidence[:2]):
+        if len(nodes) >= MAX_NODES:
+            break
+        nid = f"e{k+1}"
+        short_ev = ev[:24].rstrip("，。；") + ("…" if len(ev) > 24 else "")
+        nodes.append({"id": nid, "label": short_ev, "kind": "store"})
+        edges.append({"from": "c0", "to": nid, "label": "证据", "dashed": True})
         steps.append({
-            "caption": f"回到「{concept.name[:12]}」：对照原文证据，用自己的话复述它的定义与位置",
-            "show": [n["id"] for n in nodes], "active": "c0",
+            "caption": f"原文证据：{short_ev[:30]}",
+            "show": ["c0", nid], "active": nid,
         })
-    verdict, spec = check_scene({"title": f"「{concept.name}」的知识结构",
-                                 "nodes": nodes, "edges": edges, "steps": steps})
-    if not verdict or spec is None:  # should never happen; guard anyway
-        spec = {"title": concept.name, "nodes": nodes[:3], "edges": [], "steps": steps[:2],
-                "game": None, "width": CANVAS_W, "height": CANVAS_H_MIN}
+
+    # Pad to minimum if needed
+    while len(nodes) < MIN_NODES:
+        idx = len(nodes)
+        nodes.append({"id": f"p{idx}", "label": f"要素 {idx}", "kind": "note"})
+
+    # Closing step
+    steps.append({
+        "caption": f"回到「{concept.name[:12]}」：对照定义与证据，用自己的话复述",
+        "show": [n["id"] for n in nodes], "active": "c0",
+    })
+
+    # Sort game: try definition phrases, then evidence, then relation labels,
+    # then as a last resort synthesise items from whatever is available so
+    # the learner always has an interactive check — even with 0 relations.
+    game = None
+    game_items = []
+    if len(def_phrases) >= 3:
+        game_items = def_phrases[:min(len(def_phrases), 5)]
+    elif len(evidence) >= 3:
+        game_items = [ev[:30] for ev in evidence[:min(len(evidence), 5)]]
+    else:
+        # Third source: relation neighbor names (if concept has enough relations)
+        rel_names = []
+        for r in (getattr(asset, "relations", None) or []):
+            other = None
+            if r.source == concept.id:
+                other = asset.concept_by_id(r.target)
+            elif r.target == concept.id:
+                other = asset.concept_by_id(r.source)
+            if other is not None:
+                rel_names.append(other.name[:30])
+            if len(rel_names) >= 5:
+                break
+        if len(rel_names) >= 3:
+            game_items = rel_names[:5]
+    # Last resort: combine whatever snippets we have (definition fragments,
+    # evidence fragments, node labels) to guarantee at least 3 items.
+    if len(game_items) < 3:
+        pool = list(def_phrases) + [ev[:30] for ev in evidence] + [
+            n.get("label", "") for n in nodes if n.get("id") != "c0"
+        ]
+        pool = [p[:40] for p in pool if p and p.strip()]
+        # deduplicate preserving order
+        seen = set()
+        for p in pool:
+            if p not in seen:
+                seen.add(p)
+                game_items.append(p)
+            if len(game_items) >= 3:
+                break
+    if len(game_items) >= 3:
+        game_items = game_items[:min(len(game_items), 5)]
+        # shuffle the answer for the game (items stay in original order,
+        # answer maps position → correct rank)
+        import random
+        rng = random.Random(hash(concept.name) & 0xFFFFFFFF)
+        perm = list(range(len(game_items)))
+        rng.shuffle(perm)
+        shuffled_items = [game_items[i] for i in perm]
+        # answer[j] = original index of the item that should be in position j
+        answer = [perm.index(j) for j in range(len(game_items))]
+        game = {
+            "type": "sort",
+            "goal": f"把下列内容按在「{concept.name}」中的逻辑顺序排列",
+            "items": [s[:40] for s in shuffled_items],
+            "answer": answer,
+        }
+
+    verdict, spec = check_scene({
+        "title": f"「{concept.name}」的知识结构",
+        "nodes": nodes, "edges": edges, "steps": steps, "game": game,
+    })
+    if not verdict or spec is None:
+        spec = {"title": concept.name, "nodes": nodes[:3], "edges": [],
+                "steps": steps[:2], "game": None,
+                "width": CANVAS_W, "height": CANVAS_H_MIN}
         for n in spec["nodes"]:
             n.setdefault("w", 160); n.setdefault("h", 52)
     return spec
+
+
+def scene_for_concept(asset, concept, domain: str | None = None) -> dict:
+    """Scene for a concept: curated domain SceneSpec, else the generic fallback.
+
+    Single entry point for the teaching/reading pipeline, so every caller gets
+    the same behaviour: when the asset belongs to a domain that ships curated
+    scenes (currently electricity trading) *and* the concept is one of that
+    domain's concepts, the domain scene is used; otherwise the deterministic
+    ``fallback_scene`` relation/definition graph is returned.
+
+    The domain module is imported lazily (it imports this module) and any
+    failure inside it degrades to the fallback instead of breaking a lesson.
+    No GUI, no network, no LLM.
+    """
+    try:
+        from expert_anything.core import decoder_electricity as _domain
+        spec = _domain.domain_scene_for(asset, concept, domain=domain)
+    except Exception:  # pragma: no cover - defensive: lessons must never break
+        spec = None
+    if spec:
+        return spec
+    return fallback_scene(asset, concept)
+
+
+def quick_deconstruction(asset) -> dict:
+    """No-LLM deterministic scene for an entire knowledge asset.
+
+    Produces a visual knowledge-structure overview: the most connected
+    concepts (hubs) as nodes, their key relations as edges, and the
+    learning path as step captions. This gives the learner a 5-minute
+    "what is this book about" overview before diving into individual concepts.
+    """
+    if asset is None or not asset.concepts:
+        return {}
+
+    # rank concepts by relation count (degree centrality)
+    degree: dict[str, int] = {c.id: 0 for c in asset.concepts}
+    for r in (asset.relations or []):
+        if r.source in degree:
+            degree[r.source] += 1
+        if r.target in degree:
+            degree[r.target] += 1
+
+    # top concepts by degree, fall back to learning path order
+    ranked = sorted(asset.concepts, key=lambda c: (-degree.get(c.id, 0), c.name))
+    top = ranked[:min(len(ranked), MAX_NODES)]
+
+    # Reorder top concepts by semantic chain: prereq/causes come first.
+    # Build a directed graph of ordering relations among the top set, then
+    # do a topological sort so steps follow the dependency chain.
+    from expert_anything.core.decoder import classify_relation as _cls_rel
+    top_ids = {c.id for c in top}
+    # incoming count for topological sort
+    in_cnt: dict[str, int] = {c.id: 0 for c in top}
+    out_edges: dict[str, list[str]] = {c.id: [] for c in top}
+    for r in (asset.relations or []):
+        if r.source not in top_ids or r.target not in top_ids:
+            continue
+        sem = _cls_rel(r.label or "", getattr(r, "type", "") or "")
+        if sem in ("prereq", "causes", "is_a"):
+            # source → target direction for the chain
+            in_cnt[r.target] = in_cnt.get(r.target, 0) + 1
+            out_edges.setdefault(r.source, []).append(r.target)
+    # Kahn's algorithm, with degree-based tiebreaker for determinism
+    import heapq
+    _heap: list[tuple[int, str]] = []
+    for cid, cnt in in_cnt.items():
+        if cnt == 0:
+            # negative degree so higher-degree concepts come first
+            heapq.heappush(_heap, (-degree.get(cid, 0), cid))
+    sem_order: list[str] = []
+    while _heap:
+        _neg_deg, cid = heapq.heappop(_heap)
+        sem_order.append(cid)
+        for nxt in out_edges.get(cid, []):
+            in_cnt[nxt] -= 1
+            if in_cnt[nxt] == 0:
+                heapq.heappush(_heap, (-degree.get(nxt, 0), nxt))
+    # Append any remaining (disconnected) concepts in degree order
+    remaining = [c.id for c in top if c.id not in set(sem_order)]
+    remaining.sort(key=lambda cid: -degree.get(cid, 0))
+    sem_order.extend(remaining)
+    # Rebuild top in semantic order
+    _id_to_concept = {c.id: c for c in top}
+    top = [_id_to_concept[cid] for cid in sem_order if cid in _id_to_concept]
+
+    # build nodes
+    nodes = []
+    id_map = {}
+    for i, c in enumerate(top):
+        nid = f"k{i}"
+        kind = "current" if i == 0 else "box"
+        nodes.append({"id": nid, "label": c.name[:24], "kind": kind})
+        id_map[c.id] = nid
+
+    # edges: relations between top concepts only
+    edges = []
+    for r in (asset.relations or []):
+        s_id = id_map.get(r.source)
+        t_id = id_map.get(r.target)
+        if s_id and t_id:
+            edges.append({
+                "from": s_id, "to": t_id,
+                "label": (r.label or "")[:10],
+                "type": getattr(r, "type", "") or "",
+                "dashed": False,
+            })
+
+    # steps: walk through the top concepts like a guided tour
+    steps = []
+    for i, c in enumerate(top):
+        if len(steps) >= MAX_STEPS:
+            break
+        nid = id_map[c.id]
+        show_ids = [id_map[c.id]] + [
+            id_map[other.id] for other in top[:i + 1] if other.id != c.id
+        ][:2]
+        step_caption = c.name[:20]
+        if c.chapter:
+            step_caption = f"[{c.chapter[:8]}] {step_caption}"
+        if c.definition:
+            step_caption += f"：{c.definition[:30]}…"
+        steps.append({
+            "caption": step_caption[:70],
+            "show": show_ids, "active": nid,
+        })
+
+    # ensure minimum steps
+    if len(steps) < MIN_STEPS:
+        steps.append({
+            "caption": f"整体结构：{asset.title[:20]}" if hasattr(asset, 'title') else "知识结构总览",
+            "show": [n["id"] for n in nodes], "active": nodes[0]["id"] if nodes else "",
+        })
+
+    # sort game: order the top concepts by learning path position
+    game = None
+    lp = getattr(asset, "learning_path", None) or []
+    if lp and len(top) >= 3:
+        lp_order = []
+        for lp_id in lp:
+            for i, c in enumerate(top):
+                if c.id == lp_id:
+                    lp_order.append(i)
+                    break
+        # Cap at 5 items (check_scene allows 3-6)
+        lp_order = lp_order[:5]
+        if len(lp_order) >= 3:
+            # items in top order, answer maps to learning-path order
+            items = [c.name[:24] for c in [top[i] for i in lp_order]]
+            # answer[j] = index (in items) of the concept at position j in top order
+            top_concepts_in_game = {top[i].id: idx for idx, i in enumerate(lp_order)}
+            answer = list(range(len(items)))
+            # Shuffle for the game
+            import random
+            rng = random.Random(hash(getattr(asset, 'title', '')) & 0xFFFFFFFF)
+            perm = list(range(len(items)))
+            rng.shuffle(perm)
+            shuffled_items = [items[i] for i in perm]
+            answer = [perm.index(j) for j in range(len(items))]
+            game = {
+                "type": "sort",
+                "goal": "按学习路径的正确顺序排列以下概念",
+                "items": shuffled_items,
+                "answer": answer,
+            }
+
+    verdict, spec = check_scene({
+        "title": f"「{getattr(asset, 'title', '知识结构')[:20]}」的知识全景",
+        "nodes": nodes, "edges": edges, "steps": steps, "game": game,
+    })
+    return spec if verdict and spec else {}
 
 
 def scene_summary(spec: dict | None) -> str:
