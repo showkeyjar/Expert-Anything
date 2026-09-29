@@ -196,6 +196,7 @@ class TeacherView(QWidget):
                 "surprising_claim": self._main._t("kind_surprising_claim"),
                 "learner_gap": self._main._t("kind_learner_gap"),
                 "needs_llm": self._main._t("kind_needs_llm"),
+                "unanchored_source": self._main._t("kind_unanchored_source"),
             }
             sev_colors = {
                 "high": "#C62828", "medium": "#E65100",

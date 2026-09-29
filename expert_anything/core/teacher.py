@@ -182,6 +182,7 @@ _KIND_LABELS = {
     "surprising_claim": "反常主张",
     "learner_gap": "学习者信号",
     "needs_llm": "需要 LLM",
+    "unanchored_source": "无原文锚点",
 }
 
 
@@ -241,6 +242,31 @@ def _build_user_prompt(
         source_snippets=source_snippet,
         concept_skeleton=domain_concept_skeleton(domain_id),
     )
+
+
+def _unanchored_anomalies(asset: KnowledgeAsset) -> list[Anomaly]:
+    """Deterministic source-provenance anomalies: one per concept whose
+    evidence carries no SourceLocation anchor (template-enriched or
+    unlocatable). The description names the concept so the existing
+    name-matching rule (``anomaly_concept_ids``) pulls it into the
+    anomaly-prioritized teaching path without any new plumbing."""
+    out: list[Anomaly] = []
+    for c in asset.concepts:
+        if c.locations:
+            continue
+        out.append(
+            Anomaly(
+                id=_new_id("an"),
+                kind="unanchored_source",
+                description=_t(
+                    "teacher_unanchored_anomaly", name=c.name
+                ),
+                severity="low",
+                status="open",
+                source="internal",
+            )
+        )
+    return out
 
 
 def _assemble(asset: KnowledgeAsset, data: dict, method: str) -> TeacherModel:
@@ -306,6 +332,12 @@ def _assemble(asset: KnowledgeAsset, data: dict, method: str) -> TeacherModel:
                 source="internal",
             )
         )
+    # deterministic source-provenance anomalies join the LLM-surfaced ones
+    # (idempotent: skip if this concept already carries one of this kind)
+    already = {(a.kind, a.location or "") for a in anomalies}
+    for extra in _unanchored_anomalies(asset):
+        if (extra.kind, extra.location or "") not in already:
+            anomalies.append(extra)
 
     return TeacherModel(
         asset_id=asset.asset_id,
@@ -391,7 +423,7 @@ def _fallback(asset: KnowledgeAsset) -> TeacherModel:
                 status="open",
                 source="internal",
             )
-        ],
+        ] + _unanchored_anomalies(asset),
     )
 
 

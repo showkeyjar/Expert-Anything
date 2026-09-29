@@ -667,6 +667,47 @@ class TestTeacher(unittest.TestCase):
         self.assertEqual(tm.status, "fallback")
         self.assertTrue(any(a.kind == "needs_llm" for a in tm.anomalies))
 
+    def test_unanchored_concepts_become_anomalies(self):
+        """Concepts without source anchors enter the teacher model as
+        deterministic unanchored_source anomalies (both LLM and fallback
+        paths) and ride the existing name-matching rule into the
+        anomaly-prioritized teaching path."""
+        from expert_anything.core.teacher import (
+            _unanchored_anomalies,
+            anomaly_concept_ids,
+            anomaly_prioritized_path,
+        )
+
+        # deterministic extraction stamps every concept -> no anomalies
+        tm = build_teacher_model(self.asset, llm=None)
+        self.assertFalse(
+            [a for a in tm.anomalies if a.kind == "unanchored_source"]
+        )
+
+        # strip one concept's anchors (simulating template enrichment)
+        target = self.asset.concepts[0]
+        target.locations = []
+        extras = _unanchored_anomalies(self.asset)
+        self.assertEqual(len(extras), 1)
+        self.assertIn(target.name, extras[0].description)
+
+        # fallback path carries them; assemble (LLM) path does too
+        tm = build_teacher_model(self.asset, llm=None)
+        hits = [a for a in tm.anomalies if a.kind == "unanchored_source"]
+        self.assertEqual(len(hits), 1)
+        self.assertIn(target.id, anomaly_concept_ids(self.asset, tm))
+        path = anomaly_prioritized_path(self.asset, tm)
+        self.assertEqual(path[0], target.id)
+
+        # re-anchoring clears the anomaly on the next build
+        from expert_anything.core.extraction import _stamp_locations
+
+        _stamp_locations(self.asset)
+        tm = build_teacher_model(self.asset, llm=None)
+        self.assertFalse(
+            [a for a in tm.anomalies if a.kind == "unanchored_source"]
+        )
+
     def test_record_learner_question(self):
         tm = build_teacher_model(self.asset, llm=None)
         cid = self.asset.concepts[0].id

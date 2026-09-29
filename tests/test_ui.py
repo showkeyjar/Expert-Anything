@@ -336,6 +336,50 @@ class TestDirtyPayloads(unittest.TestCase):
         view.append_evaluation(0.8, "好", "参考", "差距")
         self.assertIsNotNone(view.grab())
 
+    def test_unanchored_warning_rendered(self):
+        """The teach result shows the no-anchor caveat when the taught
+        concept (resolved through the parent teach view → asset) carries no
+        SourceLocation, and stays silent otherwise."""
+        from PySide6.QtWidgets import QLabel
+        from expert_anything.core.i18n import t as _t
+
+        win = load_main_window()
+        asset = win.get_asset()
+        # demo assets are fully anchored (regen_all stamps them) — the
+        # warning must NOT render for anchored concepts
+        anchored = asset.concepts[0]
+        self.assertTrue(anchored.locations)
+
+        plain = TeachResultView(
+            {"concept": anchored.name, "style": "example", "explanation": "e"},
+            parent=win.teach_view,
+        )
+        plain.show()
+        warn_texts = [
+            l.text()
+            for l in plain.findChildren(QLabel)
+            if _t("teach_unanchored_warn") in l.text()
+        ]
+        self.assertEqual(warn_texts, [])
+
+        # strip anchors -> warning renders
+        anchored.locations = []
+        warned = TeachResultView(
+            {"concept": anchored.name, "style": "example", "explanation": "e"},
+            parent=win.teach_view,
+        )
+        warned.show()
+        hits = [
+            l.text()
+            for l in warned.findChildren(QLabel)
+            if _t("teach_unanchored_warn") in l.text()
+        ]
+        self.assertEqual(len(hits), 1)
+
+        from expert_anything.core.extraction import _stamp_locations
+
+        _stamp_locations(asset)
+
 
 class TestHarnessSuggestionUI(unittest.TestCase):
     """AutoHarness stuck-loop UI: suggestion card + one-click adopt."""

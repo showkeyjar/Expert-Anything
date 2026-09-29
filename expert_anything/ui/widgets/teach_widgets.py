@@ -552,6 +552,27 @@ class TeachResultView(QWidget):
                 )
             )
 
+            # source-provenance caveat: this concept carries no located
+            # evidence in the asset (template-enriched / unlocatable), so the
+            # lesson is relation- and skeleton-based rather than verbatim.
+            # The learner deserves to know before trusting the explanation.
+            concept_obj = self._provenance_concept(result.get("concept", ""))
+            if concept_obj is not None and not concept_obj.locations:
+                warn = QFrame()
+                warn.setStyleSheet(
+                    "QFrame { background-color: #FFF3E0; border-left: 3px solid"
+                    " #FB8C00; border-radius: 4px; }"
+                )
+                w_lay = QVBoxLayout(warn)
+                w_lay.setContentsMargins(10, 6, 10, 6)
+                w_lbl = QLabel(f"⚠ {_t('teach_unanchored_warn')}")
+                w_lbl.setWordWrap(True)
+                w_lbl.setStyleSheet(
+                    "font-size: 13px; color: #E65100; line-height: 1.4;"
+                )
+                w_lay.addWidget(w_lbl)
+                root.addWidget(warn)
+
             # source provenance — show which evidence the explanation is based on,
             # each entry badged with its page/line anchor (SourceLocation) and
             # clickable to jump the reader to that exact passage (AGENTS.md #1)
@@ -572,7 +593,6 @@ class TeachResultView(QWidget):
                     "font-size: 13px; font-weight: bold; color: #558B2F;"
                 )
                 prov_lay.addWidget(prov_title)
-                concept_obj = self._provenance_concept(result.get("concept", ""))
                 for e in evidence_list[:2]:
                     row = QHBoxLayout()
                     row.setSpacing(6)

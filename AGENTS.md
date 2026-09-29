@@ -103,6 +103,15 @@ Do not build a simple RAG chatbot.
    覆盖不满时灰字列出无锚概念名（`teacher_unanchored_list`，前 5 个 + …，
    与图谱 ◌ 角标同一套 `c.locations` 真相源）——教师模型页能直接看出
    "这份资产里有多少概念是模板补全/证据未定位的"；
+   **锚点状态接入学习闭环**：无锚概念在教师模型构建时确定性生成
+   `unanchored_source` 异常（`teacher._unanchored_anomalies`，severity=low，
+   description 含概念名 → 既有名字匹配规则自动命中），`_assemble`（LLM 路径）
+   与 `_fallback`（无 LLM 路径）都汇入——于是无锚概念自动流入
+   `anomaly_prioritized_path` 提入教学排序、概念面板异常区与教师页异常板
+   （`kind_unanchored_source` 徽标），**无需任何新管道**；教学页（TeachResultView）
+   对无锚概念的解释卡后渲染橙色告诫条（`teach_unanchored_warn`：
+   "讲解基于关系网络与模板骨架，非逐字源自当前资产"）——来源约束的
+   最后一公里：读者在信任讲解之前就知道它的证据地位。
    演示数据由 regen_all 生成时 evidence 必须逐字切片自 source_text
    （模板 evidence 是改写句，不得进入资产——`_stamp_locations` 永远可锚定）。
    **点击一个概念必须给读者"位置感"，绝不孤点**——详情侧栏/面板须展示：

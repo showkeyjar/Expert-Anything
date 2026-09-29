@@ -1192,6 +1192,21 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "No anchor: {names}",
         "ja": "アンカーなし: {names}",
     },
+    "teacher_unanchored_anomaly": {
+        "zh-CN": "概念「{name}」的证据未在原文中定位（模板补全或证据未锚定），讲解时注意甄别。",
+        "en": "Concept \"{name}\" has no located evidence in the source (template-enriched or unanchored); teach with care.",
+        "ja": "概念「{name}」の証拠は原文中に位置していません（テンプレート補完または未アンカー）。注意して教えてください。",
+    },
+    "teach_unanchored_warn": {
+        "zh-CN": "此概念无原文锚点：讲解基于关系网络与模板骨架，非逐字源自当前资产——遇到与原文冲突处，以原文为准。",
+        "en": "No source anchor for this concept: the lesson is built from the relation network and template skeleton, not verbatim from this asset — where it conflicts with the source, trust the source.",
+        "ja": "この概念には原文アンカーがありません：説明は関係ネットワークとテンプレート骨格に基づきます。原文と矛盾する場合は原文を優先してください。",
+    },
+    "kind_unanchored_source": {
+        "zh-CN": "无原文锚点",
+        "en": "Unanchored",
+        "ja": "原文アンカーなし",
+    },
     "recheck": {"zh-CN": "重新自检", "en": "Re-check", "ja": "再チェック"},
     "recheck_needs_llm": {
         "zh-CN": "（需要配置 LLM 才能重新自检）",
