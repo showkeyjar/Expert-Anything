@@ -131,6 +131,37 @@ class TestSource(unittest.TestCase):
         sv.scroll_to_concept(cid)
         self.assertGreater(sv.textCursor().position(), 0)
 
+    def test_evidence_margin_marks(self):
+        """Lines serving as grounded evidence carry a reverse anchor mark
+        (evidence://<cid>) that hops back to the concept when clicked."""
+        from PySide6.QtCore import QUrl
+        from expert_anything.core.extraction import _stamp_locations
+
+        sv = self.win._source_view_widget
+        asset = self.win.get_asset()
+        _stamp_locations(asset)  # idempotent on already-stamped assets
+        sv.set_asset(asset, self.win.learner or {})
+        html = sv.toHtml()
+        anchored = [
+            c
+            for c in asset.concepts
+            if any(
+                c.location_for_evidence(ev) is not None for ev in c.evidence or []
+            )
+        ]
+        self.assertTrue(anchored, "demo asset has no anchored evidence")
+        with_mark = [c for c in anchored if f"evidence://{c.id}" in html]
+        self.assertEqual(
+            len(with_mark), len(anchored), "missing evidence:// margin mark"
+        )
+
+        # clicking the mark emits the concept hop (same signal as name anchors)
+        fired = []
+        sv.concept_anchor_clicked.connect(lambda cid: fired.append(cid))
+        target = anchored[0]
+        sv._on_anchor(QUrl(f"evidence://{target.id}"))
+        self.assertEqual(fired, [target.id])
+
 
 class TestConceptPanel(unittest.TestCase):
     def test_panel_builds_and_signals(self):

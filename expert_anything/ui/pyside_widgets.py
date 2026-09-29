@@ -95,7 +95,6 @@ class SourceTextView(QTextBrowser):
             self.setHtml("")
             return
         text = self._asset.source_text or ""
-        body = html.escape(text).replace("\n", "<br>")
 
         # Build mastery lookup from learner state
         from expert_anything.core.learner import normalize as _norm
@@ -103,34 +102,69 @@ class SourceTextView(QTextBrowser):
         for k, v in self._learner_state.get("concepts", {}).items():
             mastery_map[_norm(k)] = float(v.get("mastery", 0.0))
 
+        # Reverse anchors: lines that serve as grounded evidence for a concept
+        # get an inline margin mark so readers see what the line feeds into.
+        line_marks: dict[int, list[tuple[str, str]]] = {}
+        for c in self._asset.concepts:
+            for ev in c.evidence or []:
+                loc = c.location_for_evidence(ev)
+                if loc is not None and loc.line:
+                    idx = loc.line - 1
+                    marks = line_marks.setdefault(idx, [])
+                    if all(cid != c.id for cid, _ in marks):
+                        marks.append((c.id, c.name))
+
         # highlight concept names (longest first to avoid sub-string clashes)
         names = sorted(
             (c.name for c in self._asset.concepts if len(c.name) >= 2),
             key=len,
             reverse=True,
         )
-        for name in names:
-            pattern = re.compile(re.escape(name), re.IGNORECASE)
-            cid = self._concept_ids_by_name.get(name.lower(), "")
-            # Mastery-based highlight: green=mastered, amber=learning, red=weak, yellow=unstudied
-            m = mastery_map.get(_norm(name), 0.0)
-            if m >= 0.6:
-                bg, fg = "#C8E6C9", "#1B5E20"
-            elif m >= 0.3:
-                bg, fg = "#FFF8E1", "#E65100"
-            elif m > 0:
-                bg, fg = "#FFEBEE", "#C62828"
-            else:
-                bg, fg = "#FFF3B0", "#0c4a6e"
-            body = pattern.sub(
-                lambda m_match: (
-                    f'<a href="concept://{cid}" style="background-color:{bg};'
-                    f'color:{fg};text-decoration:none;border-radius:2px;'
-                    f'padding:0 2px;">'
-                    f"{m_match.group(0)}</a>"
-                ),
-                body,
+        compiled = [
+            (
+                re.compile(re.escape(name), re.IGNORECASE),
+                self._concept_ids_by_name.get(name.lower(), ""),
+                name,
+                mastery_map.get(_norm(name), 0.0),
             )
+            for name in names
+        ]
+        out_lines: list[str] = []
+        for idx, raw in enumerate(text.split("\n")):
+            line_html = html.escape(raw)
+            for pattern, cid, name, m in compiled:
+                if not pattern.search(line_html):
+                    continue
+                # Mastery-based highlight: green=mastered, amber=learning, red=weak, yellow=unstudied
+                if m >= 0.6:
+                    bg, fg = "#C8E6C9", "#1B5E20"
+                elif m >= 0.3:
+                    bg, fg = "#FFF8E1", "#E65100"
+                elif m > 0:
+                    bg, fg = "#FFEBEE", "#C62828"
+                else:
+                    bg, fg = "#FFF3B0", "#0c4a6e"
+                line_html = pattern.sub(
+                    lambda m_match: (
+                        f'<a href="concept://{cid}" style="background-color:{bg};'
+                        f'color:{fg};text-decoration:none;border-radius:2px;'
+                        f'padding:0 2px;">'
+                        f"{m_match.group(0)}</a>"
+                    ),
+                    line_html,
+                )
+            if idx in line_marks:
+                prefix = "".join(
+                    f'<a href="evidence://{cid}" title="{html.escape(name)}"'
+                    f' style="font-size:11px;color:#0c4a6e;text-decoration:none;'
+                    f'background-color:#E3F2FD;border:1px solid #90CAF9;'
+                    f'border-radius:8px;padding:0 5px;margin-right:4px;">'
+                    f"🏷 {html.escape(name)}</a>"
+                    for cid, name in line_marks[idx]
+                )
+                line_html = prefix + line_html
+            out_lines.append(line_html)
+        body = "<br>".join(out_lines)
         self.setHtml(f"<div style='font-size: 15px;line-height:1.7;'>{body}</div>")
 
     # -- navigation -----------------------------------------------------------
@@ -236,6 +270,9 @@ class SourceTextView(QTextBrowser):
     # -- anchor handling ------------------------------------------------------
     def _on_anchor(self, url: QUrl) -> None:
         if url.scheme() == "concept":
+            self.concept_anchor_clicked.emit(url.host())
+        elif url.scheme() == "evidence":
+            # reverse anchor (evidence margin mark) -> same concept hop
             self.concept_anchor_clicked.emit(url.host())
 
 

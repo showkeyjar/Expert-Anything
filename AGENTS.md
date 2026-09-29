@@ -88,6 +88,10 @@ Do not build a simple RAG chatbot.
    （`SourceTextView.scroll_to_concept`）；**跨资产徽标**：全局图谱概念 id 带
    `asset_id:` 前缀，main 解析前缀→非当前资产先切换资产再跳转（阅读器显示正确原文），
    载荷用 id 而非 name（同名概念跨资产不串）；
+   **反向锚点（原文→概念）**：阅读视图 `_render` 按行渲染，锚定行行首插
+   `evidence://<cid>` 边注标记（🏷 概念名，浅蓝小胶囊，同行同概念去重），
+   点击经 `_on_anchor` 走 `concept_anchor_clicked` 同信号跳概念面板——
+   读者在原文里能看到"此段是哪个概念的证据"并能一跳回概念；
    演示数据由 regen_all 生成时 evidence 必须逐字切片自 source_text
    （模板 evidence 是改写句，不得进入资产——`_stamp_locations` 永远可锚定）。
    **点击一个概念必须给读者"位置感"，绝不孤点**——详情侧栏/面板须展示：
