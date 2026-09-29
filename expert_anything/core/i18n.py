@@ -939,6 +939,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "📚 This lesson is grounded in the following evidence",
         "ja": "📚 この講義は以下の原文に基づいています",
     },
+    "loc_page_and_line": {
+        "zh-CN": "第{page}页 · 第{line}行",
+        "en": "p. {page} · line {line}",
+        "ja": "{page}ページ · {line}行目",
+    },
+    "loc_line_only": {
+        "zh-CN": "第{line}行",
+        "en": "line {line}",
+        "ja": "{line}行目",
+    },
     "followup_title": {
         "zh-CN": "还有疑问？追问导师（基于原文证据回答）",
         "en": "Questions? Ask the tutor (grounded in the source)",

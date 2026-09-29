@@ -78,6 +78,14 @@ Do not build a simple RAG chatbot.
    - 图例必须解释颜色语义；初始化缩放保证节点可读（≥0.85）
 4. **点击必须产生更深层细节（认知地图信息增量）**：任何可点击节点/条目都要能展开内容
    （概念面板：定义/证据/关系邻居/教师笔记/异常/动作），禁止单层死链接。
+   **证据必须可溯源到原文**：概念抽取时 `_stamp_locations` 为每条 evidence 打
+   `SourceLocation` 锚点（char/line/page，PDF 按页偏移换算，60 字符前缀容错）；
+   教学页证据条带页/行徽标（`Concept.location_for_evidence` 前缀+省略号容错匹配，
+   无锚点时徽标静默缺省），点击经 `evidence_jump_requested(concept, evidence)`
+   信号链（TeachResultView → TeachView → main `_on_teach_evidence_jump`）跳转
+   阅读原文视图并精确定位到该证据段落（`SourceTextView.scroll_to_concept`）；
+   演示数据由 regen_all 生成时 evidence 必须逐字切片自 source_text
+   （模板 evidence 是改写句，不得进入资产——`_stamp_locations` 永远可锚定）。
    **点击一个概念必须给读者"位置感"，绝不孤点**——详情侧栏/面板须展示：
    - **同级要点**（`core/map_context.py::siblings`：同章节兄弟优先，无章节时用
      主题 cluster 兜底）与**下一级要点**（`next_level`：关系邻居带方向+学习路径后继，

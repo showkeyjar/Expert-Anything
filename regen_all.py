@@ -78,7 +78,7 @@ def build_asset_from_template(
                     "name": c["name"],
                     "definition": c.get("definition", ""),
                     "summary": c.get("significance", ""),
-                    "evidence": c.get("evidence", []),
+                    "evidence": [],  # stamped below — must quote source_text verbatim
                     "chapter": ch.get("title", ""),
                     "locations": [],
                 }
@@ -100,12 +100,20 @@ def build_asset_from_template(
             }
         )
 
-    # a short readable source body derived from the template (demo only)
+    # A short readable source body derived from the template (demo only).
+    # Each concept's evidence is the verbatim source line, so the source
+    # constraint (evidence quotes the原文) holds and _stamp_locations can
+    # always anchor it — template evidence sentences are paraphrases and
+    # never enter the demo asset.
     body = [f"# {template.name}", ""]
+    ci = 0
     for ch in template.chapters:
         body.append(f"## {ch.get('title', '')}")
         for c in ch.get("concepts", []):
-            body.append(f"- {c['name']}：{c.get('definition', '')}")
+            line = f"- {c['name']}：{c.get('definition', '')}"
+            body.append(line)
+            concepts[ci]["evidence"] = [line]
+            ci += 1
         body.append("")
     source_text = "\n".join(body)
 

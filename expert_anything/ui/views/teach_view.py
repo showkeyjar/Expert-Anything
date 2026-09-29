@@ -159,6 +159,7 @@ class TeachView(QWidget):
     followup_done = Signal(str, str)  # question, answer
     harness_adopted = Signal(object)  # candidate spec
     harness_transferred = Signal(object)  # payload
+    evidence_jump_requested = Signal(str, str)  # concept name, evidence text
     evaluate_recorded = Signal()  # refresh topbar
     quiz_result = Signal(float)  # quiz score (delegated from TeachResultView)
 
@@ -729,6 +730,9 @@ class TeachView(QWidget):
         view.next_requested.connect(self._on_next_requested)
         view.retry_requested.connect(self._on_retry_requested)
         view.vary_requested.connect(self._on_vary_requested)
+        # Evidence badge click -> jump the reader to that exact passage
+        # (AGENTS.md 长期演进 #1: source-anchored answers).
+        view.evidence_jump_requested.connect(self._on_evidence_jump)
 
         self._result_area.setWidget(view)
         self._progress.setVisible(False)
@@ -1211,6 +1215,11 @@ class TeachView(QWidget):
             self._concept_list.setCurrentIndex(idx)
         self._on_start_teach()
 
+    def _on_evidence_jump(self, concept_name: str, evidence: str):
+        """Evidence badge clicked in the lesson — hand the exact evidence
+        text to the reader jump (falls back to concept-level scroll)."""
+        self.evidence_jump_requested.emit(concept_name, evidence)
+
     def start_quick_quiz_by_name(self, concept_name: str):
         """Launch a quick self-test quiz directly (no lesson first).
 
@@ -1232,23 +1241,26 @@ class TeachView(QWidget):
         if not self._tutor:
             from expert_anything.core.tutor import Tutor
             self._tutor = Tutor(asset, llm=self._main.llm_client, learner_state=self._main.learner)
-        # Build a minimal result view so the quiz has somewhere to render
+        # Build a minimal result view so the quiz has somewhere to render.
+        # TeachResultView takes (result_dict, parent) and communicates via
+        # signals — the old kwargs-style call here raised TypeError on the
+        # first quick-quiz from the concept card.
         if self._teach_view_widget is None:
             from expert_anything.ui.widgets.teach_widgets import TeachResultView
+
             self._teach_view_widget = TeachResultView(
-                concept=concept,
-                result=None,
-                on_quiz_result=self._on_quiz_result,
-                on_practice_result=self._on_practice_result,
-                on_question_submit=self._on_followup_submit,
-                on_quiz_request=self._on_quiz_requested,
-                on_practice_request=self._on_practice_requested,
-                on_stuck_evolve=None,
-                on_harness_adopt=None,
-                on_transfer_adopt=None,
-                main_ref=self._main,
+                {"concept": concept.name, "explanation": ""}, self
             )
-            self._result_area.setWidget(self._teach_view_widget)
+            view = self._teach_view_widget
+            view.quiz_requested.connect(self._on_quiz_requested)
+            view.quiz_result.connect(self._on_quiz_result)
+            view.practice_requested.connect(self._on_practice_requested)
+            view.practice_submit.connect(self._on_practice_submit)
+            view.neighbor_clicked.connect(self._on_neighbor_clicked)
+            view.next_requested.connect(self._on_next_requested)
+            view.retry_requested.connect(self._on_retry_requested)
+            view.vary_requested.connect(self._on_vary_requested)
+            self._result_area.setWidget(view)
         self._quiz_concept = concept
         self._retire(self._quiz_worker)
         self._quiz_worker = QuizWorker(self._tutor, concept)

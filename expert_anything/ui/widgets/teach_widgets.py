@@ -449,6 +449,7 @@ class TeachResultView(QWidget):
     submit_requested = Signal()
     followup_requested = Signal(str)
     neighbor_clicked = Signal(str)  # concept name
+    evidence_jump_requested = Signal(str, str)  # concept name, evidence text
     quiz_requested = Signal()  # user asked for a quick self-test
     quiz_result = Signal(float)  # scored quiz (record into mastery)
     practice_requested = Signal()  # user asked for a hands-on task
@@ -465,6 +466,26 @@ class TeachResultView(QWidget):
         super().__init__(parent)
         self.answer_input: QWidget | None = None
         self._build(result)
+
+    def _provenance_concept(self, concept_name: str):
+        """Concept object for evidence→location lookup, or None.
+
+        Walks up to the enclosing teach view (parent) and resolves the
+        concept in the current asset; degrades silently when the parent
+        chain or asset is unavailable so provenance badges simply don't
+        render instead of breaking the lesson.
+        """
+        if not concept_name:
+            return None
+        p = self.parent()
+        main = getattr(p, "_main", None) if p is not None else None
+        asset = main.get_asset() if main is not None else None
+        if asset is None:
+            return None
+        try:
+            return asset.concept_by_name(concept_name)
+        except Exception:
+            return None
 
     def _card(
         self, title: str, body: str, bg: str, border: str, title_color: str
@@ -531,7 +552,9 @@ class TeachResultView(QWidget):
                 )
             )
 
-            # source provenance — show which evidence the explanation is based on
+            # source provenance — show which evidence the explanation is based on,
+            # each entry badged with its page/line anchor (SourceLocation) and
+            # clickable to jump the reader to that exact passage (AGENTS.md #1)
             evidence_list = [
                 str(e) for e in (result.get("evidence") or []) if str(e).strip()
             ]
@@ -549,14 +572,44 @@ class TeachResultView(QWidget):
                     "font-size: 13px; font-weight: bold; color: #558B2F;"
                 )
                 prov_lay.addWidget(prov_title)
+                concept_obj = self._provenance_concept(result.get("concept", ""))
                 for e in evidence_list[:2]:
+                    row = QHBoxLayout()
+                    row.setSpacing(6)
                     e_short = e if len(e) <= 120 else e[:117] + "…"
                     e_lbl = QLabel(f"📖 {e_short}")
                     e_lbl.setWordWrap(True)
                     e_lbl.setStyleSheet(
                         "font-size: 13px; color: #558B2F; line-height: 1.4;"
                     )
-                    prov_lay.addWidget(e_lbl)
+                    row.addWidget(e_lbl, 1)
+                    loc = (
+                        concept_obj.location_for_evidence(e)
+                        if concept_obj is not None
+                        else None
+                    )
+                    if loc is not None and (loc.page or loc.line):
+                        if loc.page:
+                            badge_txt = _t("loc_page_and_line").format(
+                                page=loc.page, line=loc.line
+                            )
+                        else:
+                            badge_txt = _t("loc_line_only").format(line=loc.line)
+                        badge = QPushButton(badge_txt)
+                        badge.setCursor(Qt.CursorShape.PointingHandCursor)
+                        badge.setStyleSheet(
+                            "QPushButton { background-color: #DCEDC8; color: #33691E;"
+                            "border: 1px solid #AED581; border-radius: 9px;"
+                            "padding: 1px 8px; font-size: 11.5px; }"
+                            "QPushButton:hover { background-color: #AED581; }"
+                        )
+                        badge.clicked.connect(
+                            lambda checked, ev=e, cn=result.get("concept", ""): (
+                                self.evidence_jump_requested.emit(cn, ev)
+                            )
+                        )
+                        row.addWidget(badge)
+                    prov_lay.addLayout(row)
                 root.addWidget(prov)
 
         # knowledge decoding card (SceneSpec → step animation + sort game)

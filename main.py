@@ -594,6 +594,7 @@ class MainWindow(QMainWindow):
         view.followup_done.connect(self._on_followup_done)
         view.harness_adopted.connect(self._on_adopt_harness)
         view.harness_transferred.connect(self._on_transfer_harness)
+        view.evidence_jump_requested.connect(self._on_teach_evidence_jump)
         view.evaluate_recorded.connect(self._on_evaluate_recorded)
         self._teach_view = view
         self.teach_view = view
@@ -861,7 +862,18 @@ class MainWindow(QMainWindow):
     def _on_jump_to_evidence(self, concept_id: str, evidence: str = ""):
         self.on_nav_click("source")
         if self._source_view_widget:
-            self._source_view_widget.scroll_to_concept(concept_id)
+            self._source_view_widget.scroll_to_concept(concept_id, evidence or None)
+
+    def _on_teach_evidence_jump(self, concept_name: str, evidence: str = ""):
+        """Lesson evidence badge clicked — resolve the concept id and jump
+        the reader to that exact evidence passage."""
+        asset = self.get_asset()
+        if asset is None:
+            return
+        concept = asset.concept_by_name(concept_name)
+        if concept is None:
+            return
+        self._on_jump_to_evidence(concept.id, evidence)
 
     def _on_graph_teach_click(self, concept_name: str):
         self._on_teach_request(concept_name)

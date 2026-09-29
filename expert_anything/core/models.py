@@ -68,6 +68,32 @@ class Concept:
     chapter: str = ""  # source-location light: the chapter/section that discusses it
     locations: list[SourceLocation] = field(default_factory=list)
 
+    def location_for_evidence(self, evidence: str) -> SourceLocation | None:
+        """Best SourceLocation for an evidence string (snippet prefix match).
+
+        ``_stamp_locations`` stores ``snippet=evidence[:200]``; matching the
+        query against each snippet (longest-prefix first) finds the anchor
+        even when the caller passes a truncated rendering of the evidence.
+        """
+        ev = (evidence or "").strip()
+        if not ev or not self.locations:
+            return None
+        probe = ev[:200]
+        q = probe.rstrip("…")
+        hits = [
+            loc
+            for loc in self.locations
+            if loc.snippet
+            and (
+                loc.snippet in probe
+                or q.startswith(loc.snippet)
+                or (q and loc.snippet.startswith(q))
+            )
+        ]
+        if not hits:
+            return None
+        return max(hits, key=lambda loc: loc.char_start)
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,

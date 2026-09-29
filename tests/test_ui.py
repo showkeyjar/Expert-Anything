@@ -417,6 +417,96 @@ class TestHarnessSuggestionUI(unittest.TestCase):
             win._harness_specs.update(before)
             win._transfer_offer_shown = set()
 
+    def test_evidence_badges_in_lesson(self):
+        """演进 #1: lesson evidence entries carry a page/line badge sourced
+        from Concept.locations and emit (concept, evidence) on click."""
+        from PySide6.QtWidgets import QPushButton
+        from expert_anything.core.i18n import t as _t
+        from expert_anything.core.extraction import _stamp_locations
+        from expert_anything.core.models import SourceLocation
+
+        win = self.win
+        asset = win.get_asset()
+        if asset is None or not asset.concepts:
+            self.skipTest("no asset loaded")
+        concept = next(
+            (c for c in asset.concepts if c.evidence), asset.concepts[0]
+        )
+        if not concept.evidence:
+            self.skipTest("no evidence in demo asset")
+        # ensure anchors exist (idempotent on already-stamped assets)
+        _stamp_locations(asset)
+
+        win._teach_view._display_result(
+            {
+                "concept": concept.name,
+                "explanation": "demo",
+                "evidence": list(concept.evidence[:2]),
+            }
+        )
+        view = win._teach_view._teach_view_widget
+        badges = [
+            b for b in view.findChildren(QPushButton)
+            if b.text().startswith(("第", "p.", "line", "ページ"))
+        ]
+        self.assertTrue(badges, "no location badge rendered")
+
+        # clicking emits the jump signal with the evidence text
+        fired = []
+        win._teach_view.evidence_jump_requested.connect(
+            lambda cn, ev: fired.append((cn, ev))
+        )
+        badges[0].click()
+        self.assertTrue(fired)
+        cn, ev = fired[0]
+        self.assertEqual(cn, concept.name)
+        self.assertTrue(any(ev == e or ev in e for e in concept.evidence))
+
+    def test_quick_quiz_by_name_builds_view(self):
+        """Regression: quick-quiz from the concept card used to construct
+        TeachResultView with removed kwargs (TypeError on first click)."""
+        win = self.win
+        asset = win.get_asset()
+        if asset is None or not asset.concepts:
+            self.skipTest("no asset loaded")
+        concept = asset.concepts[0]
+        # force the is-None branch that used to blow up
+        old = win._teach_view._teach_view_widget
+        win._teach_view._teach_view_widget = None
+        try:
+            win._teach_view.start_quick_quiz_by_name(concept.name)
+            self.assertIsNotNone(win._teach_view._teach_view_widget)
+        finally:
+            if win._teach_view._teach_view_widget is not None:
+                win._teach_view._teach_view_widget.deleteLater()
+            win._teach_view._teach_view_widget = old
+
+    def test_location_for_evidence_matching(self):
+        """Concept.location_for_evidence: prefix match on snippet, longest
+        char_start wins on duplicates, None when unmatched."""
+        from expert_anything.core.models import Concept, SourceLocation
+
+        c = Concept(id="c1", name="节点电价", evidence=["ev-one text", "ev-two text"])
+        c.locations = [
+            SourceLocation(
+                char_start=10, char_end=21, snippet="ev-one text",
+                line=2, page=1,
+            ),
+            SourceLocation(
+                char_start=400, char_end=411, snippet="ev-two text",
+                line=30, page=5,
+            ),
+        ]
+        loc = c.location_for_evidence("ev-two text")
+        self.assertIsNotNone(loc)
+        self.assertEqual((loc.page, loc.line), (5, 30))
+        # truncated caller-side rendering still matches
+        loc2 = c.location_for_evidence("ev-one tex" + "…")
+        self.assertIsNotNone(loc2)
+        self.assertEqual(loc2.snippet, "ev-one text")
+        self.assertIsNone(c.location_for_evidence("nowhere"))
+        self.assertIsNone(c.location_for_evidence(""))
+
     def test_doubt_strip_in_lesson(self):
         """§2 walk-ahead: the teach result view shows this concept's doubts,
         or the asset-wide open count when the concept is clean; nothing at
@@ -431,7 +521,6 @@ class TestHarnessSuggestionUI(unittest.TestCase):
             self.skipTest("no asset loaded")
         concept = asset.concepts[0]
         name = concept.name
-
         tm = TeacherModel(asset_id=asset.asset_id)
         tm.anomalies.append(Anomaly(
             id="d1", kind="contradiction",
