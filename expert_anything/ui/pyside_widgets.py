@@ -357,23 +357,14 @@ class ConceptDetailPanel(QDialog):
                 "QListWidget { border: 1px solid #E0E0E0; border-radius: 6px; font-size: 14px; }"
                 "QListWidget::item { padding: 6px; border-bottom: 1px solid #F0F0F0; }"
             )
-            loc_by_ev: dict[str, int] = {}
-            page_by_ev: dict[str, int] = {}
-            for loc in getattr(concept, "locations", []) or []:
-                key = (getattr(loc, "snippet", "") or "")[:180]
-                if key and getattr(loc, "line", 0):
-                    loc_by_ev.setdefault(key, loc.line)
-                if key and getattr(loc, "page", None):
-                    page_by_ev.setdefault(key, loc.page)
             for ev in concept.evidence:
                 label = ev[:180] + ("…" if len(ev) > 180 else "")
-                line_no = loc_by_ev.get(ev[:180])
-                page_no = page_by_ev.get(ev[:180])
+                loc = concept.location_for_evidence(ev)
                 suffix_parts = []
-                if page_no:
-                    suffix_parts.append(_t("loc_page", n=page_no))
-                if line_no:
-                    suffix_parts.append(_t("loc_line", n=line_no))
+                if loc is not None and loc.page:
+                    suffix_parts.append(_t("loc_page", n=loc.page))
+                if loc is not None and loc.line:
+                    suffix_parts.append(_t("loc_line", n=loc.line))
                 if suffix_parts:
                     label += "　(" + " · ".join(suffix_parts) + ")"
                 item = QListWidgetItem(label)

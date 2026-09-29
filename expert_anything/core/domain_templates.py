@@ -796,6 +796,13 @@ def apply_domain_template(asset, domain_id: str, *,
         if detail["enriched_fields"]:
             enriched_count += 1
 
+    # Template evidence is a paraphrase most of the time, but when the source
+    # genuinely contains the sentence we want the provenance badge to anchor.
+    # Stamping is idempotent and misses silently (no locations → no badge).
+    from expert_anything.core.extraction import _stamp_locations  # local: cycle
+
+    _stamp_locations(asset)
+
     # --- learning path: map first, then re-verify against the asset ---
     mapped_path: list[str] = []
     for tid in template.quick_path or []:

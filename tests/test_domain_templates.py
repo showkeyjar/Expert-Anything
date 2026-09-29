@@ -218,6 +218,55 @@ class TestTemplateApplication(unittest.TestCase):
         self.assertTrue(len(c010.definition) > 0)
         self.assertTrue("发电企业" in c010.definition or "上网电价" in c010.definition)
     
+    def test_apply_stamps_locations_for_verbatim_evidence(self):
+        """Template evidence written into an asset whose source_text contains
+        the sentence verbatim must get a SourceLocation (badge can anchor);
+        paraphrase-only sources stay location-free (silent degradation)."""
+        from expert_anything.core.domain_templates import get_domain_template
+
+        tpl = get_domain_template("electricity_trading")
+        tpl_concept = next(
+            c for ch in tpl.chapters for c in ch.get("concepts", [])
+        )
+        verbatim = tpl_concept["evidence"][0]
+        # a source that genuinely contains the template sentence verbatim
+        source_text = "背景介绍。\n" + verbatim + "\n后续说明段落。"
+
+        def make_asset(text: str) -> KnowledgeAsset:
+            return KnowledgeAsset(
+                asset_id="stamp-001",
+                type="article",
+                title="中国电力市场交易体系",
+                source_name="test.md",
+                created_at="2026-09-08T00:00:00Z",
+                source_text=text,
+                concepts=[
+                    Concept(
+                        id="et-001",
+                        name=tpl_concept["name"],
+                        definition="",
+                        evidence=[],
+                    )
+                ],
+                relations=[],
+                learning_path=[],
+            )
+
+        hit = make_asset(source_text)
+        apply_domain_template(hit, "electricity_trading")
+        c = hit.concept_by_id("et-001")
+        self.assertEqual(c.evidence, [verbatim])
+        self.assertTrue(
+            c.locations, "verbatim template evidence should be anchored"
+        )
+        self.assertEqual(c.locations[0].snippet[:40], verbatim[:40])
+
+        miss = make_asset("完全无关的正文，不含任何模板语句。")
+        apply_domain_template(miss, "electricity_trading")
+        c2 = miss.concept_by_id("et-001")
+        self.assertEqual(c2.evidence, [verbatim])  # enrichment unchanged
+        self.assertFalse(c2.locations)  # silent degradation, no anchor
+
     def test_apply_to_unknown_domain(self):
         """Test applying unknown domain returns a falsy, explicitly-marked result."""
         asset = _make_asset([])

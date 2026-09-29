@@ -222,6 +222,8 @@ Do not build a simple RAG chatbot.
     - **映射失败即降级、保留原路径**：`learning_path_applied=False` + `reason`
       （`degraded_no_mapping` / `degraded_low_coverage`（覆盖率 < `DEFAULT_MIN_COVERAGE`=0.5）/
       `unknown_domain`）时，**资产原有学习路径保持不变**；重写路径前每个 ID 都回查 `asset.concepts`；
+      enrich 写入模板 evidence 后**立即补跑 `_stamp_locations`**（幂等）——原文确实逐字包含
+      该句则锚定出徽标，paraphrase 不在原文则静默无锚（降级不报错，enrich 语义不变）；
     - **领域专用解码器**（`core/decoder_electricity.py`）：6 个模板概念 ID → 4 类策展 SceneSpec
       （市场架构 / 电价形成 / 交易流程 / LMP 节点电价），`scene_for_concept_id` 取场景，
       `get_scene_for_concept(concept_ref, asset)` 支持与模板同源的三路解析，
