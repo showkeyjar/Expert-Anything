@@ -213,6 +213,58 @@ class TestConceptPanel(unittest.TestCase):
         panel.close()
 
 
+class TestReviewSessionVary(unittest.TestCase):
+    """Review entries must teach with vary=1 (AGENTS.md §6 间隔效应).
+
+    The review toggle exists but the entry points used to bypass it:
+    _on_review_all_request started a topic pack without review=True and
+    review-queue cards emitted plain teach_requested. These tests pin the
+    wiring, not the UI pixels.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+
+    def _teach_view(self):
+        self.win.content_stack.setCurrentWidget(self.win.teach_view)
+        return self.win.teach_view
+
+    def test_review_all_pack_sets_review_mode(self):
+        tv = self._teach_view()
+        tv._review_toggle.setChecked(False)
+        self.win._on_review_all_request(["总量控制", "碳排放配额"])
+        self.assertTrue(tv._topic_review)
+        self.assertTrue(tv._review_mode)
+        self.assertTrue(tv._review_toggle.isChecked())
+
+    def test_topic_pack_unchecked_by_default(self):
+        tv = self._teach_view()
+        tv._review_toggle.setChecked(False)
+        self.win._on_topic_teach_request(
+            "总量控制", "主题", ["总量控制", "碳排放配额"], 0)
+        self.assertFalse(tv._topic_review)
+
+    def test_review_pack_flag_resets_after_queue_end(self):
+        tv = self._teach_view()
+        self.win._on_review_all_request(["总量控制", "碳排放配额"])
+        tv._teach_concept_now = "碳排放配额"  # simulate last lesson shown
+        tv._on_topic_next()  # queue exhausted -> reset branch
+        self.assertFalse(tv._topic_review)
+        self.assertFalse(tv._review_mode)
+
+    def test_review_card_emits_review_signal(self):
+        from expert_anything.ui.views.learner_view import LearnerView
+        self.assertIn("review_requested", LearnerView.__dict__)
+
+    def test_review_one_flows_to_start_teach(self):
+        tv = self._teach_view()
+        calls = []
+        tv.start_teach_by_name = lambda n, review=False: calls.append((n, review))
+        self.win._on_review_one_request("总量控制")
+        self.assertEqual(calls, [("总量控制", True)])
+
+
 class TestLearnerView(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

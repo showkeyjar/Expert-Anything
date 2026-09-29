@@ -30,6 +30,7 @@ class LearnerView(QWidget):
 
     # Signals
     teach_requested = Signal(str)  # concept_name
+    review_requested = Signal(str)  # concept_name, taught with vary=1
     review_all_requested = Signal(list)  # list of concept names to review
     export_report = Signal()  # text
     export_html = Signal()  # html
@@ -925,7 +926,7 @@ class LearnerView(QWidget):
                     urgency=tier_color,
                 )
                 card.clicked.connect(
-                    lambda e, n=d["name"]: self.teach_requested.emit(n)
+                    lambda e, n=d["name"]: self.review_requested.emit(n)
                 )
                 layout.addWidget(card)
             due_hint = QLabel(self._main._t("due_hint"))

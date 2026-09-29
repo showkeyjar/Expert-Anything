@@ -136,7 +136,11 @@ Do not build a simple RAG chatbot.
 5. **学习闭环的可视化锚点**：路径阶梯、掌握度分布条、成长趋势图、复习队列、
    指标卡——Learning Gain（ADR-010）是功能取舍标尺。
 6. **间隔效应**：复习队列 `due_for_review()`（薄弱 1 天、掌握 3-6 天），
-   复习课用 vary=1 换角度讲解。
+   复习课用 vary=1 换角度讲解。**复习入口必须带 review 语义**（2026-09 修复断链）：
+   批量复习 `_on_review_all_request` → `start_topic_teach(..., review=True)` 整包 vary=1、
+   队列推进 `_on_topic_next` 按包语义保持/复位；复习单卡 `review_requested` 信号 →
+   `_on_review_one_request` → `start_teach_by_name(review=True)`，一次调用直接进复习教学，
+   禁止复用 `_on_teach_request` 再补调（会双开课）；普通主题包永远 review=False。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。

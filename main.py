@@ -604,6 +604,7 @@ class MainWindow(QMainWindow):
     def _build_learner_view(self):
         view = LearnerView(self)
         view.teach_requested.connect(self._on_teach_request)
+        view.review_requested.connect(self._on_review_one_request)
         view.review_all_requested.connect(self._on_review_all_request)
         view.export_report.connect(self._on_export_report)
         view.export_html.connect(self._on_export_html)
@@ -737,7 +738,8 @@ class MainWindow(QMainWindow):
 
         Hands the queue to the teach view's topic mechanism (reused as a
         generic sequential lesson pack) with a "review" label so the
-        learner sees a progress banner while reviewing.
+        learner sees a progress banner while reviewing. review=True keeps
+        vary=1 (fresh angle) on every lesson in the pack — AGENTS.md §6.
         """
         if not concept_names:
             return
@@ -748,7 +750,25 @@ class MainWindow(QMainWindow):
                 self._t("review_session_title"),
                 concept_names,
                 0,
+                review=True,
             )
+
+    def _on_review_one_request(self, concept_name: str):
+        """Teach one due concept as a review lesson (vary=1, fresh angle).
+
+        From a review-queue card click: the learner asked for review, not
+        a first-time lesson, so the angle must differ from what they
+        already sat through.
+        """
+        self.on_nav_click("teach")
+        asset = self.get_asset()
+        if asset:
+            c = asset.concept_by_name(concept_name)
+            if c:
+                gv = self._graph_view_ref()
+                gv.set_teaching_context(c.id)
+        if hasattr(self, "_teach_view"):
+            self._teach_view.start_teach_by_name(concept_name, review=True)
 
     # ---- delegation to extracted views (compatibility shim) -------------------
     # These methods delegate to the view classes that were extracted from

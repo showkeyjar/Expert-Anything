@@ -193,6 +193,9 @@ class TeachView(QWidget):
         self._topic_name: str | None = None
         self._topic_queue: list[str] = []
         self._topic_mastered: int = 0
+        # Review packs (queue from due_for_review) teach every lesson with
+        # vary=1; regular topic packs never set this.
+        self._topic_review: bool = False
         self._topic_banner = None
         # External callers/tests can submit an already-scored quiz through the
         # view-level compatibility signal.  Connect once per TeachView lifetime,
@@ -975,7 +978,7 @@ class TeachView(QWidget):
 
     def start_topic_teach(
         self, concept_name: str, topic_name: str,
-        queue_names: list, mastered_count: int,
+        queue_names: list, mastered_count: int, review: bool = False,
     ):
         """Start teaching a concept as part of a topic learning pack.
 
@@ -986,6 +989,11 @@ class TeachView(QWidget):
         self._topic_name = topic_name
         self._topic_queue = list(queue_names) if queue_names else []
         self._topic_mastered = mastered_count
+        # Review pack: every lesson teaches with vary=1 (fresh angle) per
+        # AGENTS.md §6; the flag survives queue advances via _on_topic_next.
+        self._topic_review = review
+        self._review_mode = review
+        self._review_toggle.setChecked(review)
         self._update_topic_banner()
         # Start the lesson normally
         idx = self._concept_list.findText(concept_name)
@@ -1045,7 +1053,18 @@ class TeachView(QWidget):
             idx = self._concept_list.findText(next_name)
             if idx >= 0:
                 self._concept_list.setCurrentIndex(idx)
+            # Pack semantics win: a review pack keeps vary=1 across the
+            # whole queue, a regular pack teaches at vary=0 even if a
+            # previous review session left the toggle checked.
+            self._review_mode = self._topic_review
+            self._review_toggle.setChecked(self._topic_review)
             self._on_start_teach()
+        elif self._topic_review:
+            # Review pack finished: restore the default teaching mode so
+            # the next manual lesson is not silently varied.
+            self._topic_review = False
+            self._review_mode = False
+            self._review_toggle.setChecked(False)
 
     def _on_quiz_done(self, quiz: dict):
         self._quiz_worker = None
