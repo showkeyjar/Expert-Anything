@@ -137,6 +137,10 @@ Do not build a simple RAG chatbot.
    指标卡——Learning Gain（ADR-010）是功能取舍标尺。
 6. **间隔效应**：复习队列 `due_for_review()`（薄弱 1 天、掌握 3-6 天），
    复习课用 vary=1 换角度讲解。
+   **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
+   **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
+   条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。
+   与 `prereq_weak` 同模式：图谱/锚点信号 → interval 压缩 → 复习排序。
 7. **UI 工程规则**：
    - 视图重建（`_rebuild_all_views`）必须先清旧控件引用再构建，禁止访问已删除控件
    - QGraphicsView 等大 sizeHint 控件必须设 max 高度，防挤占主内容区

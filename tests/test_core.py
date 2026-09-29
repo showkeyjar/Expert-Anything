@@ -488,6 +488,43 @@ class TestLearner(unittest.TestCase):
         self.assertEqual(a["id"], "c1")
         self.assertTrue(a["prereq_weak"])
 
+    def test_due_for_review_unanchored_shortens_interval(self):
+        """Concepts without a source anchor get a halved review interval —
+        the learner cannot re-read the passage to self-reinforce, so the
+        review loop carries the full consolidation load."""
+        from expert_anything.core.models import SourceLocation
+
+        now = datetime.now(timezone.utc) - timedelta(days=3)
+        asset = _asset_with_relations()
+        # give A an anchor so it stays comparable; B keeps none (◌)
+        asset.concepts[0].locations = [
+            SourceLocation(char_start=0, char_end=5, snippet="A 是", line=1)
+        ]
+        state = {
+            "concepts": {
+                "a": {"name": "A", "mastery": 0.7,
+                      "updated_at": now.isoformat()},
+                "b": {"name": "B", "mastery": 0.7,
+                      "updated_at": now.isoformat()},
+            },
+            "history": [],
+        }
+        due = due_for_review(state, asset=asset)
+        # same mastery & freshness: A's interval 3*1.7=5.1d -> not due at 3d;
+        # B is unanchored -> 2.55d -> due, and flagged for the UI
+        self.assertEqual(
+            [item["name"] for item in due], ["B"],
+            "unanchored B must be due while anchored A is not",
+        )
+        b = due[0]
+        self.assertTrue(b["unanchored"])
+        self.assertAlmostEqual(b["interval"], 5.1 / 2.0, places=1)
+        # sanity: without the asset (no anchor info) neither is scheduled
+        # at this freshness — proving the halving is what pulled B in
+        self.assertEqual(
+            [item["name"] for item in due_for_review(state, asset=None)], []
+        )
+
     def test_unregister_asset_cleans(self):
         state = {}
         asset = _asset_with_relations()

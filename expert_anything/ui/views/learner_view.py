@@ -899,6 +899,10 @@ class LearnerView(QWidget):
                 tags = [self._main._t("due_days", d=d["days_since"])]
                 if d.get("prereq_weak"):
                     tags.append(self._main._t("due_prereq_weak"))
+                if d.get("unanchored"):
+                    # source-provenance tag: no passage to re-read, the
+                    # review loop is the only consolidation channel
+                    tags.append("◌ " + self._main._t("due_unanchored"))
                 # Urgency tag with tier colour
                 tier = d.get("urgency_tier", "due")
                 tier_colors = {

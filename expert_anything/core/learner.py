@@ -1119,7 +1119,10 @@ def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
 
     If ``asset`` is provided, concepts whose prerequisite/causes neighbours are
     weak get a boost — reviewing a shaky foundation is more urgent because it
-    undermines everything built on top of it.
+    undermines everything built on top of it. Concepts without a source anchor
+    (template-enriched / unlocatable, the ◌ population) get a shorter interval:
+    the learner cannot re-read the passage to self-reinforce, so system-side
+    review is the only consolidation channel they have.
     """
     from datetime import datetime, timezone
     from expert_anything.core.decoder import classify_relation
@@ -1129,12 +1132,17 @@ def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
     # asset-scoped review and prerequisite boosting operate on the same keys.
     asset_key_to_id: dict[str, str] = {}
     asset_keys: set[str] | None = None
+    unanchored_ids: set[str] = set()
     if asset is not None:
         asset_key_to_id = {
             normalize(c.name): c.id for c in getattr(asset, "concepts", [])
             if getattr(c, "name", "")
         }
         asset_keys = set(asset_key_to_id)
+        unanchored_ids = {
+            c.id for c in getattr(asset, "concepts", [])
+            if not getattr(c, "locations", None)
+        }
 
     # Build a map of weak prerequisite concepts (mastery < 0.5) whose
     # dependents should be prioritised for review.  Relations use concept ids,
@@ -1200,6 +1208,13 @@ def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
         boost = key in weak_prereqs
         if boost:
             interval = min(interval, 1.0)
+        # No source anchor -> the learner can't jump to the passage and
+        # re-read it, so halve the interval: system-side review carries the
+        # full consolidation load for this concept.
+        cid_here = asset_key_to_id.get(key, "")
+        unanchored = cid_here in unanchored_ids
+        if unanchored:
+            interval = interval / 2.0
         if days >= interval:
             overdue = days - interval
             # Urgency: how far past the review window (0 = just due, higher = more urgent)
@@ -1224,6 +1239,7 @@ def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
                     "urgency": round(urgency, 2),
                     "urgency_tier": urgency_tier,
                     "prereq_weak": boost,
+                    "unanchored": unanchored,
                 }
             )
     # Sort: prereq_weak first, then by urgency (most urgent first)

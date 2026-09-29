@@ -1062,6 +1062,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "⚠ weak prerequisite",
         "ja": "⚠ 前提が弱い",
     },
+    "due_unanchored": {
+        "zh-CN": "无原文锚点，间隔减半",
+        "en": "no source anchor — halved interval",
+        "ja": "原文アンカーなし（間隔半減）",
+    },
     "due_tier_overdue": {
         "zh-CN": "已逾期",
         "en": "Overdue",
