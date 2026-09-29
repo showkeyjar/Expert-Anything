@@ -26,6 +26,7 @@ class NodeDetailCard(QFrame):
     teach_requested = Signal(str)  # concept name
     full_detail_requested = Signal(str)  # concept id
     source_requested = Signal(str)  # concept id -> reader at grounded evidence
+    evidence_jump_requested = Signal(str, str)  # concept id, evidence text
     neighbor_clicked = Signal(str)  # concept id (roam)
     compare_requested = Signal(str, str)  # concept_a_id, concept_b_id
     quick_quiz_requested = Signal(str)  # concept id (quick self-test)
@@ -206,19 +207,45 @@ class NodeDetailCard(QFrame):
         # action path — practice-oriented sequence after this concept
         self._append_action_path(asset, concept_id, learner_state)
 
-        # first evidence
+        # evidence — every entry carries a page/line badge when the concept
+        # has a stamped SourceLocation; clicking the badge jumps the reader
+        # to that exact passage (same provenance chain as the lesson view).
         if concept.evidence:
             self._layout.addWidget(_sec_title(_t("detail_evidence"), "#2E7D32"))
-            ev = QLabel(
-                concept.evidence[0][:160]
-                + ("…" if len(concept.evidence[0]) > 160 else "")
-            )
-            ev.setWordWrap(True)
-            ev.setStyleSheet(
-                "font-size: 13.5px; color: #546E7A; background-color: #F0F8F0;"
-                "border-radius: 6px; padding: 8px;"
-            )
-            self._layout.addWidget(ev)
+            for e in concept.evidence[:3]:
+                row = QHBoxLayout()
+                row.setSpacing(6)
+                e_lbl = QLabel(e[:160] + ("…" if len(e) > 160 else ""))
+                e_lbl.setWordWrap(True)
+                e_lbl.setStyleSheet(
+                    "font-size: 13.5px; color: #546E7A; background-color:"
+                    " #F0F8F0; border-radius: 6px; padding: 8px;"
+                )
+                row.addWidget(e_lbl, 1)
+                loc = concept.location_for_evidence(e)
+                if loc is not None and (loc.page or loc.line):
+                    if loc.page:
+                        badge_txt = _t("loc_page_and_line").format(
+                            page=loc.page, line=loc.line
+                        )
+                    else:
+                        badge_txt = _t("loc_line_only").format(line=loc.line)
+                    badge = QPushButton(badge_txt)
+                    badge.setCursor(Qt.CursorShape.PointingHandCursor)
+                    badge.setToolTip(_t("evidence_jump_tip"))
+                    badge.setStyleSheet(
+                        "QPushButton { background-color: #DCEDC8; color: #33691E;"
+                        "border: 1px solid #AED581; border-radius: 9px;"
+                        "padding: 1px 8px; font-size: 11.5px; }"
+                        "QPushButton:hover { background-color: #AED581; }"
+                    )
+                    badge.clicked.connect(
+                        lambda checked, ev=e, cid=concept.id: (
+                            self.evidence_jump_requested.emit(cid, ev)
+                        )
+                    )
+                    row.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
+                self._layout.addLayout(row)
 
         # teacher notes
         if teacher is not None:

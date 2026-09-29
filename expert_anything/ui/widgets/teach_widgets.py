@@ -449,7 +449,7 @@ class TeachResultView(QWidget):
     submit_requested = Signal()
     followup_requested = Signal(str)
     neighbor_clicked = Signal(str)  # concept name
-    evidence_jump_requested = Signal(str, str)  # concept name, evidence text
+    evidence_jump_requested = Signal(str, str)  # concept id, evidence text
     quiz_requested = Signal()  # user asked for a quick self-test
     quiz_result = Signal(float)  # scored quiz (record into mastery)
     practice_requested = Signal()  # user asked for a hands-on task
@@ -604,9 +604,9 @@ class TeachResultView(QWidget):
                             "QPushButton:hover { background-color: #AED581; }"
                         )
                         badge.clicked.connect(
-                            lambda checked, ev=e, cn=result.get("concept", ""): (
-                                self.evidence_jump_requested.emit(cn, ev)
-                            )
+                            lambda checked, ev=e, cid=(
+                                concept_obj.id if concept_obj is not None else ""
+                            ): self.evidence_jump_requested.emit(cid, ev)
                         )
                         row.addWidget(badge)
                     prov_lay.addLayout(row)

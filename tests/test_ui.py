@@ -454,13 +454,62 @@ class TestHarnessSuggestionUI(unittest.TestCase):
         # clicking emits the jump signal with the evidence text
         fired = []
         win._teach_view.evidence_jump_requested.connect(
-            lambda cn, ev: fired.append((cn, ev))
+            lambda cid, ev: fired.append((cid, ev))
         )
         badges[0].click()
         self.assertTrue(fired)
-        cn, ev = fired[0]
-        self.assertEqual(cn, concept.name)
+        cid, ev = fired[0]
+        self.assertEqual(cid, concept.id)
         self.assertTrue(any(ev == e or ev in e for e in concept.evidence))
+
+    def test_graph_card_evidence_badges_and_cross_asset_jump(self):
+        """Graph detail card: evidence rows carry location badges emitting
+        (concept_id, evidence); a global-scope id with an asset prefix makes
+        main resolve the right asset, switch to it and jump without error."""
+        from PySide6.QtWidgets import QPushButton
+        from expert_anything.core.extraction import _stamp_locations
+
+        win = self.win
+        asset = win.get_asset()
+        if asset is None or not asset.concepts:
+            self.skipTest("no asset loaded")
+        concept = next(
+            (c for c in asset.concepts if c.evidence), asset.concepts[0]
+        )
+        if not concept.evidence:
+            self.skipTest("no evidence in demo asset")
+        _stamp_locations(asset)
+
+        card = win._map_detail_ref() if hasattr(win, "_map_detail_ref") else None
+        if card is None:
+            self.skipTest("map detail card not built")
+        card.set_concept(asset, concept.id, {"concepts": {}}, None)
+        badges = [
+            b
+            for b in card.findChildren(QPushButton)
+            if b.text().startswith(("第", "p.", "line", "ページ"))
+        ]
+        self.assertTrue(badges, "card rendered no location badge")
+
+        fired = []
+        card.evidence_jump_requested.connect(
+            lambda cid, ev: fired.append((cid, ev))
+        )
+        badges[0].click()
+        self.assertTrue(fired)
+        self.assertEqual(fired[0][0], concept.id)
+        self.assertTrue(fired[0][1])
+
+        # cross-asset: forge a global id for the *other* demo asset and let
+        # main resolve + switch + jump end-to-end (must not raise).
+        others = [aid for aid in win.assets if aid != asset.asset_id]
+        if not others:
+            self.skipTest("single-asset demo")
+        target = asset.concepts[0]
+        win._on_teach_evidence_jump(
+            f"{others[0]}:{target.id}", target.evidence[0]
+        )
+        self.assertEqual(win.current_asset_id, others[0])
 
     def test_quick_quiz_by_name_builds_view(self):
         """Regression: quick-quiz from the concept card used to construct

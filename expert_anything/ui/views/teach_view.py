@@ -159,7 +159,7 @@ class TeachView(QWidget):
     followup_done = Signal(str, str)  # question, answer
     harness_adopted = Signal(object)  # candidate spec
     harness_transferred = Signal(object)  # payload
-    evidence_jump_requested = Signal(str, str)  # concept name, evidence text
+    evidence_jump_requested = Signal(str, str)  # concept id, evidence text
     evaluate_recorded = Signal()  # refresh topbar
     quiz_result = Signal(float)  # quiz score (delegated from TeachResultView)
 
@@ -1215,10 +1215,10 @@ class TeachView(QWidget):
             self._concept_list.setCurrentIndex(idx)
         self._on_start_teach()
 
-    def _on_evidence_jump(self, concept_name: str, evidence: str):
+    def _on_evidence_jump(self, concept_id: str, evidence: str):
         """Evidence badge clicked in the lesson — hand the exact evidence
         text to the reader jump (falls back to concept-level scroll)."""
-        self.evidence_jump_requested.emit(concept_name, evidence)
+        self.evidence_jump_requested.emit(concept_id, evidence)
 
     def start_quick_quiz_by_name(self, concept_name: str):
         """Launch a quick self-test quiz directly (no lesson first).

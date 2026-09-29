@@ -28,6 +28,7 @@ class ConceptMapView(QWidget):
     open_concept_panel = Signal(str)  # concept_id
     focus_graph = Signal(str)  # concept_id
     navigate_source = Signal(str)  # concept_id -> scroll to evidence
+    evidence_jump_requested = Signal(str, str)  # concept id, evidence text
     quick_quiz_requested = Signal(str)  # concept_id
 
     def __init__(self, main, parent=None):
@@ -99,6 +100,9 @@ class ConceptMapView(QWidget):
             )
             self._map_detail.source_requested.connect(
                 lambda cid: self.navigate_source.emit(cid)
+            )
+            self._map_detail.evidence_jump_requested.connect(
+                lambda cn, ev: self.evidence_jump_requested.emit(cn, ev)
             )
             self._map_detail.compare_requested.connect(
                 lambda a, b: self._main._open_compare(a, b)

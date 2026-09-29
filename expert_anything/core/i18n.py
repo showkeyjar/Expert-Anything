@@ -949,6 +949,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "line {line}",
         "ja": "{line}行目",
     },
+    "evidence_jump_tip": {
+        "zh-CN": "在原文中查看此证据",
+        "en": "Show this evidence in the source text",
+        "ja": "原文でこの証拠を表示",
+    },
     "followup_title": {
         "zh-CN": "还有疑问？追问导师（基于原文证据回答）",
         "en": "Questions? Ask the tutor (grounded in the source)",

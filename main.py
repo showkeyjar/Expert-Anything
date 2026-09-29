@@ -575,6 +575,7 @@ class MainWindow(QMainWindow):
         view.teach_requested.connect(self._on_teach_request)
         view.open_concept_panel.connect(self._on_open_concept_panel)
         view.navigate_source.connect(self._on_jump_to_evidence)
+        view.evidence_jump_requested.connect(self._on_teach_evidence_jump)
         view.quick_quiz_requested.connect(self._on_quick_quiz_request)
         self._concept_map_view = view
         self.concept_map_view = view
@@ -864,15 +865,32 @@ class MainWindow(QMainWindow):
         if self._source_view_widget:
             self._source_view_widget.scroll_to_concept(concept_id, evidence or None)
 
-    def _on_teach_evidence_jump(self, concept_name: str, evidence: str = ""):
-        """Lesson evidence badge clicked — resolve the concept id and jump
-        the reader to that exact evidence passage."""
-        asset = self.get_asset()
+    def _on_teach_evidence_jump(self, concept_ref: str, evidence: str = ""):
+        """Evidence badge clicked — resolve the concept (global graph ids
+        carry an ``asset_id:`` prefix; lesson ids are current-asset local)
+        and jump the reader to that exact evidence passage. A cross-asset
+        badge first switches the active asset so the reader shows the
+        right source text."""
+        aid = None
+        cid = concept_ref or ""
+        if ":" in cid:
+            maybe_aid, _, rest = cid.partition(":")
+            if maybe_aid in self.assets:
+                aid, cid = maybe_aid, rest
+        asset = self.get_asset(aid) if aid else self.get_asset()
         if asset is None:
             return
-        concept = asset.concept_by_name(concept_name)
+        concept = asset.concept_by_id(cid)
         if concept is None:
-            return
+            # legacy callers may still pass a concept name (current asset)
+            concept = asset.concept_by_name(concept_ref or "")
+            if concept is None:
+                return
+        if aid and aid != self.current_asset_id:
+            # switch first so the source view renders this asset's text
+            self.current_asset_id = aid
+            self._refresh_asset_list()
+            self._rebuild_all_views()
         self._on_jump_to_evidence(concept.id, evidence)
 
     def _on_graph_teach_click(self, concept_name: str):
