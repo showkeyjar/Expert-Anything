@@ -144,6 +144,11 @@ Do not build a simple RAG chatbot.
    **评估轨迹必须带复习语义**：三通道 meta 均记 `review`（answer/practice 用会话级
    `_review_mode`；quiz 用发起时快照 `_quiz_vary`，独立快速自测无课上下文恒 False，
    不得继承上次课的残留标志）——首次学习与复习巩固的掌握度轨迹从此可区分。
+   **复习增益可视化**：`core/learner.py::review_gain(state)` 度量间隔效应实际效果
+   （每概念：基线 = 首次学习最高分，增益 = 复习均分 − 基线；无 meta.review 的老数据
+   按首次学习计，优雅降级），学习者模型页渲染「复习巩固增益」卡（i18n 键
+   `review_gain_*` 五键三语）：有数据显均值+Top5 概念行（正绿负红），
+   无复习记录显教育性提示而非隐藏——Learning Gain 锚点必须可发现（§5）。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。

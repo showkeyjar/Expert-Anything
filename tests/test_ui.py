@@ -213,6 +213,42 @@ class TestConceptPanel(unittest.TestCase):
         panel.close()
 
 
+class TestReviewGainCard(unittest.TestCase):
+    """The learner view must surface review consolidation gain (§5 anchor)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+
+    def test_review_gain_card_renders_with_data(self):
+        from expert_anything.core.learner import record_evaluation
+
+        state = self.win.learner
+        state["history"] = []
+        state["concepts"] = {}
+        record_evaluation(state, "两级市场架构", "a", 0.4, "a", "f")
+        record_evaluation(state, "两级市场架构", "a", 0.9, "a", "f",
+                          meta={"review": True})
+        self.win.learner_view.refresh()
+        # find the gain label inside the learner view
+        from PySide6.QtWidgets import QLabel
+        labels = self.win.learner_view.findChildren(QLabel)
+        texts = [l.text() for l in labels]
+        self.assertTrue(any("复习巩固增益" in t or "Review Consolidation" in t
+                            for t in texts))
+        self.assertTrue(any("两级市场架构" in t for t in texts))
+
+    def test_review_gain_card_empty_hint(self):
+        state = self.win.learner
+        state["history"] = []
+        state["concepts"] = {}
+        self.win.learner_view.refresh()
+        from PySide6.QtWidgets import QLabel
+        texts = [l.text() for l in self.win.learner_view.findChildren(QLabel)]
+        self.assertTrue(any("复习后的得分变化" in t or "Score changes after" in t
+                            for t in texts))
+
+
 class TestReviewSessionVary(unittest.TestCase):
     """Review entries must teach with vary=1 (AGENTS.md §6 间隔效应).
 

@@ -26,6 +26,7 @@ from expert_anything.core.learner import (
     normalize,
     record_evaluation,
     register_asset,
+    review_gain,
     set_study_goal,
     study_goal_progress,
     weaknesses,
@@ -405,6 +406,43 @@ class TestLearner(unittest.TestCase):
         register_asset(state, _asset_with_relations())
         self.assertEqual(len(state["concepts"]), 3)
         self.assertIn("t1", state["assets"])
+
+    def test_review_gain_measures_consolidation(self):
+        state = {"concepts": {}, "history": []}
+        # oldest-first insertion (record_evaluation prepends)
+        record_evaluation(state, "A", "t1", 0.4, "a", "f", meta={"review": False})
+        record_evaluation(state, "A", "t1", 0.6, "a", "f", meta={"review": False})
+        record_evaluation(state, "A", "t1", 0.9, "a", "f", meta={"review": True})
+        record_evaluation(state, "A", "t1", 0.8, "a", "f", meta={"review": True})
+        g = review_gain(state)
+        self.assertEqual(g["measurable"], 1)
+        self.assertEqual(g["review_count"], 2)
+        row = g["concepts"][0]
+        self.assertEqual(row["baseline"], 0.6)  # best first-time
+        self.assertEqual(row["review_avg"], 0.85)
+        self.assertEqual(row["gain"], 0.25)
+
+    def test_review_gain_skips_concepts_without_baseline(self):
+        state = {"concepts": {}, "history": []}
+        record_evaluation(state, "B", "t1", 0.9, "a", "f", meta={"review": True})
+        g = review_gain(state)
+        self.assertEqual(g["measurable"], 0)
+        self.assertEqual(g["review_count"], 1)
+
+    def test_review_gain_legacy_records_count_as_first_time(self):
+        state = {"concepts": {}, "history": []}
+        record_evaluation(state, "A", "t1", 0.5, "a", "f")  # no meta
+        record_evaluation(state, "A", "t1", 0.7, "a", "f", meta={"channel": "quiz"})
+        record_evaluation(state, "A", "t1", 0.9, "a", "f", meta={"review": True})
+        g = review_gain(state)
+        self.assertEqual(g["measurable"], 1)
+        self.assertEqual(g["concepts"][0]["baseline"], 0.7)
+
+    def test_review_gain_empty_history(self):
+        g = review_gain({"concepts": {}, "history": []})
+        self.assertEqual(g["avg_gain"], 0.0)
+        self.assertEqual(g["measurable"], 0)
+        self.assertEqual(g["concepts"], [])
 
     def test_record_evaluation_smoothing(self):
         state = {}

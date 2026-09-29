@@ -483,6 +483,69 @@ class LearnerView(QWidget):
 
             layout.addWidget(se_frame)
 
+        # Review consolidation gain — did vary=1 reviews actually help?
+        # Visible Learning-Gain anchor (AGENTS.md §5): the review queue is
+        # not done until its effect is measurable on this page.
+        from expert_anything.core.learner import review_gain
+
+        rg = review_gain(self._main.learner)
+        if rg["review_count"] > 0:
+            rg_frame = QFrame()
+            rg_frame.setStyleSheet(
+                "QFrame { background-color: #E8F5E9; border: 1px solid #A5D6A7;"
+                "border-radius: 10px; }"
+            )
+            rg_lay = QVBoxLayout(rg_frame)
+            rg_lay.setContentsMargins(16, 12, 16, 12)
+            rg_lay.setSpacing(8)
+
+            rg_title = QLabel(self._main._t("review_gain_title"))
+            rg_title.setStyleSheet(
+                "font-size: 16px; font-weight: bold; color: #2E7D32;"
+            )
+            rg_lay.addWidget(rg_title)
+
+            if rg["measurable"] > 0:
+                avg = QLabel(
+                    self._main._t(
+                        "review_gain_avg", gain=rg["avg_gain"], n=rg["measurable"]
+                    )
+                )
+                avg_color = "#2E7D32" if rg["avg_gain"] >= 0 else "#C62828"
+                avg.setStyleSheet(
+                    f"font-size: 14px; font-weight: 600; color: {avg_color};"
+                )
+                rg_lay.addWidget(avg)
+                for r in rg["concepts"][:5]:
+                    gain_color = "#2E7D32" if r["gain"] >= 0 else "#C62828"
+                    row = QLabel(
+                        self._main._t(
+                            "review_gain_row",
+                            concept=r["concept"],
+                            baseline=r["baseline"],
+                            review=r["review_avg"],
+                            n=r["n"],
+                        )
+                    )
+                    row.setStyleSheet(
+                        f"font-size: 13px; color: {gain_color};"
+                    )
+                    rg_lay.addWidget(row)
+            else:
+                nb = QLabel(self._main._t("review_gain_no_baseline"))
+                nb.setStyleSheet("font-size: 13px; color: #546E7A;")
+                nb.setWordWrap(True)
+                rg_lay.addWidget(nb)
+
+            layout.addWidget(rg_frame)
+        else:
+            # No review records yet: show an educational hint instead of
+            # hiding the section (the metric must be discoverable).
+            empty = QLabel(self._main._t("review_gain_empty"))
+            empty.setStyleSheet("font-size: 13px; color: #9E9E9E;")
+            empty.setWordWrap(True)
+            layout.addWidget(empty)
+
         # Knowledge blind spots — high-risk unlearned prerequisites
         asset = self._main.get_asset()
         if asset is not None:

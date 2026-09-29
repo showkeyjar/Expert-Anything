@@ -544,6 +544,60 @@ def generate_study_plan(
     return plan
 
 
+def review_gain(state: dict) -> dict:
+    """Measure how much review sessions actually consolidate (AGENTS.md §5/§6).
+
+    For each concept, the baseline is the score of its LAST first-time
+    (review=False) attempt; every review (review=True) attempt after that
+    counts as consolidation effect. Gain = review_avg - baseline.
+
+    Records without ``meta.review`` (legacy data) count as first-time, so
+    the metric degrades gracefully instead of silently dropping history.
+
+    Returns:
+      {"concepts": [{concept, baseline, review_avg, gain, n}],
+       "avg_gain": float, "review_count": int, "measurable": int}
+    """
+    history = list(reversed(state.get("history", [])))  # oldest first
+    by_concept: dict[str, list[tuple[bool, float]]] = {}
+    for h in history:
+        name = h.get("concept", "")
+        if not name:
+            continue
+        meta = h.get("meta") or {}
+        score = float(h.get("score", 0.0))
+        by_concept.setdefault(name, []).append((bool(meta.get("review")), score))
+
+    rows: list[dict] = []
+    review_count = 0
+    for name, marks in by_concept.items():
+        first_scores = [s for r, s in marks if not r]
+        review_scores = [s for r, s in marks if r]
+        review_count += len(review_scores)
+        if not review_scores or not first_scores:
+            continue  # need both a baseline and reviews to measure gain
+        # Baseline: best first-time score — a conservative estimate of
+        # what the learner reached before reviews kicked in.
+        baseline = max(first_scores)
+        review_avg = sum(review_scores) / len(review_scores)
+        rows.append(
+            {
+                "concept": name,
+                "baseline": round(baseline, 2),
+                "review_avg": round(review_avg, 2),
+                "gain": round(review_avg - baseline, 2),
+                "n": len(review_scores),
+            }
+        )
+    avg_gain = round(sum(r["gain"] for r in rows) / len(rows), 2) if rows else 0.0
+    return {
+        "concepts": sorted(rows, key=lambda r: -r["gain"]),
+        "avg_gain": avg_gain,
+        "review_count": review_count,
+        "measurable": len(rows),
+    }
+
+
 def style_effectiveness(state: dict) -> dict[str, dict]:
     """Analyze which teaching styles work best for this learner.
 

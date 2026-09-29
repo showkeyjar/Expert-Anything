@@ -533,6 +533,31 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "概念を選ぶ · 学ぶ · 答える · 質問する",
     },
     "style_label": {"zh-CN": "教学风格:", "en": "Style:", "ja": "スタイル:"},
+    "review_gain_title": {
+        "zh-CN": "📈 复习巩固增益",
+        "en": "📈 Review Consolidation Gain",
+        "ja": "📈 復習定着ゲイン",
+    },
+    "review_gain_avg": {
+        "zh-CN": "平均增益 {gain:+.0%}（{n} 个概念可度量）",
+        "en": "Average gain {gain:+.0%} ({n} concepts measurable)",
+        "ja": "平均ゲイン {gain:+.0%}（{n} 概念が測定可能）",
+    },
+    "review_gain_row": {
+        "zh-CN": "{concept}：{baseline:.0%} → {review:.0%}（{n} 次复习）",
+        "en": "{concept}: {baseline:.0%} → {review:.0%} ({n} reviews)",
+        "ja": "{concept}：{baseline:.0%} → {review:.0%}（復習 {n} 回）",
+    },
+    "review_gain_empty": {
+        "zh-CN": "复习后的得分变化会显示在这里——完成一次到期复习即可看到巩固效果。",
+        "en": "Score changes after review will appear here — finish one due review to see consolidation.",
+        "ja": "復習後のスコア変化がここに表示されます。期限到来の復習を 1 回終えると効果が見えます。",
+    },
+    "review_gain_no_baseline": {
+        "zh-CN": "有复习记录但缺少首次学习基线，暂无法度量。",
+        "en": "Review records exist but no first-time baseline to compare against yet.",
+        "ja": "復習記録はありますが、初回学習のベースラインがなくまだ測定できません。",
+    },
     "style_effect_title": {
         "zh-CN": "📊 教学风格效果分析",
         "en": "📊 Teaching Style Effectiveness",
