@@ -1247,22 +1247,42 @@ def fallback_scene(asset, concept) -> dict:
     return spec
 
 
+#: Curated domain decoders, keyed by domain_id.  Each entry must expose
+#: ``domain_scene_for(asset, concept, domain=None) -> spec | None`` (see
+#: ``decoder_electricity`` / ``decoder_carbon`` for the contract).  Modules
+#: are kept as import-path strings and imported lazily inside
+#: :func:`scene_for_concept` because each domain module imports this one.
+DOMAIN_DECODERS: dict[str, str] = {
+    "electricity_trading": "expert_anything.core.decoder_electricity",
+    "carbon_trading": "expert_anything.core.decoder_carbon",
+}
+
+
 def scene_for_concept(asset, concept, domain: str | None = None) -> dict:
     """Scene for a concept: curated domain SceneSpec, else the generic fallback.
 
     Single entry point for the teaching/reading pipeline, so every caller gets
     the same behaviour: when the asset belongs to a domain that ships curated
-    scenes (currently electricity trading) *and* the concept is one of that
-    domain's concepts, the domain scene is used; otherwise the deterministic
-    ``fallback_scene`` relation/definition graph is returned.
+    scenes (electricity trading, carbon trading) *and* the concept is one of
+    that domain's concepts, the domain scene is used; otherwise the
+    deterministic ``fallback_scene`` relation/definition graph is returned.
 
-    The domain module is imported lazily (it imports this module) and any
-    failure inside it degrades to the fallback instead of breaking a lesson.
+    The domain module is looked up in ``DOMAIN_DECODERS`` (registry-driven:
+    adding a domain is a one-line registration, not an edit to this function),
+    imported lazily (it imports this module) and any failure inside it
+    degrades to the fallback instead of breaking a lesson.
     No GUI, no network, no LLM.
     """
     try:
-        from expert_anything.core import decoder_electricity as _domain
-        spec = _domain.domain_scene_for(asset, concept, domain=domain)
+        if domain is None:
+            from expert_anything.core.domain_templates import detect_domain_from_title
+            domain = detect_domain_from_title(getattr(asset, "title", "") or "")
+        import importlib
+        module_path = DOMAIN_DECODERS.get(domain or "")
+        spec = None
+        if module_path:
+            module = importlib.import_module(module_path)
+            spec = module.domain_scene_for(asset, concept, domain=domain)
     except Exception:  # pragma: no cover - defensive: lessons must never break
         spec = None
     if spec:

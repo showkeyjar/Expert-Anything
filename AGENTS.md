@@ -257,6 +257,14 @@ Do not build a simple RAG chatbot.
       `get_scene_for_concept(concept_ref, asset)` 支持与模板同源的三路解析，
       `domain_scene_for(asset, concept, domain=None)` 再加**领域闸门**——非电力资产不会
       因概念重名而套用电力视觉；
+    - **第二领域解码器**（`core/decoder_carbon.py`，carbon_trading）：10 个模板概念 ID
+      （ct-001..010，quick_path 全覆盖）→ 4 类策展 SceneSpec（总量与配额分配 / 碳市场与碳价形成 /
+      履约周期与 MRV 流程 / 抵消机制），与电力解码器同契约：生成器内过 `check_scene`、
+      `domain_scene_for` 资产标题闸门、`resolve_template_concept_id` 三路解析但
+      **必须显式传 `domain_id`**（默认值是 electricity_trading，不传会解析失败——已踩坑）；
+    - **分发注册表**：`decoder.scene_for_concept` 不再硬编码 electricity 模块——
+      按标题检测领域 → 查 `DOMAIN_DECODERS` 注册表 → 懒加载模块调 `domain_scene_for`；
+      新增领域解码器只需注册一行，不改动入口函数；解析/导入异常一律降级 `fallback_scene`；
     - **统一入口 `decoder.scene_for_concept(asset, concept)`**：领域策展场景优先，否则回落
       确定性 `fallback_scene`（教学/阅读链路只认这一个入口；领域模块导入或解析异常一律降级，
       绝不让课程中断）。领域模板与专用解码器全程确定性：无 GUI、无网络、无 LLM；
@@ -315,7 +323,7 @@ Do not build a simple RAG chatbot.
 - **Visualizer**（图谱/图表）：graph_viz + pyside_graph / pyside_widgets
 - **AutoHarness**（教学 harness 的生成+执行+演化）：auto_harness.py —— 见设计理念第 14 条
 - **Domain Pack**（领域模板 + 领域专用解码 + 领域专用 Prompt）：domain_templates.py /
-  decoder_electricity.py / prompt_registry.py 的领域键
+  decoder_electricity.py / decoder_carbon.py / prompt_registry.py 的领域键
   —— 只补骨架与策展场景，**禁止覆盖来源约束内容、禁止在映射失败时改写学习路径**；
   统一出口是 `decoder.scene_for_concept`，领域解析失败必须降级到通用场景 —— 见设计理念第 15 条
 
@@ -339,6 +347,5 @@ Do not build a simple RAG chatbot.
 3. ~~main.py 按视图拆包（ui/views/）~~ ✅ 已落地：`ui/views/` 7 视图 + `ui/view_manager.py`
 4. 数据库持久化 + 向量/图检索（Hybrid Knowledge）
 5. 会话内多轮对话沉淀到 TeacherModel 深度闭环
-6. 领域包扩展：`DOMAIN_TEMPLATES` 注册更多领域（碳市场等）、领域专用 Prompt 模板
-   （`docs/电力交易领域学习方案.md` Phase 3）；演示数据重建脚本已落地为 `regen_all.py`
+6. 领域包扩展：碳市场已全链路落地（模板/检测/Prompt/术语/策展解码 `decoder_carbon.py`，方案见 `docs/电力交易领域学习方案.md`）；下一域只需 模板+Prompt+解码器 三件套；演示数据重建脚本已落地为 `regen_all.py`
 *（内容由AI生成，仅供参考）*

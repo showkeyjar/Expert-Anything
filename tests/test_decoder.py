@@ -268,6 +268,106 @@ class TestFallbackScene(unittest.TestCase):
         self.assertEqual(decoder.scene_summary(None), "")
 
 
+def _carbon_asset():
+    """Mini carbon asset mirroring the demo one: title triggers the carbon
+    domain gate, concept names match the carbon template."""
+    cs = [
+        Concept(id="c1", name="总量控制", definition="对排放总量设定上限。",
+                evidence=["总量控制：设定上限。"]),
+        Concept(id="c2", name="碳排放配额", definition="排放许可额度。",
+                evidence=["配额：排放许可额度。"]),
+        Concept(id="c3", name="碳市场监管", definition="对市场行为的监督。",
+                evidence=["监管：监督。"]),
+    ]
+    return KnowledgeAsset(
+        asset_id="ac", type="txt", title="碳排放权交易体系：总量、市场与 MRV",
+        source_name="t.txt", created_at="2026", source_text="x",
+        concepts=cs, relations=[],
+    )
+
+
+def _elec_asset():
+    cs = [
+        Concept(id="c1", name="两级市场架构", definition="省级与区域两级运作。",
+                evidence=["两级运作。"]),
+    ]
+    return KnowledgeAsset(
+        asset_id="ae", type="txt", title="中国电力市场交易体系", source_name="t.txt",
+        created_at="2026", source_text="x", concepts=cs, relations=[],
+    )
+
+
+class TestDomainDecoders(unittest.TestCase):
+    """Registry-driven domain decoding: electricity *and* carbon curated
+    scenes flow through the single ``scene_for_concept`` entry point."""
+
+    def test_registry_contains_both_domains(self):
+        self.assertEqual(
+            set(decoder.DOMAIN_DECODERS),
+            {"electricity_trading", "carbon_trading"},
+        )
+
+    def test_carbon_curated_scene_via_entry_point(self):
+        from expert_anything.core import decoder_carbon
+        asset = _carbon_asset()
+        for name in ("总量控制", "碳排放配额"):
+            spec = decoder.scene_for_concept(asset, asset.concept_by_name(name))
+            self.assertEqual(spec.get("title"), "总量控制与配额分配")
+            self.assertTrue(spec.get("game"), "curated scene must keep its game")
+        # direct module route agrees with the entry point
+        direct = decoder_carbon.scene_for_concept_id("ct-001")
+        self.assertEqual(direct.get("title"), "总量控制与配额分配")
+
+    def test_carbon_alias_resolution(self):
+        from expert_anything.core import decoder_carbon
+        # MRV is a declared template alias; must resolve inside the carbon domain
+        spec = decoder_carbon.get_scene_for_concept("MRV")
+        self.assertIsNotNone(spec)
+        self.assertEqual(spec.get("title"), "履约周期与 MRV 流程")
+
+    def test_carbon_unmatched_concept_falls_back(self):
+        asset = _carbon_asset()
+        spec = decoder.scene_for_concept(asset, asset.concept_by_name("碳市场监管"))
+        # fallback keeps its signature title format
+        self.assertIn("知识结构", spec.get("title", ""))
+        self.assertFalse(spec.get("edges") and len(spec["edges"]) > 2)
+
+    def test_gate_keeps_domains_separate(self):
+        carbon_asset, elec_asset = _carbon_asset(), _elec_asset()
+        # each domain module must return None for the *other* domain's asset
+        # (title gate), so the entry point falls back instead of crossing
+        # visuals between domains
+        from expert_anything.core import decoder_carbon, decoder_electricity
+        self.assertIsNone(decoder_carbon.domain_scene_for(
+            elec_asset, elec_asset.concepts[0]))
+        self.assertIsNone(decoder_electricity.domain_scene_for(
+            carbon_asset, carbon_asset.concepts[0]))
+        # explicit domain override agrees with the title-based gate
+        self.assertIsNone(decoder_carbon.domain_scene_for(
+            carbon_asset, carbon_asset.concepts[0], domain="electricity_trading"))
+
+    def test_electricity_curated_scene_unchanged(self):
+        asset = _elec_asset()
+        spec = decoder.scene_for_concept(asset, asset.concepts[0])
+        self.assertEqual(spec.get("title"), "中国电力市场两级架构")
+
+    def test_all_carbon_generators_pass_admission(self):
+        from expert_anything.core import decoder_carbon
+        for tid, gen in decoder_carbon.SCENE_GENERATORS.items():
+            spec = gen()
+            self.assertIsNotNone(
+                spec, f"{tid} generator failed check_scene admission")
+            self.assertGreaterEqual(len(spec["nodes"]), 3)
+            self.assertGreaterEqual(len(spec["steps"]), 2)
+            if spec.get("game"):
+                game = spec["game"]
+                self.assertEqual(
+                    sorted(game["answer"]),
+                    list(range(len(game["items"]))),
+                    f"{tid} game answer must be a permutation",
+                )
+
+
 class TestTeachScenePipeline(unittest.TestCase):
     LESSON = (
         '{"explanation": "混合记忆架构之所以重要，是因为单一记忆要么丢上下文要么太慢；'
