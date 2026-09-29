@@ -141,6 +141,9 @@ Do not build a simple RAG chatbot.
    队列推进 `_on_topic_next` 按包语义保持/复位；复习单卡 `review_requested` 信号 →
    `_on_review_one_request` → `start_teach_by_name(review=True)`，一次调用直接进复习教学，
    禁止复用 `_on_teach_request` 再补调（会双开课）；普通主题包永远 review=False。
+   **评估轨迹必须带复习语义**：三通道 meta 均记 `review`（answer/practice 用会话级
+   `_review_mode`；quiz 用发起时快照 `_quiz_vary`，独立快速自测无课上下文恒 False，
+   不得继承上次课的残留标志）——首次学习与复习巩固的掌握度轨迹从此可区分。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。

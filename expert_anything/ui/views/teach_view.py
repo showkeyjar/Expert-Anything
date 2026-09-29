@@ -186,6 +186,10 @@ class TeachView(QWidget):
         self._practice_task = ""  # task text shown when practice was generated
         self._eval_answer_text = ""  # answer being graded by EvaluateWorker
         self._quiz_concept = None  # concept for quiz recording
+        # Vary semantics snapshot at quiz launch: True when the quiz belongs
+        # to a review lesson. A standalone quick-quiz (map card) has no
+        # lesson context, so it must not inherit a stale review flag.
+        self._quiz_vary = False
         self._review_mode = False
         self._followup_history = []
         self._retired: list = []  # workers parked mid-flight (retire-and-replace)
@@ -829,6 +833,7 @@ class TeachView(QWidget):
                 "channel": "answer",
                 "style": lesson.get("style", ""),
                 "vary": self._teach_vary,
+                "review": bool(self._review_mode),
                 "rotated_style": bool(lesson.get("rotated_style")),
                 "judges": result.get("judges", 1),
             },
@@ -949,7 +954,12 @@ class TeachView(QWidget):
             score,
             self._eval_answer_text,
             feedback,
-            meta={"channel": "practice"},
+            meta={
+                "channel": "practice",
+                "style": (self._teach_lesson or {}).get("style", ""),
+                "vary": self._teach_vary,
+                "review": bool(self._review_mode),
+            },
         )
         if score >= 0.6:
             mark_completed(self._main.learner, asset.asset_id, concept.id)
@@ -970,6 +980,9 @@ class TeachView(QWidget):
         if not self._tutor:
             self._tutor = Tutor(asset, llm=self._main.llm_client, learner_state=self._main.learner)
         self._quiz_concept = concept
+        # Quiz belongs to the current lesson: snapshot its vary semantics
+        # so the recorded meta says whether this was a review quiz.
+        self._quiz_vary = bool(self._teach_vary)
         self._retire(self._quiz_worker)
         self._quiz_worker = QuizWorker(self._tutor, concept)
         self._quiz_worker.finished.connect(self._on_quiz_done)
@@ -1090,7 +1103,12 @@ class TeachView(QWidget):
             score,
             "",
             "quick self-test",
-            meta={"channel": "quiz"},
+            meta={
+                "channel": "quiz",
+                "style": (self._teach_lesson or {}).get("style", ""),
+                "vary": self._teach_vary,
+                "review": bool(self._quiz_vary),
+            },
         )
         if score >= 0.6:
             mark_completed(self._main.learner, asset.asset_id, concept.id)
@@ -1281,6 +1299,9 @@ class TeachView(QWidget):
             view.vary_requested.connect(self._on_vary_requested)
             self._result_area.setWidget(view)
         self._quiz_concept = concept
+        # Standalone quick-quiz from the map card: no lesson context, so
+        # never inherit a stale review flag from a previous lesson.
+        self._quiz_vary = False
         self._retire(self._quiz_worker)
         self._quiz_worker = QuizWorker(self._tutor, concept)
         self._quiz_worker.finished.connect(self._on_quiz_done)

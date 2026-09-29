@@ -264,6 +264,44 @@ class TestReviewSessionVary(unittest.TestCase):
         self.win._on_review_one_request("总量控制")
         self.assertEqual(calls, [("总量控制", True)])
 
+    def test_quiz_meta_records_review_flag(self):
+        """Quiz launched inside a review lesson records review=True in the
+        learning trace; a standalone quick-quiz stays False (no lesson
+        context must not inherit a stale flag)."""
+        tv = self._teach_view()
+        name = "两级市场架构"  # first concept of the demo (current) asset
+        # lesson quiz: review semantics present
+        tv._teach_concept_now = name
+        tv._teach_vary = 1
+        tv._on_quiz_requested()
+        self.assertTrue(tv._quiz_vary)
+        # standalone quick quiz: semantics reset
+        tv.start_quick_quiz_by_name(name)
+        self.assertFalse(tv._quiz_vary)
+        # meta actually lands in the trace
+        tv._quiz_vary = True
+        learner_state = self.win.learner
+        n_before = len(learner_state.get("history", []))
+        tv._on_quiz_result(0.8)
+        hist = learner_state.get("history", [])
+        self.assertEqual(len(hist), n_before + 1)
+        self.assertTrue(hist[0]["meta"]["review"])
+
+    def test_answer_meta_records_review_flag(self):
+        tv = self._teach_view()
+        name = "两级市场架构"
+        tv._review_mode = True
+        tv._teach_vary = 1
+        tv._teach_lesson = {"concept": name, "style": "example"}
+        tv._teach_concept_now = name
+        learner_state = self.win.learner
+        tv._eval_answer_text = "测试作答"
+        # call the answer-recording path with a fake graded result
+        tv._on_answer_eval_done({"score": 0.9, "feedback": "ok", "judges": 1})
+        hist = learner_state.get("history", [])
+        self.assertTrue(hist[0]["meta"]["review"])
+        self.assertEqual(hist[0]["meta"]["channel"], "answer")
+
 
 class TestLearnerView(unittest.TestCase):
     @classmethod
