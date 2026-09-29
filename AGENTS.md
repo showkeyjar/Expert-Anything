@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: f72b104002d99af940831fcb029a9bd5_7a83e182b6bd11f19825525400cd780f
+    ReservedCode1: +F/oTTe63yWWc7bgmkzJ34oeJ4wVbcBDpNiufsPe6OBLIRhIzHkEeZDjkG65BeZCqXi7mmYyGZOOIuv9ovo4oBq3I7tyZ2ckfJGgpaocU3ix2bCXoHKY5a9ovr/OzUYQSsXXLn23Zkkl4qg5470CAQ7u0Xoxb0ZCDbgQOAHCwqYB9VqeMQVLTntkeog=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: f72b104002d99af940831fcb029a9bd5_7a83e182b6bd11f19825525400cd780f
+    ReservedCode2: +F/oTTe63yWWc7bgmkzJ34oeJ4wVbcBDpNiufsPe6OBLIRhIzHkEeZDjkG65BeZCqXi7mmYyGZOOIuv9ovo4oBq3I7tyZ2ckfJGgpaocU3ix2bCXoHKY5a9ovr/OzUYQSsXXLn23Zkkl4qg5470CAQ7u0Xoxb0ZCDbgQOAHCwqYB9VqeMQVLTntkeog=
+---
+
 # AGENTS.md
 
 # Project: ExpertAnything — Knowledge Decoder & Learning OS
@@ -26,7 +37,12 @@ Do not build a simple RAG chatbot.
 - **UI 三区框架**：顶部功能栏（当前资产 + 掌握度进度 + 快捷动作 + 语言切换）+
   左侧导航区 + 中央展示区（视图 header 统一白底蓝条）
 - **多语言**：中文 / English / 日本語，`core/i18n.py` 的 `t()` 全量接入，
-  **禁止硬编码 UI 文本**（新增文案必须走 i18n 键表，三语齐全；扫描脚本可验证）
+  **禁止硬编码 UI 文本**（新增文案必须走 i18n 键表，三语齐全；
+  完整性由 `tests/test_i18n_integrity.py` 常驻守卫）。
+  **动态键家族陷阱**：f-string/拼接构造的键（`rel_*`/`trend_*`/`kind_*`/
+  `teacher_status_*`/`domain_template_reason_*` 前缀家族与 `{kind}_failed` 后缀家族）
+  其成员键名只出现在 i18n.py 内，静态扫描无法识别引用——清理"死键"时**必须先排除这些家族**
+  （测试文件中的 `DYNAMIC_PREFIXES`/`DYNAMIC_SUFFIXES` 是权威清单，新增家族须同步登记）
 
 ## 学习闭环（产品核心链路）
 
@@ -48,6 +64,12 @@ Do not build a simple RAG chatbot.
 2. **教师模型 = 系统的自我理解层**：站在学习者前面（walk ahead）——
    significance / prerequisites / misconceptions / connections / external_notes（标注来源），
    异常纳入教学优先级；学习者答题与追问（learner_signals）反哺系统认知。
+   **存疑条（2026-09-29 已接线）**：教学结果页渲染「系统存疑 · 走在你前面」条——
+   `teacher.concept_anomalies`（本概念关联的可行动异常，severity 排序，≤3 条，
+   匹配规则与 `anomaly_concept_ids` 同源）命中则逐条展示（kind 经 `kind_*` 键本地化）；
+   本概念干净但全篇有待解项 → 提示全篇计数（`doubt_none`）；全篇已解 → 不渲染。
+   链路：`teach_view._attach_doubt_strip` → `teach_widgets.append_doubt_strip`，
+   异常时静默降级（存疑条是增强，不阻断教学）。
 3. **可视化优先（快速学习）**：知识图谱是核心入口，必须是"活"的——
    - 力导向物理模拟（斥力+弹簧+引力），节点稳定后轻微漂浮（幅度 ≤0.5，不得干扰点击）
    - 可拖拽节点（邻居弹簧跟随）、悬停高亮邻居、单击弹详情侧栏（随节点变化）、
@@ -69,6 +91,12 @@ Do not build a simple RAG chatbot.
    直接进入教学会话；对比弹窗可「沉淀到教师模型」（`teacher.incorporate_comparison`）——
    共享邻居写入双方 connections 作衔接锚点，掌握度差 ≥0.2 对弱方挂 learner_gap
    anomaly（进 `anomaly_prioritized_path` 提入教学排序），幂等去重，沉淀即闭环。
+   **行动路径（2026-09-29 已接线）**：概念详情卡新增「用起来的行动路径」段
+   （`node_detail._append_action_path`，`_append_path_position` 之后）——学习路径中
+   本概念之后的后继序列即"按什么顺序用起来"；存在薄弱后继（掌握度 <0.6）时切
+   **重点版**（`action_path_focus`，⚠ + 掌握度%，只列薄弱项），全部掌握列普通
+   编号版（`action_path`）；路径末尾概念不渲染（不硬造行动路径）；每项 pill 复用
+   roam/teach 双按钮，1 步开教。数据确定性：learning_path + learner_state，无 LLM。
 5. **学习闭环的可视化锚点**：路径阶梯、掌握度分布条、成长趋势图、复习队列、
    指标卡——Learning Gain（ADR-010）是功能取舍标尺。
 6. **间隔效应**：复习队列 `due_for_review()`（薄弱 1 天、掌握 3-6 天），
@@ -158,14 +186,70 @@ Do not build a simple RAG chatbot.
       channel="harness" / harness 名 / 指标 / 守卫触发——卡壳检测与教师模型
       继续读学习轨迹这一条真相源。
 
+15. **领域模板与领域专用解码（domain pack，见 docs/电力交易领域学习方案.md）**：
+    - **领域模板**（`core/domain_templates.py`）预置领域知识骨架：章节结构 + 概念清单
+      （name/definition/evidence/aliases）+ 推荐学习路径 `quick_path` + 常见误解 + 背景锚点。
+      当前内置 `ELECTRICITY_TRADING_TEMPLATE`（`domain_id="electricity_trading"`，
+      5 章节 / 19 概念 / 7 步 quick_path / 4 条误解 / 4 个锚点）；`DOMAIN_TEMPLATES` 是唯一注册表，
+      未注册领域走 `unknown_domain`；
+    - **模板只供骨架，不改来源约束**：模板**不新增、不删除、不重排**资产概念；
+      命中概念仅在 `definition`/`evidence` 为空时写入模板文本，**已抽取的来源约束内容永不被覆盖**；
+    - **套用入口（确定性，无 LLM）**：`detect_domain_from_title(title)` 标题关键词判定领域 →
+      `build_concept_mapping(asset, template)` 干跑给出命中/覆盖率 →
+      `apply_domain_template(asset, domain_id, min_coverage=...)` 落盘。
+      UI 在导入抽取完成后自动弹「领域模板」确认框（`ui/views/import_view.py::_offer_domain_template`），
+      **确认后才套用**；标题无领域信号、领域无模板或用户拒绝则不套用，导入照常完成；
+    - **ID 映射机制（最终形态 = 归一化名称 + 括号别名）**：模板概念 ID（`et-*`）与资产概念 ID（`c*`）
+      两个 ID 空间**永不做 ID 对齐**，只按名称匹配：
+      `_normalize_name`（NFKC → 小写 → 折叠空白/分隔符 → 去标点，与 `learner.normalize` 同源）
+      + `concept_name_variants`（「节点边际电价(LMP)」同时产出全称 / 去括号名 / 括号内别名，
+      括号别名 ≥2 字符才参与，避免单字母误配，并叠加模板概念声明的 `aliases`）；
+      变体按长度降序匹配（全称优先于别名），每个资产概念最多被认领一次，
+      未命中的模板概念记入 `unmatched` 而非静默丢弃；`resolve_template_concept_id`
+      提供三路解析：模板 ID → 资产 ID（经其名称）→ 概念名（任意变体拼写）；
+    - **映射失败即降级、保留原路径**：`learning_path_applied=False` + `reason`
+      （`degraded_no_mapping` / `degraded_low_coverage`（覆盖率 < `DEFAULT_MIN_COVERAGE`=0.5）/
+      `unknown_domain`）时，**资产原有学习路径保持不变**；重写路径前每个 ID 都回查 `asset.concepts`；
+    - **领域专用解码器**（`core/decoder_electricity.py`）：6 个模板概念 ID → 4 类策展 SceneSpec
+      （市场架构 / 电价形成 / 交易流程 / LMP 节点电价），`scene_for_concept_id` 取场景，
+      `get_scene_for_concept(concept_ref, asset)` 支持与模板同源的三路解析，
+      `domain_scene_for(asset, concept, domain=None)` 再加**领域闸门**——非电力资产不会
+      因概念重名而套用电力视觉；
+    - **统一入口 `decoder.scene_for_concept(asset, concept)`**：领域策展场景优先，否则回落
+      确定性 `fallback_scene`（教学/阅读链路只认这一个入口；领域模块导入或解析异常一律降级，
+      绝不让课程中断）。领域模板与专用解码器全程确定性：无 GUI、无网络、无 LLM；
+    - **领域专用 Prompt（`core/prompt_registry.py`，Phase 3）**：LLM 链路（抽取
+      `_extract_with_llm`、教师 `build_teacher_model`）在检测到领域时改用领域 Prompt，其余逻辑不变。
+      键名 = 通用键 + 领域后缀（`DOMAIN_PROMPT_SUFFIXES`：`electricity_trading` → `electricity`，
+      即 `extraction_system_electricity` / `extraction_user_electricity` /
+      `teacher_system_electricity` / `teacher_user_electricity`，zh-CN/en/ja 三语必须齐全）；
+      **选择与回退**：`get_domain_prompt(base_key, domain_id, lang)` 在无领域、领域未注册或键缺失时
+      返回通用 Prompt，`domain_id=""` 显式禁用领域 Prompt；未检测到领域时渲染结果与通用路径逐字符一致；
+      **骨架只作对齐导引**：`domain_concept_skeleton(domain_id)` 渲染的模板概念骨架（含 `et-*`）
+      注入 user prompt 帮助输出与模板对齐，但 `_assemble` 的逐字证据校验与幻觉概念丢弃**一律不放宽**——
+      引导与来源约束冲突时，以来源约束为准（同第 15 条）。
+
 ## 工程纪律
 
-- **测试前置**：每次改进后跑 `python run_tests.py --quick`（226 用例，~10s）
-  —— 分层：core(135) / data(7) / ui(38) / llm(7，有 key 自动跑)；
+- **测试前置**：每次改进后跑 `python run_tests.py --quick`（446 用例；无 PySide6 时 UI 层整层跳过）
+  —— 分层：core / data / ui（需 PySide6，缺失时整层跳过）/ llm（有 key 自动跑），
+  外加常驻的 runner 回归；i18n 键完整性（三语齐全 + 字面键已定义 + 动态家族非空 + 死键零基线：新死键=回归）由 `tests/test_i18n_integrity.py` 常驻守卫（已注册进 runner core 层；
+  2026-09-29 二轮清理：修正语料规则（包内 `_` 前缀模块如 `ui/widgets/_helpers.py` 误排除，
+  复活 tag_stuck 等 4 键）后删除 104 个被现行键族取代的死键，键表 718→614，
+  `KNOWN_DEAD_BASELINE` 清零，仅 `doubt_*`/`action_path*` 5 键挂 `PENDING_WIRING` 待功能落地）；
+  `data/_demo` 缺 `assets/` 或 `learner.json` 时 data 层模块内自动跳过；
   测试用演示数据临时副本，绝不污染真实数据。
+- **依赖缺失的表现**：`pypdf`（`requirements.txt` 已声明 `>=4.0`）缺失时
+  `parsers._pdf_pages` 静默返回空文本，`tests/test_core.py::test_pdf_extraction`
+  会以 `PDF text content not found in ''` 失败——根因是环境缺依赖，**不是**解析或测试缺陷；
+  `pip install -r requirements.txt` 即恢复（本机 2026-09-22 实测）。此用例不得跳过或放宽断言。
 - 架构分层：`expert_anything/core`（无 UI 依赖，可独立测试）/
-  `expert_anything/ui`（pyside_graph + pyside_widgets）/ `main.py`（入口+视图）。
-- 数据本地优先：`data/`（gitignore），`data/_demo` 为演示数据（可用 regen 脚本重建）。
+  `expert_anything/ui`（`views/` 7 个视图 + `view_manager.py` 编排 + pyside_graph / pyside_widgets / widgets）
+  / `main.py`（入口 + MainWindow 外壳，把视图构建与信号路由委托给 `ui/views`、`ui/view_manager.py`）。
+- 数据本地优先：`data/`（gitignore），`data/_demo` 为演示数据，**不入库**；
+  用仓库根目录 `python regen_all.py` 重建（确定性、离线、幂等，从内置领域模板
+  生成 2 个资产 + teacher 模型 + learner.json；缺 `assets/` 与 `learner.json` 时
+  data 层用例自动跳过，重建后转通过）。
 - LLM 可插拔：OpenAI 兼容端点，缺 key 自动确定性降级并明确标注。
 
 ## 模块职责
@@ -177,11 +261,31 @@ Do not build a simple RAG chatbot.
 - **Reviewer**（评估+参考回答）：tutor.evaluate（reference + gap）
 - **Visualizer**（图谱/图表）：graph_viz + pyside_graph / pyside_widgets
 - **AutoHarness**（教学 harness 的生成+执行+演化）：auto_harness.py —— 见设计理念第 14 条
+- **Domain Pack**（领域模板 + 领域专用解码 + 领域专用 Prompt）：domain_templates.py /
+  decoder_electricity.py / prompt_registry.py 的领域键
+  —— 只补骨架与策展场景，**禁止覆盖来源约束内容、禁止在映射失败时改写学习路径**；
+  统一出口是 `decoder.scene_for_concept`，领域解析失败必须降级到通用场景 —— 见设计理念第 15 条
 
 ## 长期演进（见 docs/）
 
+0. ~~AutoHarness 建议卡 UI 接线~~ ✅ 2026-09-29 已全部落地：
+   - 演化卡：`main._offer_harness_evolution`（stuck 信号 → `evolve_joint`
+     融合演化 → 按 reason 分派琥珀/紫/青卡 → 会话级去重
+     `(asset, concept, reason, candidate)`）；
+   - 迁移卡：`main._offer_harness_transfer_cards`（stuck 信号 →
+     `_find_transfer_candidates` 差分评估 → migrate 结论 → 浅蓝卡，
+     最多 2 张/轮、`(target, source, spec)` 去重、已展示源跳过重复评估）；
+   - `teach_view._display_result` 连接 `harness_adopt_requested`/
+     `harness_transfer_requested` + `_attach_harness_history`（审计链渲染）；
+   - 采纳审计 reason 修正：stuck 卡采纳记 `"stuck"` 而非 `"manual"`。
+   端到端测试：`tests/test_ui.py::TestHarnessSuggestionUI::
+   test_stuck_signal_shows_evolution_card` / `test_transfer_card_via_stuck`。
+
 1. SourceLocation（页码/章节定位）→ 回答引用可溯源
 2. LLM prompt 随 UI 语言（当前 LLM 输出保持中文）
-3. main.py 按视图拆包（ui/views/）
+3. ~~main.py 按视图拆包（ui/views/）~~ ✅ 已落地：`ui/views/` 7 视图 + `ui/view_manager.py`
 4. 数据库持久化 + 向量/图检索（Hybrid Knowledge）
 5. 会话内多轮对话沉淀到 TeacherModel 深度闭环
+6. 领域包扩展：`DOMAIN_TEMPLATES` 注册更多领域（碳市场等）、领域专用 Prompt 模板
+   （`docs/电力交易领域学习方案.md` Phase 3）；演示数据重建脚本已落地为 `regen_all.py`
+*（内容由AI生成，仅供参考）*
