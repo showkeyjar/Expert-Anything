@@ -169,6 +169,10 @@ Do not build a simple RAG chatbot.
    掌握预测卡（`mastery_prediction` 接线，i18n `prediction_*`）展示每概念
    趋势/预测值/还需会话数，下滑概念排最前，行内「继续学」直达教学——
    复习凹陷已被剔除，遗忘不会被误报为下滑。
+   学习计划卡同样接入教师模型：`generate_study_plan(asset, state, minutes,
+   teacher=)` 内部真正调用 `anomaly_concept_ids`（此前 import 后从未调用，
+   anomaly_ids 恒空集——异常提权在学习计划入口整段失效），UI 传当前资产
+   还原的 TeacherModel；无 teacher 时保持路径原序（兼容旧调用）。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。

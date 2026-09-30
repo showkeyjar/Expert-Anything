@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 
 from expert_anything.core import config, storage
 from expert_anything.core.models import KnowledgeAsset
+from expert_anything.core.i18n import t
 
 MASTERY_ALPHA = 0.4  # weight given to the newest evaluation
 
@@ -455,7 +456,10 @@ def knowledge_blind_spots(
 
 
 def generate_study_plan(
-    asset: KnowledgeAsset, state: dict, minutes: int = 30
+    asset: KnowledgeAsset,
+    state: dict,
+    minutes: int = 30,
+    teacher: "object | None" = None,
 ) -> list[dict]:
     """Generate a time-boxed study plan for today.
 
@@ -463,15 +467,19 @@ def generate_study_plan(
     estimates ~5 minutes per concept (teach + quiz). Also interleaves
     due reviews if time allows.
 
+    ``teacher`` is a core.teacher.TeacherModel (or None). When given,
+    open/investigating anomalies (plus surfaced learner-gap) promote the
+    touched concepts inside adaptive_path — the plan inherits that
+    priority instead of silently dropping it.
+
     Returns list of dicts: name, id, type ("new" or "review"), est_minutes, reason
     """
     from expert_anything.core.teacher import anomaly_concept_ids
     from expert_anything.core.decoder import classify_relation
 
-    # Get anomaly IDs
-    anomaly_ids: set = set()
-    # Teacher model is loaded externally; we just check asset for now
-    # (anomaly_ids from caller is ideal but we keep this self-contained)
+    # anomaly-driven priority comes from the teacher model (AGENTS.md §2);
+    # None keeps the old behaviour for callers that have no teacher yet
+    anomaly_ids = anomaly_concept_ids(asset, teacher)
 
     plan: list[dict] = []
     remaining = minutes
@@ -487,7 +495,7 @@ def generate_study_plan(
                 "id": d.get("id", ""),
                 "type": "review",
                 "est_minutes": 3,
-                "reason": "到期复习",
+                "reason": t("plan_reason_due"),
             }
         )
         remaining -= 3
@@ -503,15 +511,15 @@ def generate_study_plan(
         tags = item.get("tags", [])
         reason_parts = []
         if "anom" in tags:
-            reason_parts.append("异常检测")
+            reason_parts.append(t("plan_reason_anomaly"))
         if "stuck" in tags:
-            reason_parts.append("卡壳")
+            reason_parts.append(t("plan_reason_stuck"))
         if "high_leverage" in tags:
-            reason_parts.append("高杠杆")
+            reason_parts.append(t("plan_reason_leverage"))
         if "weak" in tags:
-            reason_parts.append("薄弱")
+            reason_parts.append(t("plan_reason_weak"))
         if not reason_parts:
-            reason_parts.append("学习路径")
+            reason_parts.append(t("plan_reason_path"))
         plan.append(
             {
                 "name": item["name"],

@@ -1132,6 +1132,36 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Study",
         "ja": "学習する",
     },
+    "plan_reason_due": {
+        "zh-CN": "到期复习",
+        "en": "review due",
+        "ja": "復習期",
+    },
+    "plan_reason_anomaly": {
+        "zh-CN": "异常检测",
+        "en": "anomaly",
+        "ja": "異常検知",
+    },
+    "plan_reason_stuck": {
+        "zh-CN": "卡壳",
+        "en": "stuck",
+        "ja": "停滞",
+    },
+    "plan_reason_leverage": {
+        "zh-CN": "高杠杆",
+        "en": "high leverage",
+        "ja": "高レバレッジ",
+    },
+    "plan_reason_weak": {
+        "zh-CN": "薄弱",
+        "en": "weak",
+        "ja": "弱点",
+    },
+    "plan_reason_path": {
+        "zh-CN": "学习路径",
+        "en": "learning path",
+        "ja": "学習パス",
+    },
     "due_gain_weak": {
         "zh-CN": "复习巩固失败，间隔缩短",
         "en": "review failed to consolidate — shorter interval",

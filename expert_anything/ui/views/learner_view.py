@@ -735,7 +735,18 @@ class LearnerView(QWidget):
         if asset is not None:
             from expert_anything.core.learner import generate_study_plan
 
-            plan = generate_study_plan(asset, self._main.learner, minutes=30)
+            teacher = None
+            td = self._main.teacher_models.get(self._main.current_asset_id)
+            if td:
+                from expert_anything.core.teacher import TeacherModel
+
+                try:
+                    teacher = TeacherModel.from_dict(td)
+                except Exception:
+                    teacher = None
+            plan = generate_study_plan(
+                asset, self._main.learner, minutes=30, teacher=teacher
+            )
             if plan:
                 sp_frame = QFrame()
                 sp_frame.setStyleSheet(

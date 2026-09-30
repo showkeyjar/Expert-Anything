@@ -34,6 +34,7 @@ from expert_anything.core.learner import (
 from expert_anything.core.models import Concept, KnowledgeAsset, Relation
 from expert_anything.core.parsers import extract_from_bytes
 from expert_anything.core.teacher import (
+    Anomaly,
     TeacherModel,
     anomaly_concept_ids,
     build_teacher_model,
@@ -891,6 +892,66 @@ class TestLearner(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 # tutor (deterministic)
 # --------------------------------------------------------------------------- #
+class TestStudyPlanAnomalyPriority(unittest.TestCase):
+    """generate_study_plan must consume the teacher model: without it the
+    anomaly-driven priority inside adaptive_path never reaches the plan
+    (the whole point of AGENTS.md §12 stuck/learner_gap closed loop)."""
+
+    def _asset(self):
+        return KnowledgeAsset(
+            asset_id="a1",
+            type="text",
+            title="T",
+            source_name="t.md",
+            created_at="",
+            concepts=[
+                Concept(id="c1", name="alpha", definition="d"),
+                Concept(id="c2", name="beta", definition="d"),
+            ],
+            relations=[],
+            learning_path=["c2", "c1"],
+        )
+
+    def _teacher_with_gap_on_alpha(self):
+        tm = TeacherModel(asset_id="a1")
+        tm.anomalies.append(
+            Anomaly(
+                id="an1",
+                kind="learner_gap",
+                description="learner gap on alpha",
+                status="open",
+            )
+        )
+        return tm
+
+    def test_plan_promotes_anomaly_concepts(self):
+        from expert_anything.core.learner import generate_study_plan
+        from expert_anything.core.teacher import anomaly_concept_ids
+
+        asset = self._asset()
+        state = {"concepts": {}, "history": []}
+        self.assertEqual(
+            anomaly_concept_ids(asset, self._teacher_with_gap_on_alpha()),
+            {"c1"},
+        )
+
+        plan = generate_study_plan(
+            asset, state, minutes=30, teacher=self._teacher_with_gap_on_alpha()
+        )
+        names = [p["name"] for p in plan]
+        self.assertIn("alpha", names)
+        self.assertLess(names.index("alpha"), names.index("beta"))
+
+    def test_plan_without_teacher_keeps_path_order(self):
+        from expert_anything.core.learner import generate_study_plan
+
+        asset = self._asset()
+        state = {"concepts": {}, "history": []}
+        plan = generate_study_plan(asset, state, minutes=30)
+        names = [p["name"] for p in plan]
+        self.assertEqual(names, ["beta", "alpha"])
+
+
 class TestTutor(unittest.TestCase):
     def setUp(self):
         self.asset = extract_knowledge(SAMPLE, "agent-memory.md", llm=None)
