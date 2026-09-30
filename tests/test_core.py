@@ -1043,6 +1043,65 @@ class TestStyleRotationHint(unittest.TestCase):
         self.assertEqual(reason, "")
 
 
+class TestHarnessRotationRetention(unittest.TestCase):
+    """Harness 卡壳轮换与 tutor 主链路同构：下一站复习保持度明显更差
+    且 spec 声明的风格内有更好的替代时改道；证据不足保持盲循环。"""
+
+    def _harness(self, state=None, styles=None):
+        from expert_anything.core.auto_harness import Harness, fallback_harness
+        from expert_anything.core.models import KnowledgeAsset, Concept
+
+        asset = KnowledgeAsset(
+            asset_id="a1", type="text", title="T", source_name="t.md",
+            created_at="",
+            concepts=[Concept(id="c1", name="alpha", definition="d",
+                              evidence=["alpha is d"])],
+            relations=[], learning_path=["c1"],
+        )
+        spec = fallback_harness()
+        if styles is not None:
+            spec["policy"]["teach_styles"] = styles
+        return Harness(spec, asset=asset, learner_state=state or {})
+
+    def test_deviate_when_next_retains_worse(self):
+        h = self._harness(
+            state={"history": [
+                # current 例子 retains 0.8
+                {"concept": "a", "score": 0.8, "meta": {"style": "例子", "review": True}},
+                {"concept": "b", "score": 0.8, "meta": {"style": "例子", "review": True}},
+                # blind-cycle next 图示 retains 0.3
+                {"concept": "c", "score": 0.3, "meta": {"style": "图示", "review": True}},
+                {"concept": "d", "score": 0.3, "meta": {"style": "图示", "review": True}},
+                # 拆解步骤 retains 0.9
+                {"concept": "e", "score": 0.9, "meta": {"style": "拆解步骤", "review": True}},
+                {"concept": "f", "score": 0.9, "meta": {"style": "拆解步骤", "review": True}},
+            ]},
+        )
+        out = h._rotate_args("teach", {"style": "例子"}, ["例子", "图示", "拆解步骤"])
+        self.assertEqual(out["style"], "拆解步骤")
+
+    def test_keep_blind_cycle_without_evidence(self):
+        h = self._harness(state={"history": []})
+        out = h._rotate_args("teach", {"style": "例子"}, ["例子", "图示", "拆解步骤"])
+        self.assertEqual(out["style"], "图示")
+
+    def test_deviation_stays_inside_spec_styles(self):
+        # spec 只声明 例子/图示：拆解步骤保持度再高也不能改道出 spec
+        h = self._harness(
+            state={"history": [
+                {"concept": "a", "score": 0.8, "meta": {"style": "例子", "review": True}},
+                {"concept": "b", "score": 0.8, "meta": {"style": "例子", "review": True}},
+                {"concept": "c", "score": 0.3, "meta": {"style": "图示", "review": True}},
+                {"concept": "d", "score": 0.3, "meta": {"style": "图示", "review": True}},
+                {"concept": "e", "score": 0.9, "meta": {"style": "拆解步骤", "review": True}},
+                {"concept": "f", "score": 0.9, "meta": {"style": "拆解步骤", "review": True}},
+            ]},
+            styles=["例子", "图示"],
+        )
+        out = h._rotate_args("teach", {"style": "例子"}, ["例子", "图示"])
+        self.assertEqual(out["style"], "图示")
+
+
 class TestTutor(unittest.TestCase):
     def setUp(self):
         self.asset = extract_knowledge(SAMPLE, "agent-memory.md", llm=None)

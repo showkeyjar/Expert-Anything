@@ -541,11 +541,25 @@ class Harness:
         return {}
 
     def _rotate_args(self, tool: str, args: dict, styles: list[str]) -> dict:
-        """卡壳轮换：讲解/复习换下一个风格（对应现有 stuck 闭环的样式轮换）。"""
+        """卡壳轮换：讲解/复习换下一个风格（对应现有 stuck 闭环的样式轮换）。
+
+        保持度感知（同 tutor 主链路）：当学习轨迹显示盲循环下一站的复习
+        保持度明显更差、且 spec 声明的风格内有保持更好的替代时，改道到
+        替代风格；证据不足时保持盲循环——样本不足不干预。
+        """
         out = dict(args)
         if tool in ("teach", "review"):
             cur = args.get("style", styles[0] if styles else "例子")
             nxt = _next_style(cur)
+            try:
+                from expert_anything.core.learner import style_rotation_hint
+
+                nxt, _reason = style_rotation_hint(
+                    self.learner_state, cur, nxt,
+                    styles or list(STYLE_CYCLE),
+                )
+            except Exception:
+                pass
             out["style"] = nxt
         return out
 

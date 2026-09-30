@@ -179,6 +179,9 @@ Do not build a simple RAG chatbot.
    的替代风格时才改道（默认保持盲循环不变，样本不足不干预——保守降级）；
    lesson 落 `rotated_style` + `rotation_reason="retention"`（LLM 分支与
    deterministic 分支都落，教学轨迹可追溯改道原因）。
+   auto_harness 的 `Harness._rotate_args` 同构接入：候选池限定 spec 声明的
+   `policy.teach_styles` 子集（改道永不越出 spec 结构约束），中文风格名
+   （例子/图示/拆解步骤）与轨迹桶 key 同源可直接查表；异常静默回落盲循环。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。
