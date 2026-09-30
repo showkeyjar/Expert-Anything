@@ -438,6 +438,85 @@ class TestLearner(unittest.TestCase):
         self.assertEqual(g["measurable"], 1)
         self.assertEqual(g["concepts"][0]["baseline"], 0.7)
 
+    def test_incorporate_review_gain_signal_negative(self):
+        from expert_anything.core.models import Concept, KnowledgeAsset
+        from expert_anything.core.teacher import (
+            TeacherModel,
+            incorporate_review_gain_signal,
+        )
+
+        asset = KnowledgeAsset(
+            asset_id="a1",
+            type="text",
+            title="T",
+            source_name="t.md",
+            created_at="",
+            concepts=[Concept(id="c1", name="节点电价", definition="d", evidence=["e"])],
+            relations=[],
+        )
+        state = {"concepts": {}, "history": []}
+        record_evaluation(state, "节点电价", "a1", 0.9, "a", "f")
+        record_evaluation(state, "节点电价", "a1", 0.4, "a", "f",
+                          meta={"review": True})
+        teacher = TeacherModel(asset_id="a1")
+        teacher = incorporate_review_gain_signal(asset, teacher, "c1", state)
+        gaps = [a for a in teacher.anomalies if a.kind == "learner_gap"]
+        self.assertEqual(len(gaps), 1)
+        self.assertEqual(gaps[0].location, "节点电价")
+        self.assertTrue(any("复习无效" in s
+                            for s in teacher.concept_notes[0].learner_signals))
+        # idempotent: second call must not duplicate
+        teacher = incorporate_review_gain_signal(asset, teacher, "c1", state)
+        gaps = [a for a in teacher.anomalies if a.kind == "learner_gap"]
+        self.assertEqual(len(gaps), 1)
+
+    def test_incorporate_review_gain_signal_positive_noop(self):
+        from expert_anything.core.models import Concept, KnowledgeAsset
+        from expert_anything.core.teacher import (
+            TeacherModel,
+            incorporate_review_gain_signal,
+        )
+
+        asset = KnowledgeAsset(
+            asset_id="a1",
+            type="text",
+            title="T",
+            source_name="t.md",
+            created_at="",
+            concepts=[Concept(id="c1", name="节点电价", definition="d", evidence=["e"])],
+            relations=[],
+        )
+        state = {"concepts": {}, "history": []}
+        record_evaluation(state, "节点电价", "a1", 0.4, "a", "f")
+        record_evaluation(state, "节点电价", "a1", 0.9, "a", "f",
+                          meta={"review": True})
+        teacher = TeacherModel(asset_id="a1")
+        teacher = incorporate_review_gain_signal(asset, teacher, "c1", state)
+        self.assertEqual(teacher.anomalies, [])
+
+    def test_incorporate_review_gain_signal_no_baseline_noop(self):
+        from expert_anything.core.models import Concept, KnowledgeAsset
+        from expert_anything.core.teacher import (
+            TeacherModel,
+            incorporate_review_gain_signal,
+        )
+
+        asset = KnowledgeAsset(
+            asset_id="a1",
+            type="text",
+            title="T",
+            source_name="t.md",
+            created_at="",
+            concepts=[Concept(id="c1", name="节点电价", definition="d", evidence=["e"])],
+            relations=[],
+        )
+        state = {"concepts": {}, "history": []}
+        record_evaluation(state, "节点电价", "a1", 0.3, "a", "f",
+                          meta={"review": True})
+        teacher = TeacherModel(asset_id="a1")
+        teacher = incorporate_review_gain_signal(asset, teacher, "c1", state)
+        self.assertEqual(teacher.anomalies, [])
+
     def test_review_gain_empty_history(self):
         g = review_gain({"concepts": {}, "history": []})
         self.assertEqual(g["avg_gain"], 0.0)

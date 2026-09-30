@@ -899,6 +899,79 @@ def incorporate_comparison(
     return teacher
 
 
+def incorporate_review_gain_signal(
+    asset: KnowledgeAsset,
+    teacher: TeacherModel | None,
+    concept_id: str,
+    learner_state: dict,
+) -> TeacherModel:
+    """Closed-loop step for reviews that fail to consolidate.
+
+    A review (vary=1, fresh angle) that scores BELOW the learner's own
+    first-time baseline means the current review strategy is not landing:
+    the score did not stick. Rather than scheduling the same kind of
+    review again, the concept is surfaced as a ``learner_gap`` anomaly
+    (kind-compatible with existing filters) so the anomaly-prioritized
+    path keeps it in front of the learner and Tutor.teach rotates its
+    style — the same re-ideation stance as stuck signals, reached from
+    the review side.
+
+    Fires only when the average review score sits at least 0.1 BELOW the
+    best first-time score (no single-miss triggers). Idempotent
+    (exact-description dedup). Deterministic, no LLM.
+    """
+    from expert_anything.core.learner import review_gain
+
+    if teacher is None:
+        teacher = TeacherModel(
+            asset_id=asset.asset_id, status="fallback", method="lazy_init"
+        )
+    c = asset.concept_by_id(concept_id)
+    if c is None:
+        return teacher
+    cname = c.name
+
+    row = next(
+        (r for r in review_gain(learner_state)["concepts"] if r["concept"] == cname),
+        None,
+    )
+    if row is None or row["gain"] >= -0.1:
+        return teacher
+
+    note = teacher.concept_note_by_id(concept_id)
+    if note is None:
+        note = ConceptNote(concept_id=concept_id, name=cname)
+        teacher.concept_notes.append(note)
+    signal = (
+        f"复习无效信号:复习「{cname}」后得分({row['review_avg']:.0%})反而低于"
+        f"首次学习基线({row['baseline']:.0%}),间隔复习的换角度讲解未生效。"
+    )
+    if signal not in note.learner_signals:
+        note.learner_signals.append(signal)
+        note.learner_signals = note.learner_signals[-8:]
+    desc = (
+        f"复习巩固检查:「{cname}」复习后平均得分({row['review_avg']:.0%})低于"
+        f"首次学习最高分({row['baseline']:.0%}),复习未产生巩固效果。"
+        f"教学将更换讲解风格并优先重教该概念,而非重复同样的复习。"
+    )
+    if not any(
+        a.kind == "learner_gap" and a.description == desc for a in teacher.anomalies
+    ):
+        teacher.anomalies.append(
+            Anomaly(
+                id=_new_id("an"),
+                kind="learner_gap",
+                description=desc,
+                location=cname,
+                severity="medium",
+                status="surfaced_to_student",
+                source="internal",
+            )
+        )
+    teacher.synthesized_at = datetime.now(timezone.utc).isoformat()
+    return teacher
+
+
 def anomaly_concept_ids(
     asset: KnowledgeAsset, teacher: TeacherModel | None
 ) -> set[str]:

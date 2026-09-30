@@ -149,6 +149,11 @@ Do not build a simple RAG chatbot.
    按首次学习计，优雅降级），学习者模型页渲染「复习巩固增益」卡（i18n 键
    `review_gain_*` 五键三语）：有数据显均值+Top5 概念行（正绿负红），
    无复习记录显教育性提示而非隐藏——Learning Gain 锚点必须可发现（§5）。
+   **负增益反哺教学**：复习均分低于首次基线 0.1 以上（换角度讲解没生效）时，
+   `teacher.incorporate_review_gain_signal` 挂 `learner_gap` 异常 + learner_signals
+   （幂等去重），经 `anomaly_prioritized_path` 提入教学优先级——重教换风格，
+   而不是排更多同类复习；teach_view 三通道（answer/practice 按 `_review_mode`、
+   quiz 按 `_quiz_vary` 快照）评估落轨迹后自动检查。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。

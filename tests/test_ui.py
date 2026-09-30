@@ -213,6 +213,43 @@ class TestConceptPanel(unittest.TestCase):
         panel.close()
 
 
+class TestReviewIneffectiveAnomaly(unittest.TestCase):
+    """Negative review gain must sink a learner_gap anomaly into the
+    teacher model — the review loop feeds teaching priority, it does not
+    stop at a red label on the learner page (AGENTS.md §2/§6)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+
+    def test_answer_channel_review_negative_writes_anomaly(self):
+        from expert_anything.core.learner import record_evaluation
+
+        win = self.win
+        asset = win.get_asset()
+        state = win.learner
+        state["history"] = []
+        state["concepts"] = {}
+        concept = asset.concepts[0]
+        # first-time learning reached 0.9; a review drops to 0.4
+        record_evaluation(state, concept.name, asset.asset_id, 0.9, "a", "f")
+        record_evaluation(state, concept.name, asset.asset_id, 0.4, "a", "f",
+                          meta={"channel": "answer", "review": True})
+        win.teach_view._review_mode = True
+        try:
+            win.teach_view._check_review_gain_for(concept, asset)
+        finally:
+            win.teach_view._review_mode = False
+        from expert_anything.core.teacher import TeacherModel
+
+        td = win.teacher_models.get(asset.asset_id) or {}
+        teacher = TeacherModel.from_dict(td)
+        gaps = [a for a in teacher.anomalies
+                if a.kind == "learner_gap" and "复习" in a.description]
+        self.assertTrue(gaps, "negative review gain must produce a learner_gap anomaly")
+        win.teacher_models[asset.asset_id] = {}  # reset for other tests
+
+
 class TestReviewGainCard(unittest.TestCase):
     """The learner view must surface review consolidation gain (§5 anchor)."""
 

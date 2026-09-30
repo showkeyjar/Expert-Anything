@@ -844,7 +844,7 @@ class TeachView(QWidget):
             self._main.save_learner_state()
         self.evaluate_recorded.emit()
 
-        # Stuck detection 鈥?feeds teacher model priority, keeps learning loop alive.
+        # Stuck detection — feeds teacher model priority, keeps learning loop alive.
         # AutoHarness evolution removed from the main teaching flow: it was
         # polluting the lesson card with meta-optimization suggestions instead
         # of letting the learner focus on the concept.
@@ -871,6 +871,13 @@ class TeachView(QWidget):
                 self.stuck_detected.emit(concept.name, hit)
         except Exception:
             pass
+
+        # Review-effectiveness check: a review that scores below the
+        # learner's own first-time baseline means the review strategy is
+        # not landing — surface it to the teacher model (re-teach with a
+        # rotated style) instead of scheduling more of the same review.
+        if self._review_mode:
+            self._check_review_gain_for(concept, asset)
 
         # Display evaluation
         if self._teach_view_widget:
@@ -966,6 +973,8 @@ class TeachView(QWidget):
         self._main.save_learner_state()
         self.evaluate_recorded.emit()
         self._check_harness_for(concept, asset, "practice", score)
+        if self._review_mode:
+            self._check_review_gain_for(concept, asset)
 
     # ------------------------------------------------------------------
     # Quick-quiz (P1 quick self-test)
@@ -1115,6 +1124,8 @@ class TeachView(QWidget):
         self._main.save_learner_state()
         self.evaluate_recorded.emit()
         self._check_harness_for(concept, asset, "quiz", score)
+        if self._quiz_vary:
+            self._check_review_gain_for(concept, asset)
 
     def _on_neighbor_clicked(self, concept_name: str):
         """Learner clicked a related-concept chip in the teach card 鈥?start
@@ -1235,6 +1246,28 @@ class TeachView(QWidget):
                 save_teacher(asset.asset_id, teacher)
                 self._main.teacher_models[asset.asset_id] = teacher.to_dict()
                 self.stuck_detected.emit(concept.name, hit)
+        except Exception:
+            pass
+
+    def _check_review_gain_for(self, concept, asset):
+        """After a review attempt: if the concept's review average fell at
+        least 0.1 below its first-time baseline, sink a learner_gap anomaly
+        into the teacher model so the anomaly-prioritized path re-teaches it
+        (rotated style) instead of scheduling more identical reviews."""
+        if concept is None:
+            return
+        from expert_anything.core.teacher import incorporate_review_gain_signal
+
+        try:
+            teacher = None
+            td = self._main.teacher_models.get(asset.asset_id)
+            if td:
+                teacher = TeacherModel.from_dict(td)
+            teacher = incorporate_review_gain_signal(
+                asset, teacher, concept.id, self._main.learner
+            )
+            save_teacher(asset.asset_id, teacher)
+            self._main.teacher_models[asset.asset_id] = teacher.to_dict()
         except Exception:
             pass
 
