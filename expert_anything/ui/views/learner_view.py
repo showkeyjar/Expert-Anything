@@ -564,6 +564,98 @@ class LearnerView(QWidget):
             empty.setWordWrap(True)
             layout.addWidget(empty)
 
+        # Mastery forecast — per-concept trend from teaching-channel
+        # history only (review dips excluded, see mastery_prediction).
+        # Rows are actionable: every concept links back into the teaching
+        # loop, falling-trend concepts first (they need the intervention).
+        from expert_anything.core.learner import mastery_prediction
+
+        preds = []
+        for rec in self._main.learner.get("concepts", {}).values():
+            name = rec.get("name") or rec.get("key")
+            if not name:
+                continue
+            p = mastery_prediction(self._main.learner, name)
+            if p.get("trend") != "unknown":
+                preds.append((name, p))
+        # falling first (intervention), then rising (momentum)
+        order = {"falling": 0, "rising": 1, "flat": 2}
+        preds.sort(key=lambda x: order.get(x[1]["trend"], 3))
+        if preds:
+            pf_frame = QFrame()
+            pf_frame.setStyleSheet(
+                "QFrame { background-color: #F3E5F5; border: 1px solid #CE93D8;"
+                "border-radius: 10px; }"
+            )
+            pf_lay = QVBoxLayout(pf_frame)
+            pf_lay.setContentsMargins(16, 12, 16, 12)
+            pf_lay.setSpacing(8)
+
+            pf_title = QLabel(self._main._t("prediction_title"))
+            pf_title.setStyleSheet(
+                "font-size: 16px; font-weight: bold; color: #6A1B9A;"
+            )
+            pf_lay.addWidget(pf_title)
+
+            # literal keys (not f-string composed) so the i18n scanner
+            # can see them used
+            trend_meta = {
+                "rising": ("#2E7D32", "#E8F5E9", "↑",
+                           self._main._t("prediction_rising")),
+                "falling": ("#C62828", "#FFEBEE", "↓",
+                            self._main._t("prediction_falling")),
+                "flat": ("#546E7A", "#ECEFF1", "→",
+                         self._main._t("prediction_flat")),
+            }
+            for name, p in preds[:5]:
+                trend = p["trend"]
+                fg, bg, arrow, trend_text = trend_meta.get(
+                    trend, trend_meta["flat"]
+                )
+                row = QHBoxLayout()
+                row.setSpacing(8)
+
+                t_lbl = QLabel(f"{arrow} {trend_text}")
+                t_lbl.setStyleSheet(
+                    f"background-color: {bg}; color: {fg}; border-radius: 8px;"
+                    "padding: 2px 8px; font-size: 12px; font-weight: bold;"
+                )
+                row.addWidget(t_lbl)
+
+                n_lbl = QLabel(name)
+                n_lbl.setStyleSheet(
+                    "font-size: 14px; color: #37474F; font-weight: 500;"
+                )
+                row.addWidget(n_lbl)
+
+                v = f"{p['predicted_mastery']:.0%}"
+                if p.get("sessions_needed", -1) > 0:
+                    detail = self._main._t(
+                        "prediction_row", v=v, n=p["sessions_needed"]
+                    )
+                elif p.get("sessions_needed") == 0 or p.get("will_achieve"):
+                    detail = self._main._t("prediction_achieved", v=v)
+                else:
+                    detail = self._main._t("prediction_no_est", v=v)
+                d_lbl = QLabel(detail)
+                d_lbl.setStyleSheet("font-size: 12px; color: #78909C;")
+                row.addWidget(d_lbl, 1)
+
+                go_btn = QPushButton(self._main._t("prediction_go"))
+                go_btn.setStyleSheet(
+                    "QPushButton { background-color: #6A1B9A; color: white;"
+                    "border: none; border-radius: 6px; padding: 3px 10px;"
+                    "font-size: 12px; }"
+                    "QPushButton:hover { background-color: #4A148C; }"
+                )
+                go_btn.clicked.connect(
+                    lambda checked, n=name: self.teach_requested.emit(n)
+                )
+                row.addWidget(go_btn)
+                pf_lay.addLayout(row)
+
+            layout.addWidget(pf_frame)
+
         # Knowledge blind spots — high-risk unlearned prerequisites
         asset = self._main.get_asset()
         if asset is not None:

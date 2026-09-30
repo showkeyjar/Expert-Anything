@@ -213,6 +213,103 @@ class TestConceptPanel(unittest.TestCase):
         panel.close()
 
 
+class TestMasteryPredictionCard(unittest.TestCase):
+    """The forecast card must appear, order falling-trend concepts first
+    (they need the intervention), and stay out of the review channel's
+    forgetting dips."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+
+    def test_prediction_card_shows_falling_first(self):
+        win = self.win
+        state = win.learner
+        # newest-first teaching history: F falling (0.9->0.4),
+        # R rising (0.3->0.6)
+        state["history"] = [
+            {"concept": "F", "score": 0.4},
+            {"concept": "F", "score": 0.9},
+            {"concept": "R", "score": 0.6},
+            {"concept": "R", "score": 0.3},
+        ]
+        state["concepts"] = {
+            "f": {"key": "f", "name": "F", "mastery": 0.4, "sources": ["a1"]},
+            "r": {"key": "r", "name": "R", "mastery": 0.6, "sources": ["a1"]},
+        }
+        win.learner_view.refresh()
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+
+        # processEvents alone does not flush DeferredDelete without a
+        # running event loop — force it so findChildren sees live widgets
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+        labels = [l.text() for l in win.learner_view.findChildren(QLabel)]
+        self.assertTrue(
+            any("掌握预测" in t or "Mastery Forecast" in t for t in labels),
+            f"forecast card title not found: {sorted(set(labels))[:15]}",
+        )
+        trend_rows = [t for t in labels if "趋势" in t or "trend" in t.lower()]
+        self.assertGreaterEqual(len(trend_rows), 2, "trend rows missing")
+        # falling badge must render before rising badge (intervention
+        # first) — search INSIDE the forecast card frame so other sections
+        # cannot pollute the ordering assertion
+        title_lbl = next(
+            (l for l in win.learner_view.findChildren(QLabel)
+             if "掌握预测" in l.text() or "Mastery Forecast" in l.text()),
+            None,
+        )
+        self.assertIsNotNone(title_lbl, "forecast title not found")
+        card_labels = [
+            l.text() for l in title_lbl.parent().findChildren(QLabel)
+        ]
+        pos = {
+            "down": next(
+                (i for i, t in enumerate(card_labels)
+                 if t.startswith("\u2193")), -1,
+            ),
+            "up": next(
+                (i for i, t in enumerate(card_labels)
+                 if t.startswith("\u2191")), -1,
+            ),
+        }
+        self.assertGreaterEqual(pos["down"], 0, "falling tag missing")
+        self.assertGreater(pos["up"], -1, "rising tag missing")
+        self.assertLess(pos["down"], pos["up"], "falling must sort first")
+        # actionable: each forecast row carries a study button
+        go_btns = [
+            b for b in win.learner_view.findChildren(QPushButton)
+            if "继续学" in b.text() or b.text() == "Study"
+        ]
+        self.assertGreaterEqual(len(go_btns), 2, "study buttons missing")
+
+    def test_prediction_card_ignores_review_dips(self):
+        win = self.win
+        state = win.learner
+        # teaching rising + review dip must NOT flip the trend to falling
+        state["history"] = [
+            {"concept": "F", "score": 0.2,
+             "meta": {"channel": "answer", "review": True}},
+            {"concept": "F", "score": 0.6},
+            {"concept": "F", "score": 0.3},
+        ]
+        state["concepts"] = {
+            "f": {"key": "f", "name": "F", "mastery": 0.5, "sources": ["a1"]},
+        }
+        win.learner_view.refresh()
+        from PySide6.QtCore import QEvent
+        from PySide6.QtWidgets import QApplication, QLabel
+
+        QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+        labels = [l.text() for l in win.learner_view.findChildren(QLabel)]
+        self.assertFalse(
+            any("下滑" in t or "falling" in t for t in labels),
+            "review dip incorrectly reported as falling trend",
+        )
+
+
 class TestStyleReviewBucketTag(unittest.TestCase):
     """The style-effectiveness card must surface the retention bucket —
     teaching avg and review retention answer different questions and

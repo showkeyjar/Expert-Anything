@@ -166,6 +166,9 @@ Do not build a simple RAG chatbot.
    混入会稀释教学风格归因；只有复习记录的风格以 count=0 + review 桶保留。
    学习者模型页风格效果卡渲染复习巩固标签（i18n `style_review_bucket`，
    青色小标签「复习巩固 N 次 · 均分 X%」）——教学 avg 与复习保持度并排可见。
+   掌握预测卡（`mastery_prediction` 接线，i18n `prediction_*`）展示每概念
+   趋势/预测值/还需会话数，下滑概念排最前，行内「继续学」直达教学——
+   复习凹陷已被剔除，遗忘不会被误报为下滑。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。

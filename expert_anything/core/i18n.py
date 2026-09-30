@@ -1092,6 +1092,46 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "review retention ×{n} · avg {avg}",
         "ja": "復習定着 {n} 回・平均 {avg}",
     },
+    "prediction_title": {
+        "zh-CN": "掌握预测",
+        "en": "Mastery Forecast",
+        "ja": "習得予測",
+    },
+    "prediction_rising": {
+        "zh-CN": "上升趋势",
+        "en": "rising",
+        "ja": "上昇傾向",
+    },
+    "prediction_falling": {
+        "zh-CN": "下滑趋势",
+        "en": "falling",
+        "ja": "下降傾向",
+    },
+    "prediction_flat": {
+        "zh-CN": "平稳",
+        "en": "flat",
+        "ja": "横ばい",
+    },
+    "prediction_row": {
+        "zh-CN": "预测 {v} · 还需约 {n} 次学习",
+        "en": "forecast {v} · ~{n} sessions to mastery",
+        "ja": "予測 {v}・あと約 {n} 回",
+    },
+    "prediction_no_est": {
+        "zh-CN": "预测 {v} · 暂无达标迹象，建议换角度重学",
+        "en": "forecast {v} · no path to mastery yet — try a different angle",
+        "ja": "予測 {v}・見通せません、別の角度から再学習を",
+    },
+    "prediction_achieved": {
+        "zh-CN": "预测 {v} · 已达掌握线",
+        "en": "forecast {v} · mastery reached",
+        "ja": "予測 {v}・習得ライン到達",
+    },
+    "prediction_go": {
+        "zh-CN": "继续学",
+        "en": "Study",
+        "ja": "学習する",
+    },
     "due_gain_weak": {
         "zh-CN": "复习巩固失败，间隔缩短",
         "en": "review failed to consolidate — shorter interval",
