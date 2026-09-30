@@ -438,6 +438,35 @@ class TestLearner(unittest.TestCase):
         self.assertEqual(g["measurable"], 1)
         self.assertEqual(g["concepts"][0]["baseline"], 0.7)
 
+    def test_stuck_concepts_ignores_review_channel(self):
+        from expert_anything.core.learner import stuck_concepts
+
+        # first-time learning passed, then reviews failed — that is normal
+        # forgetting (gain_weak handles it), NOT a teaching-strategy failure
+        state = {"concepts": {}, "history": [
+            {"key": "k", "concept": "LMP", "score": 0.85,
+             "meta": {"channel": "answer"}},
+            {"key": "k", "concept": "LMP", "score": 0.2,
+             "meta": {"channel": "quiz", "review": True}},
+            {"key": "k", "concept": "LMP", "score": 0.3,
+             "meta": {"channel": "answer", "review": True}},
+            {"key": "k", "concept": "LMP", "score": 0.25,
+             "meta": {"channel": "practice", "review": True}},
+        ]}
+        self.assertEqual(stuck_concepts(state), [])
+
+    def test_stuck_concepts_fires_on_teaching_channel(self):
+        from expert_anything.core.learner import stuck_concepts
+
+        state = {"concepts": {}, "history": [
+            {"key": "k", "concept": "LMP", "score": 0.2},
+            {"key": "k", "concept": "LMP", "score": 0.3},
+            {"key": "k", "concept": "LMP", "score": 0.25},
+        ]}
+        out = stuck_concepts(state)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["name"], "LMP")
+
     def test_style_effectiveness_separates_review_bucket(self):
         from expert_anything.core.learner import style_effectiveness
 

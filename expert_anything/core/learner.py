@@ -1160,6 +1160,13 @@ def stuck_concepts(
     Reads the history trace (source of truth), newest-first; returns
     [{key, name, attempts, avg}] for every concept with >= ``attempts``
     recent evaluations whose maximum score is still below ``threshold``.
+
+    Review-channel records (``meta.review``) are skipped: normal forgetting
+    during spaced review is expected behaviour, not a strategy failure —
+    low review scores are already handled by the review_gain→gain_weak
+    pipeline (retention signal). Mixing channels would fire stuck → style
+    rotation / O1 evolution on data that only says "the learner forgot",
+    double-signalling one root cause with the learner_gap anomaly.
     """
     if attempts < 2:
         attempts = 2
@@ -1168,6 +1175,8 @@ def stuck_concepts(
     recent: dict[str, list[float]] = {}
     names: dict[str, str] = {}
     for h in state.get("history", []):  # newest first
+        if (h.get("meta") or {}).get("review"):
+            continue  # retention evidence — not a teaching-strategy failure
         key = h.get("key") or normalize(h.get("concept", ""))
         if not key:
             continue

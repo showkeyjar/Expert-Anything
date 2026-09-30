@@ -197,7 +197,11 @@ Do not build a simple RAG chatbot.
     - 学习轨迹（`record_evaluation(meta=...)`）是唯一事实源：通道/风格/策略
       轮换全部落轨迹，卡壳检测、报告、教师模型都读它而非叙述文本；
     - 卡壳闭环：连续 3 次评估不达标 → `stuck` 标签提优先级 + `Tutor.teach`
-      自动轮换讲解风格 + `incorporate_stuck_signal` 写入教师模型；
+      自动轮换讲解风格 + `incorporate_stuck_signal` 写入教师模型
+      （`stuck_concepts`/`regression_detection` 都**只看教学通道**：
+      `meta.review` 记录跳过——复习低分是间隔效应的正常遗忘/巩固失败，
+      归 gain_weak 管道处置，混入会误触发风格轮换/O1/O2 演化并与
+      learner_gap 异常双重信号污染一个根因）；
       同时驱动 `auto_harness.evolve_for_stuck` 演化 harness 结构
       （换风格+补 scene，候选再过 check_harness）；UI 教学页把候选渲染成
       建议卡，一键启用后按新 style 重讲并持久化 harness_state.json
