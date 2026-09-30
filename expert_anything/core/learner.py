@@ -793,6 +793,11 @@ def mastery_prediction(state: dict, concept_name: str) -> dict:
     Analyzes the score trajectory for a concept and predicts whether
     it's on track to reach 0.6 mastery.
 
+    Review-channel records (``meta.review``) are excluded: sessions here
+    mean teaching sessions, and the forgetting dips spaced review is
+    *designed to surface* would drag the slope negative — predicting
+    "will never achieve" from data that only says "needs another review".
+
     Returns:
         predicted_mastery: linear extrapolation of current trend
         will_achieve: bool, whether predicted >= 0.6
@@ -801,6 +806,8 @@ def mastery_prediction(state: dict, concept_name: str) -> dict:
     """
     scores: list[float] = []
     for h in state.get("history", []):
+        if (h.get("meta") or {}).get("review"):
+            continue  # retention dips are the review loop's job, not a trend
         if normalize(h.get("concept", "")) == normalize(concept_name):
             scores.append(float(h.get("score", 0.0)))
 

@@ -438,6 +438,30 @@ class TestLearner(unittest.TestCase):
         self.assertEqual(g["measurable"], 1)
         self.assertEqual(g["concepts"][0]["baseline"], 0.7)
 
+    def test_mastery_prediction_ignores_review_channel(self):
+        # teaching trend is rising; a forgetting dip in review must not
+        # drag the forecast ("needs review" != "will never learn it")
+        # history is newest-first: teach 0.5 (new), teach 0.3 (old),
+        # review dip 0.2 skipped -> teaching channel 0.3 -> 0.5 rising
+        state = {"concepts": {}, "history": [
+            {"concept": "LMP", "score": 0.2,
+             "meta": {"channel": "answer", "review": True}},
+            {"concept": "LMP", "score": 0.5},
+            {"concept": "LMP", "score": 0.3},
+        ]}
+        pred = mastery_prediction(state, "LMP")
+        self.assertEqual(pred["trend"], "rising")
+
+    def test_mastery_prediction_teaching_falling_still_detected(self):
+        # newest-first: 0.4 (new) ... 0.8 (old) -> falling
+        state = {"concepts": {}, "history": [
+            {"concept": "LMP", "score": 0.4},
+            {"concept": "LMP", "score": 0.6},
+            {"concept": "LMP", "score": 0.8},
+        ]}
+        pred = mastery_prediction(state, "LMP")
+        self.assertEqual(pred["trend"], "falling")
+
     def test_stuck_concepts_ignores_review_channel(self):
         from expert_anything.core.learner import stuck_concepts
 
