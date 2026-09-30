@@ -605,16 +605,37 @@ def style_effectiveness(state: dict) -> dict[str, dict]:
     ``style`` and ``channel`` — and computes per-style average score
     and attempt count.
 
-    Returns ``{style_name: {"avg": float, "count": int, "best_for": [concept_names]}}``.
+    Review records are counted separately under a ``"review"`` bucket:
+    a high review score proves the learner *retained* material, not
+    that the original teaching style was effective — mixing both into
+    one average would dilute style attribution (review scores skew
+    high because only mastered concepts get reviewed).
+
+    Returns ``{style_name: {"avg": float, "count": int, "best_for": [concept_names], "review": {...}}}``.
     Styles not present in history are omitted.
     """
     style_scores: dict[str, list[tuple[float, str]]] = {}
     for h in state.get("history", []):
         meta = h.get("meta") or {}
+        if meta.get("review"):
+            continue  # retention evidence, not teaching evidence
         style = meta.get("style") or meta.get("channel") or "default"
         score = float(h.get("score", 0.0))
         concept = h.get("concept", "")
         style_scores.setdefault(style, []).append((score, concept))
+
+    # Review records keep their own bucket (per review style) so the
+    # retention signal stays visible without polluting teaching-style
+    # averages.
+    review_scores: dict[str, list[tuple[float, str]]] = {}
+    for h in state.get("history", []):
+        meta = h.get("meta") or {}
+        if not meta.get("review"):
+            continue
+        style = meta.get("style") or meta.get("channel") or "default"
+        score = float(h.get("score", 0.0))
+        concept = h.get("concept", "")
+        review_scores.setdefault(style, []).append((score, concept))
 
     out: dict[str, dict] = {}
     for style, pairs in style_scores.items():
@@ -627,6 +648,24 @@ def style_effectiveness(state: dict) -> dict[str, dict]:
             "count": len(scores),
             "best_for": best_for[:5],
         }
+    for style, pairs in review_scores.items():
+        scores = [s for s, _ in pairs]
+        entry = out.get(style)
+        if entry is None:
+            out[style] = {
+                "avg": 0.0,
+                "count": 0,
+                "best_for": [],
+                "review": {
+                    "avg": round(sum(scores) / len(scores), 2),
+                    "count": len(scores),
+                },
+            }
+        else:
+            entry["review"] = {
+                "avg": round(sum(scores) / len(scores), 2),
+                "count": len(scores),
+            }
     return out
 
 

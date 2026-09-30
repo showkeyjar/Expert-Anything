@@ -438,6 +438,35 @@ class TestLearner(unittest.TestCase):
         self.assertEqual(g["measurable"], 1)
         self.assertEqual(g["concepts"][0]["baseline"], 0.7)
 
+    def test_style_effectiveness_separates_review_bucket(self):
+        from expert_anything.core.learner import style_effectiveness
+
+        state = {"concepts": {}, "history": [
+            {"concept": "A", "score": 0.5, "meta": {"style": "analogy"}},
+            # review of the same concept under the same style: high score
+            # is retention evidence, must NOT lift the teaching average
+            {"concept": "A", "score": 1.0, "meta": {"style": "analogy", "review": True}},
+        ]}
+        eff = style_effectiveness(state)
+        self.assertEqual(eff["analogy"]["avg"], 0.5)
+        self.assertEqual(eff["analogy"]["count"], 1)
+        self.assertEqual(eff["analogy"]["review"]["avg"], 1.0)
+        self.assertEqual(eff["analogy"]["review"]["count"], 1)
+
+    def test_style_effectiveness_review_only_style_kept(self):
+        from expert_anything.core.learner import style_effectiveness
+
+        state = {"concepts": {}, "history": [
+            {"concept": "B", "score": 0.7, "meta": {"style": "step", "review": True}},
+        ]}
+        eff = style_effectiveness(state)
+        # review-only style stays visible in its own bucket instead of
+        # appearing as a (misleading) teaching-style entry
+        self.assertIn("step", eff)
+        self.assertEqual(eff["step"]["count"], 0)
+        self.assertEqual(eff["step"]["review"]["count"], 1)
+        self.assertEqual(eff["step"]["review"]["avg"], 0.7)
+
     def test_due_for_review_positive_gain_stretches_interval(self):
         from datetime import datetime, timedelta, timezone
 

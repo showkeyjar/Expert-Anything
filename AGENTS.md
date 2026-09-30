@@ -160,6 +160,10 @@ Do not build a simple RAG chatbot.
    “地基不稳”信号）；出口带 `gain_stretched`/`gain_weak` 标志，
    学习者模型页复习队列卡渲染对应调度原因标签（i18n 键 `due_gain_weak`/
    `due_gain_stretched`，与 prereq_weak/unanchored 标签同列）——调度可解释。
+   **归因分离**：`style_effectiveness` 把 `meta.review` 记录剥出教学风格统计，
+   按复习风格单列 `review` 子桶（avg/count）——复习高分是“记住了”的证据，
+   不是“教得好”的证据（复习样本偏高分：只有掌握过的概念才进复习），
+   混入会稀释教学风格归因；只有复习记录的风格以 count=0 + review 桶保留。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。
