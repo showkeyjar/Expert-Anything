@@ -954,6 +954,29 @@ class TestSignalization(unittest.TestCase):
         self.assertEqual(r["after_avg"], 0.3)
         self.assertEqual(r["drop"], 0.55)
 
+    def test_regression_ignores_review_channel(self):
+        # 复习低分是遗忘证据（gain_weak 管道处置），不是教学回归——
+        # 混入会拿复习样本误触发 O2 裁 budget_ok 守卫
+        name = "混合记忆架构"
+        from expert_anything.core import learner as _learner
+        key = _learner.normalize(name)
+        review_low = {"concept": name, "key": key, "asset_id": "a1",
+                      "score": 0.2, "answer": "x", "feedback": "f",
+                      "at": "2026-08-18T00:00:00+00:00",
+                      "meta": {"review": True}}
+        regs = ah.regression_detection(
+            self._state([0.3, 0.35, 0.8, 0.9], extra_histories=[review_low]))
+        self.assertEqual(
+            regs, [],
+            "review-channel low scores must not fire teaching regression")
+
+    def test_regression_fires_on_teaching_channel_only(self):
+        # 教学通道内部的真实回退仍要触发（复习记录不遮蔽真实信号）
+        regs = ah.regression_detection(
+            self._state([0.2, 0.3, 0.4, 0.8, 0.9]))
+        self.assertEqual(len(regs), 1)
+        self.assertEqual(regs[0]["drop"], 0.55)
+
     def test_regression_ignores_steady_failures(self):
         # 一直不达标 → 是 stuck 不是 regression（两信号互补）
         regs = ah.regression_detection(

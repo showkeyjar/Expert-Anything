@@ -854,7 +854,10 @@ def regression_detection(learner_state: dict, threshold: float | None = None,
                           的是 harness（守卫/工具/预算），回归正是 O2 误伤
                           的指控证据。
 
-    对每个概念取最近 ``window`` 条评估（history 是唯一事实源，newest-first）：
+    对每个概念取最近 ``window`` 条**教学通道**评估（history 是唯一事实源，
+    newest-first；``meta.review`` 记录跳过——复习低分是遗忘/巩固失败的证据，
+    由 review_gain→gain_weak 管道处置，不是 harness 变化产生负效应的证据，
+    混入会拿复习样本误触发 O2 裁守卫）：
     最近 ``attempts`` 条全部低于 threshold，且更早的窗口内存在 >= threshold
     的达标记录 → 判为回归。返回 [{key, name, before_avg, after_avg, drop,
     attempts}]，按 drop（before_avg - after_avg）降序。纯函数，无 LLM。
@@ -868,6 +871,8 @@ def regression_detection(learner_state: dict, threshold: float | None = None,
     rows: dict[str, list[float]] = {}
     names: dict[str, str] = {}
     for h in learner_state.get("history", []):  # newest first
+        if (h.get("meta") or {}).get("review"):
+            continue  # retention evidence — not teaching-channel regression
         key = h.get("key") or _learner.normalize(h.get("concept", ""))
         if not key:
             continue

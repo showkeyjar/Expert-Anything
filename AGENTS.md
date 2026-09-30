@@ -213,7 +213,9 @@ Do not build a simple RAG chatbot.
       琥珀卡区分），一键迁移启用后按新 style 重讲当前概念；
       演化算子三层信号源：stuck（`stuck_concepts` → O1 换风格）、regression
       （`regression_detection` 从好变差 → O2 裁守卫，UI 紫色回归卡 + 审计链
-      reason="regression"）、会话报告统计（`persist_session_report` 落
+      reason="regression"；**只看教学通道**——`meta.review` 记录跳过，
+      复习低分是遗忘证据归 gain_weak 管道，混入会误触发 O2 裁守卫）、
+      会话报告统计（`persist_session_report` 落
       `_sessions` 有界 append-only + `aggregate_reports` + `evolve_from_sessions`
       → O2/O3；`save_harness_state` 保留 `_sessions` 不冲信号底座）；
       **安全铁律：`SAFE_GUARDS`（safe_only）永不裁**，O2 只在可裁守卫中选触发最多者；
