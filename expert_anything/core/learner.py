@@ -1222,6 +1222,14 @@ def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
                 if rec and float(rec.get("mastery", 0.0)) < 0.5 and dependent_key:
                     weak_prereqs.add(dependent_key)
 
+    # Review-consolidation scheduling (§6): concepts whose reviews reliably
+    # score above their first-time baseline have demonstrably stuck, so the
+    # next interval can stretch; concepts whose reviews fall below baseline
+    # need another pass soon regardless of what mastery alone suggests.
+    gain_by_key: dict[str, dict] = {
+        normalize(r.get("concept", "")): r for r in review_gain(state)["concepts"]
+    }
+
     out: list[dict] = []
     now = datetime.now(timezone.utc)
     for key, rec in state.get("concepts", {}).items():
@@ -1262,6 +1270,18 @@ def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
         boost = key in weak_prereqs
         if boost:
             interval = min(interval, 1.0)
+        # Review-gain modulation: reviews consistently above baseline mean
+        # the material stuck — stretch the next interval (Ebbinghaus-style
+        # expansion earned by evidence, not by time alone). Reviews below
+        # baseline mean consolidation failed — come back tomorrow instead
+        # of trusting the mastery-based interval.
+        g = gain_by_key.get(key)
+        gain_stretched = g is not None and g["gain"] >= 0.15 and g["n"] >= 2
+        gain_weak = g is not None and g["gain"] <= -0.1
+        if gain_stretched:
+            interval = min(60.0, interval * 1.5)
+        if gain_weak:
+            interval = min(interval, 1.0)
         # No source anchor -> the learner can't jump to the passage and
         # re-read it, so halve the interval: system-side review carries the
         # full consolidation load for this concept.
@@ -1293,11 +1313,19 @@ def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
                     "urgency": round(urgency, 2),
                     "urgency_tier": urgency_tier,
                     "prereq_weak": boost,
+                    "gain_stretched": gain_stretched,
+                    "gain_weak": gain_weak,
                     "unanchored": unanchored,
                 }
             )
-    # Sort: prereq_weak first, then by urgency (most urgent first)
-    out.sort(key=lambda x: (not x.get("prereq_weak", False), -x["urgency"]))
+    # Sort: prerequisite-weak and review-ineffective concepts first (both
+    # are "the foundation is shaky" signals), then by urgency.
+    out.sort(
+        key=lambda x: (
+            not (x.get("prereq_weak", False) or x.get("gain_weak", False)),
+            -x["urgency"],
+        )
+    )
     return out[:limit]
 
 

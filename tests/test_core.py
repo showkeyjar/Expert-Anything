@@ -438,6 +438,61 @@ class TestLearner(unittest.TestCase):
         self.assertEqual(g["measurable"], 1)
         self.assertEqual(g["concepts"][0]["baseline"], 0.7)
 
+    def test_due_for_review_positive_gain_stretches_interval(self):
+        from datetime import datetime, timedelta, timezone
+
+        state = {"concepts": {}, "history": []}
+        record_evaluation(state, "节点电价", "a", 0.5, "a", "f")
+        record_evaluation(state, "节点电价", "a", 0.9, "a", "f",
+                          meta={"review": True})
+        record_evaluation(state, "节点电价", "a", 0.95, "a", "f",
+                          meta={"review": True})
+        # push updated_at 5 days back: without stretch the concept would be
+        # due (weak base interval 1d), with stretch (gain>=0.15, n>=2) it
+        # must NOT be due yet
+        now = datetime.now(timezone.utc)
+        state["concepts"]["节点电价"]["updated_at"] = (
+            now - timedelta(days=5)
+        ).isoformat()
+        due = [d for d in due_for_review(state) if d["name"] == "节点电价"]
+        self.assertEqual(due, [])
+
+    def test_due_for_review_negative_gain_shortens_interval(self):
+        from datetime import datetime, timedelta, timezone
+
+        state = {"concepts": {}, "history": []}
+        record_evaluation(state, "风险对冲", "a", 0.9, "a", "f")
+        record_evaluation(state, "风险对冲", "a", 0.4, "a", "f",
+                          meta={"review": True})
+        now = datetime.now(timezone.utc)
+        state["concepts"]["风险对冲"]["updated_at"] = (
+            now - timedelta(days=1, seconds=10)
+        ).isoformat()
+        due = [d for d in due_for_review(state) if d["name"] == "风险对冲"]
+        self.assertEqual(len(due), 1)
+        self.assertTrue(due[0]["gain_weak"])
+        self.assertLessEqual(due[0]["interval"], 1.0)
+
+    def test_due_for_review_negative_gain_sorts_first(self):
+        from datetime import datetime, timedelta, timezone
+
+        state = {"concepts": {}, "history": []}
+        # normal concept: very urgent (30 days overdue)
+        record_evaluation(state, "普通概念", "a", 0.4, "a", "f")
+        # review-ineffective concept: just crossed its 1-day interval
+        record_evaluation(state, "风险对冲", "a", 0.9, "a", "f")
+        record_evaluation(state, "风险对冲", "a", 0.4, "a", "f",
+                          meta={"review": True})
+        now = datetime.now(timezone.utc)
+        state["concepts"]["普通概念"]["updated_at"] = (
+            now - timedelta(days=31)
+        ).isoformat()
+        state["concepts"]["风险对冲"]["updated_at"] = (
+            now - timedelta(days=1, seconds=10)
+        ).isoformat()
+        due = due_for_review(state)
+        self.assertEqual(due[0]["name"], "风险对冲")
+
     def test_incorporate_review_gain_signal_negative(self):
         from expert_anything.core.models import Concept, KnowledgeAsset
         from expert_anything.core.teacher import (
