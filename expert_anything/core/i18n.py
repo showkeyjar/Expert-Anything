@@ -1087,6 +1087,16 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "⚠ weak prerequisite",
         "ja": "⚠ 前提が弱い",
     },
+    "due_gain_weak": {
+        "zh-CN": "复习巩固失败，间隔缩短",
+        "en": "review failed to consolidate — shorter interval",
+        "ja": "復習が定着せず間隔短縮",
+    },
+    "due_gain_stretched": {
+        "zh-CN": "复习已巩固，间隔延长",
+        "en": "consolidated by review — extended interval",
+        "ja": "復習で定着済み（間隔延長）",
+    },
     "due_unanchored": {
         "zh-CN": "无原文锚点，间隔减半",
         "en": "no source anchor — halved interval",

@@ -213,6 +213,41 @@ class TestConceptPanel(unittest.TestCase):
         panel.close()
 
 
+class TestDueGainTags(unittest.TestCase):
+    """The review queue must explain WHY a concept is due (gain-weak /
+    gain-stretched scheduling tags), not just THAT it is due."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+
+    def test_gain_weak_tag_shown_on_due_card(self):
+        from datetime import datetime, timedelta, timezone
+        from expert_anything.core.learner import normalize, record_evaluation
+
+        win = self.win
+        asset = win.get_asset()
+        state = win.learner
+        state["history"] = []
+        state["concepts"] = {}
+        concept = asset.concepts[0]
+        record_evaluation(state, concept.name, asset.asset_id, 0.9, "a", "f")
+        record_evaluation(state, concept.name, asset.asset_id, 0.4, "a", "f",
+                          meta={"channel": "answer", "review": True})
+        now = datetime.now(timezone.utc)
+        state["concepts"][normalize(concept.name)]["updated_at"] = (
+            now - timedelta(days=1, seconds=10)
+        ).isoformat()
+        win.learner_view.refresh()
+        from PySide6.QtWidgets import QLabel
+
+        texts = [l.text() for l in win.learner_view.findChildren(QLabel)]
+        self.assertTrue(
+            any("间隔缩短" in t or "shorter interval" in t for t in texts),
+            f"gain-weak scheduling tag not found on due card",
+        )
+
+
 class TestReviewIneffectiveAnomaly(unittest.TestCase):
     """Negative review gain must sink a learner_gap anomaly into the
     teacher model — the review loop feeds teaching priority, it does not

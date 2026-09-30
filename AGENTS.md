@@ -157,7 +157,9 @@ Do not build a simple RAG chatbot.
    **双向间隔调度**：`due_for_review` 读 `review_gain` 增益调节间隔——
    正增益（≥0.15 且复习 ≥2 次）间隔 ×1.5（上限 60 天，证据挣来的扩展）；
    负增益（≤-0.1）间隔压 1 天且排序与 `prereq_weak` 同级提前（两个都是
-   “地基不稳”信号）；出口带 `gain_stretched`/`gain_weak` 标志。
+   “地基不稳”信号）；出口带 `gain_stretched`/`gain_weak` 标志，
+   学习者模型页复习队列卡渲染对应调度原因标签（i18n 键 `due_gain_weak`/
+   `due_gain_stretched`，与 prereq_weak/unanchored 标签同列）——调度可解释。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。

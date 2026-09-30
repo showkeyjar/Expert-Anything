@@ -963,6 +963,12 @@ class LearnerView(QWidget):
                 tags = [self._main._t("due_days", d=d["days_since"])]
                 if d.get("prereq_weak"):
                     tags.append(self._main._t("due_prereq_weak"))
+                if d.get("gain_weak"):
+                    # review-ineffective: consolidation failed, interval
+                    # shortened — the learner should see WHY it came back
+                    tags.append(self._main._t("due_gain_weak"))
+                if d.get("gain_stretched"):
+                    tags.append(self._main._t("due_gain_stretched"))
                 if d.get("unanchored"):
                     # source-provenance tag: no passage to re-read, the
                     # review loop is the only consolidation channel
