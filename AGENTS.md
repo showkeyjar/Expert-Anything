@@ -173,6 +173,12 @@ Do not build a simple RAG chatbot.
    teacher=)` 内部真正调用 `anomaly_concept_ids`（此前 import 后从未调用，
    anomaly_ids 恒空集——异常提权在学习计划入口整段失效），UI 传当前资产
    还原的 TeacherModel；无 teacher 时保持路径原序（兼容旧调用）。
+   stuck 风格轮换同时感知复习保持度：`style_rotation_hint(state, current,
+   fallback_next)` 读 style_effectiveness 的 review 桶（每风格 ≥2 条才可信），
+   仅当盲循环下一站的保持度比当前风格差 0.15 以上、且存在保持度不低于当前
+   的替代风格时才改道（默认保持盲循环不变，样本不足不干预——保守降级）；
+   lesson 落 `rotated_style` + `rotation_reason="retention"`（LLM 分支与
+   deterministic 分支都落，教学轨迹可追溯改道原因）。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。

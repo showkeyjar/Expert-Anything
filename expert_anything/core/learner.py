@@ -677,6 +677,64 @@ def style_effectiveness(state: dict) -> dict[str, dict]:
     return out
 
 
+def style_rotation_hint(
+    state: dict,
+    current: str,
+    fallback_next: str,
+    styles: list[str] | None = None,
+    min_samples: int = 2,
+    margin: float = 0.15,
+) -> tuple[str, str]:
+    """Retention-aware target for a stuck-driven style rotation.
+
+    The blind cycle (fallback_next) treats all styles equally, but a style
+    can teach well in-session and consolidate poorly (high teaching avg,
+    low review retention). When the trace has enough evidence that the
+    next stop in the cycle consolidates *clearly worse* than the current
+    style, and some other style holds at least as well as the current
+    one, deviate to that style instead.
+
+    Returns (style, reason): the style to rotate to and why. With
+    insufficient evidence the fallback pair is returned unchanged —
+    conservative default, no small-sample overfitting.
+    """
+    try:
+        eff = style_effectiveness(state)
+    except Exception:
+        return fallback_next, ""
+
+    def retention(style: str) -> tuple[float, int] | None:
+        bucket = (eff.get(style) or {}).get("review") or {}
+        n = int(bucket.get("count", 0))
+        if n < min_samples:
+            return None
+        return float(bucket.get("avg", 0.0)), n
+
+    cur = retention(current)
+    nxt = retention(fallback_next)
+    if cur is None or nxt is None:
+        return fallback_next, ""
+    cur_avg, _ = cur
+    nxt_avg, _ = nxt
+    if nxt_avg >= cur_avg - margin:
+        return fallback_next, ""
+
+    pool = styles if styles else [s for s in eff.keys()]
+    best: tuple[float, str] | None = None
+    for s in pool:
+        if s == current or s == fallback_next:
+            continue
+        r = retention(s)
+        if r is None:
+            continue
+        avg, n = r
+        if avg >= cur_avg and (best is None or avg > best[0]):
+            best = (avg, s)
+    if best is None:
+        return fallback_next, ""
+    return best[1], "retention"
+
+
 def learning_efficiency(state: dict) -> dict:
     """Analyze learning ROI: time investment vs mastery growth.
 

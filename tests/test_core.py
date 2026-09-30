@@ -952,6 +952,97 @@ class TestStudyPlanAnomalyPriority(unittest.TestCase):
         self.assertEqual(names, ["beta", "alpha"])
 
 
+class TestStyleRotationHint(unittest.TestCase):
+    """Stuck rotation must respect review retention when the evidence is
+    strong enough: a style that teaches well in-session but consolidates
+    badly should not be the next stop if a comparable retainer exists."""
+
+    STYLES = ["example", "diagram", "steps"]
+
+    @staticmethod
+    def _hist(entries):
+        # history is newest-first
+        return [
+            {
+                "concept": c,
+                "score": s,
+                "meta": {"style": st, "review": rv},
+            }
+            for (c, s, st, rv) in entries
+        ]
+
+    def test_deviate_when_next_retains_worse(self):
+        from expert_anything.core.learner import style_rotation_hint
+
+        state = {
+            "history": self._hist([
+                # current "example": teaches ok, retains 0.8
+                ("c1", 0.5, "example", False),
+                ("c1", 0.8, "example", True),
+                ("c2", 0.8, "example", True),
+                # blind-cycle next "diagram": retains 0.3 (clearly worse)
+                ("c3", 0.6, "diagram", False),
+                ("c3", 0.3, "diagram", True),
+                ("c4", 0.3, "diagram", True),
+                # alternative "steps": retains 0.9 (>= current)
+                ("c5", 0.6, "steps", False),
+                ("c5", 0.9, "steps", True),
+                ("c6", 0.9, "steps", True),
+            ])
+        }
+        style, reason = style_rotation_hint(
+            state, "example", "diagram", self.STYLES
+        )
+        self.assertEqual(style, "steps")
+        self.assertEqual(reason, "retention")
+
+    def test_keep_blind_cycle_when_evidence_thin(self):
+        from expert_anything.core.learner import style_rotation_hint
+
+        # no review records at all -> exact old behaviour
+        state = {"history": self._hist([("c1", 0.5, "example", False)])}
+        style, reason = style_rotation_hint(
+            state, "example", "diagram", self.STYLES
+        )
+        self.assertEqual(style, "diagram")
+        self.assertEqual(reason, "")
+
+        # next style has only 1 review sample (below min_samples)
+        state = {
+            "history": self._hist([
+                ("c1", 0.8, "example", True),
+                ("c2", 0.8, "example", True),
+                ("c3", 0.3, "diagram", True),
+            ])
+        }
+        style, reason = style_rotation_hint(
+            state, "example", "diagram", self.STYLES
+        )
+        self.assertEqual(style, "diagram")
+        self.assertEqual(reason, "")
+
+    def test_keep_blind_cycle_when_next_not_worse(self):
+        from expert_anything.core.learner import style_rotation_hint
+
+        # next retains within the margin -> no deviation even though an
+        # alternative retains higher (avoid churn on noise)
+        state = {
+            "history": self._hist([
+                ("c1", 0.8, "example", True),
+                ("c2", 0.8, "example", True),
+                ("c3", 0.7, "diagram", True),
+                ("c4", 0.7, "diagram", True),
+                ("c5", 0.95, "steps", True),
+                ("c6", 0.95, "steps", True),
+            ])
+        }
+        style, reason = style_rotation_hint(
+            state, "example", "diagram", self.STYLES
+        )
+        self.assertEqual(style, "diagram")
+        self.assertEqual(reason, "")
+
+
 class TestTutor(unittest.TestCase):
     def setUp(self):
         self.asset = extract_knowledge(SAMPLE, "agent-memory.md", llm=None)

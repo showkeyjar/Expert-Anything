@@ -472,11 +472,22 @@ class Tutor:
         # When the trace shows repeated failed attempts on this concept, the
         # current style is exactly what already failed - advance to the next.
         rotated = False
+        rotation_reason = ""
         if not explicit_style:
             try:
                 from expert_anything.core.learner import is_stuck
                 if is_stuck(state, concept.name):
-                    style = _next_style(style)
+                    nxt = _next_style(style)
+                    try:
+                        from expert_anything.core.learner import (
+                            style_rotation_hint,
+                        )
+
+                        style, rotation_reason = style_rotation_hint(
+                            state, style, nxt, STYLES
+                        )
+                    except Exception:
+                        style = nxt
                     rotated = True
             except Exception:
                 pass
@@ -562,6 +573,8 @@ class Tutor:
                     lesson["analogy"] = checks.temper_claims(lesson["analogy"])
                     if rotated:
                         lesson["rotated_style"] = True
+                        if rotation_reason:
+                            lesson["rotation_reason"] = rotation_reason
                     # Knowledge decoding: every style gets a SceneSpec →
                     # step-by-step animation + interactive ordering game. The
                     # visual scene is a core part of the learning experience,
@@ -719,6 +732,9 @@ class Tutor:
             return self.enrich({
                 "concept": concept.name, "style": style,
                 "cross_link": None,
+                **({"rotated_style": True,
+                   "rotation_reason": rotation_reason}
+                  if rotated else {}),
                 "scene": decoder.scene_for_concept(self.asset, concept),
                 "explanation": f"{what_text}\n\n{why_text}" if why_text else what_text,
                 "analogy": analogy_text,
@@ -740,6 +756,9 @@ class Tutor:
             return self.enrich({
                 "concept": concept.name, "style": style,
                 "cross_link": None,
+                **({"rotated_style": True,
+                   "rotation_reason": rotation_reason}
+                  if rotated else {}),
                 "explanation": f"{what_text}\n\n{why_text}" if why_text else what_text,
                 "analogy": analogy_text,
                 "connected": connected_text,
@@ -763,6 +782,9 @@ class Tutor:
         return self.enrich({
             "concept": concept.name, "style": style,
             "cross_link": None,
+            **({"rotated_style": True,
+                "rotation_reason": rotation_reason}
+               if rotated else {}),
             "scene": decoder.scene_for_concept(self.asset, concept),
             "explanation": ev_explanation,
             "analogy": analogy_text,
