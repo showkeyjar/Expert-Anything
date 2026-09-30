@@ -213,6 +213,38 @@ class TestConceptPanel(unittest.TestCase):
         panel.close()
 
 
+class TestStyleReviewBucketTag(unittest.TestCase):
+    """The style-effectiveness card must surface the retention bucket —
+    teaching avg and review retention answer different questions and
+    conflating them (or hiding one) breaks the card's purpose."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.win = load_main_window()
+
+    def test_review_bucket_tag_shown_in_style_card(self):
+        win = self.win
+        state = win.learner
+        state["history"] = [
+            {"concept": "LMP", "score": 0.5, "meta": {"style": "analogy"}},
+            {"concept": "LMP", "score": 0.9, "meta": {"style": "analogy", "review": True}},
+        ]
+        state["concepts"] = {}
+        win.learner_view.refresh()
+        from PySide6.QtWidgets import QLabel
+
+        texts = [l.text() for l in win.learner_view.findChildren(QLabel)]
+        self.assertTrue(
+            any("复习巩固" in t or "review retention" in t for t in texts),
+            "retention bucket tag not found in style card",
+        )
+        # teaching avg must stay 0.5, not diluted by the review score
+        self.assertTrue(
+            any(t.strip() == "50%" for t in texts),
+            f"teaching avg diluted: {sorted(set(texts))[:20]}",
+        )
+
+
 class TestDueGainTags(unittest.TestCase):
     """The review queue must explain WHY a concept is due (gain-weak /
     gain-stretched scheduling tags), not just THAT it is due."""

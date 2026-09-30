@@ -461,6 +461,24 @@ class LearnerView(QWidget):
                 count = QLabel(self._main._t("style_count", n=data["count"]))
                 count.setStyleSheet("font-size: 13px; color: #78909C;")
                 row.addWidget(count)
+                # Retention bucket (kept separate from the teaching avg by
+                # style_effectiveness): shows whether material taught in
+                # this style actually stuck across reviews.
+                rv = data.get("review")
+                if rv and rv.get("count"):
+                    rtag = QLabel(
+                        self._main._t(
+                            "style_review_bucket",
+                            n=rv["count"],
+                            avg=f"{rv['avg']:.0%}",
+                        )
+                    )
+                    rtag.setStyleSheet(
+                        "font-size: 12px; color: #00897B;"
+                        "background-color: rgba(0,137,123,0.08);"
+                        "border-radius: 8px; padding: 2px 8px;"
+                    )
+                    row.addWidget(rtag)
                 row.addStretch()
 
                 if style_name == best_style and data["count"] >= 2:

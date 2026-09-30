@@ -1087,6 +1087,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "⚠ weak prerequisite",
         "ja": "⚠ 前提が弱い",
     },
+    "style_review_bucket": {
+        "zh-CN": "复习巩固 {n} 次 · 均分 {avg}",
+        "en": "review retention ×{n} · avg {avg}",
+        "ja": "復習定着 {n} 回・平均 {avg}",
+    },
     "due_gain_weak": {
         "zh-CN": "复习巩固失败，间隔缩短",
         "en": "review failed to consolidate — shorter interval",
