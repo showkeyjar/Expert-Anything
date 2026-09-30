@@ -182,6 +182,11 @@ Do not build a simple RAG chatbot.
    auto_harness 的 `Harness._rotate_args` 同构接入：候选池限定 spec 声明的
    `policy.teach_styles` 子集（改道永不越出 spec 结构约束），中文风格名
    （例子/图示/拆解步骤）与轨迹桶 key 同源可直接查表；异常静默回落盲循环。
+   演化 O1（`_candidate_o1` 换风格候选）第三处同构接入：`evolve` /
+   `evolve_from_sessions` 加可选 `learner_state` 透传（默认 None 保持盲选，
+   向后兼容），`evolve_for_stuck` / `evolve_for_regression` / `evolve_joint`
+   把手头 state 传入——演化候选同样不把学习者推向已知保持度差的风格；
+   候选池取 STYLE_CYCLE 全集（演化允许引入新风格，仍过 check_harness）。
    **锚点感知调度（2026-09-29）**：无锚概念（◌，`c.locations` 为空）复习间隔
    **减半**——学习者无法跳回原文自助重温，系统侧复习是其唯一巩固通道；
    条目带 `unanchored` 标记，学习页复习卡渲染 ◌ 标签（`due_unanchored`）。

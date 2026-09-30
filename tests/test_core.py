@@ -1102,6 +1102,75 @@ class TestHarnessRotationRetention(unittest.TestCase):
         self.assertEqual(out["style"], "图示")
 
 
+class TestEvolveO1Retention(unittest.TestCase):
+    """O1 换风格候选同样保持度感知：演化不应把学习者推向已知
+    "当场学得快、隔天忘光"的风格。三层入口共享 _candidate_o1。"""
+
+    STATE = {"history": [
+        # 例子 retains 0.8
+        {"concept": "a", "score": 0.8, "meta": {"style": "例子", "review": True}},
+        {"concept": "b", "score": 0.8, "meta": {"style": "例子", "review": True}},
+        # 图示 (blind next) retains 0.3
+        {"concept": "c", "score": 0.3, "meta": {"style": "图示", "review": True}},
+        {"concept": "d", "score": 0.3, "meta": {"style": "图示", "review": True}},
+        # 拆解步骤 retains 0.9
+        {"concept": "e", "score": 0.9, "meta": {"style": "拆解步骤", "review": True}},
+        {"concept": "f", "score": 0.9, "meta": {"style": "拆解步骤", "review": True}},
+    ]}
+
+    def _stuck_state(self):
+        # alpha 连续 3 次不达标 → stuck 触发 O1
+        stuck_hist = [
+            {"concept": "alpha", "score": 0.2,
+             "meta": {"style": "例子", "channel": "answer"}},
+            {"concept": "alpha", "score": 0.3,
+             "meta": {"style": "例子", "channel": "answer"}},
+            {"concept": "alpha", "score": 0.1,
+             "meta": {"style": "例子", "channel": "answer"}},
+        ]
+        state = {"concepts": {"alpha": {"mastery": 0.2}},
+                 "history": stuck_hist + self.STATE["history"]}
+        return state
+
+    def test_o1_promotes_retainer_over_blind_next(self):
+        from expert_anything.core.auto_harness import evolve_for_stuck, fallback_harness
+
+        spec = fallback_harness()
+        spec["policy"]["teach_styles"] = ["例子", "图示"]
+        out = evolve_for_stuck(spec, self._stuck_state(), "alpha")
+        self.assertTrue(out["evolved"])
+        o1 = next(
+            (c for c in out["candidates"]
+             if c["policy"]["teach_styles"][0] != "例子"),
+            None,
+        )
+        self.assertIsNotNone(o1)
+        self.assertEqual(o1["policy"]["teach_styles"][0], "拆解步骤")
+
+    def test_o1_blind_without_evidence(self):
+        from expert_anything.core.auto_harness import evolve_for_stuck, fallback_harness
+
+        spec = fallback_harness()
+        spec["policy"]["teach_styles"] = ["例子"]
+        # stuck 信号有，复习证据无 → 盲循环下一站（图示）
+        state = {"concepts": {"alpha": {"mastery": 0.2}}, "history": [
+            {"concept": "alpha", "score": 0.2,
+             "meta": {"style": "例子", "channel": "answer"}},
+            {"concept": "alpha", "score": 0.2,
+             "meta": {"style": "例子", "channel": "answer"}},
+            {"concept": "alpha", "score": 0.2,
+             "meta": {"style": "例子", "channel": "answer"}},
+        ]}
+        out = evolve_for_stuck(spec, state, "alpha")
+        o1 = next(
+            (c for c in out["candidates"]
+             if c["policy"]["teach_styles"][0] != "例子"),
+            None,
+        )
+        self.assertIsNotNone(o1)
+        self.assertEqual(o1["policy"]["teach_styles"][0], "图示")
+
+
 class TestTutor(unittest.TestCase):
     def setUp(self):
         self.asset = extract_knowledge(SAMPLE, "agent-memory.md", llm=None)

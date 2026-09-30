@@ -622,7 +622,8 @@ def build_harness(spec: dict, asset=None, learner_state: dict | None = None,
 
 # --- 演化（"auto" 所在） -----------------------------------------------------
 
-def evolve(spec: dict, report: dict, candidates_limit: int = 3) -> list[dict]:
+def evolve(spec: dict, report: dict, candidates_limit: int = 3,
+           learner_state: dict | None = None) -> list[dict]:
     """确定性演化算子：从一次会话报告生成下一代 harness 候选。
 
     每个候选必须再过 check_harness —— 演化也不允许绕过准入。
@@ -636,7 +637,7 @@ def evolve(spec: dict, report: dict, candidates_limit: int = 3) -> list[dict]:
     base = copy.deepcopy(spec)
     cands: list[dict] = []
     if report.get("value", 1.0) < float(spec["evaluation"].get("threshold", 0.6)):
-        c = _candidate_o1(base, spec)
+        c = _candidate_o1(base, spec, learner_state=learner_state)
         if c is not None:
             cands.append(c)
     if report.get("guard_triggers"):
@@ -658,11 +659,26 @@ def evolve(spec: dict, report: dict, candidates_limit: int = 3) -> list[dict]:
     return _admit_candidates(cands, candidates_limit)
 
 
-def _candidate_o1(base: dict, spec: dict) -> dict | None:
-    """O1 换风格：讲解换下一个风格 + 补 scene 工具（图示教学）。"""
+def _candidate_o1(base: dict, spec: dict,
+                   learner_state: dict | None = None) -> dict | None:
+    """O1 换风格：讲解换下一个风格 + 补 scene 工具（图示教学）。
+
+    保持度感知（同 _rotate_args / tutor 主链路）：有学习轨迹时，盲循环
+    下一站若复习保持度明显更差且存在更好的替代，改道到替代风格；证据
+    不足保持盲选。演化是跨会话的结构决策，候选池取 STYLE_CYCLE 全集
+    （新风格可被引入，仍过 check_harness 准入）。
+    """
     c = copy.deepcopy(base)
     cur = (c["policy"]["teach_styles"] or ["例子"])[0]
     nxt = _next_style(cur)
+    if learner_state:
+        try:
+            from expert_anything.core.learner import style_rotation_hint
+
+            nxt, _reason = style_rotation_hint(
+                learner_state, cur, nxt, list(STYLE_CYCLE))
+        except Exception:
+            pass
     c["policy"]["teach_styles"] = [nxt] + [s for s in c["policy"]["teach_styles"] if s != nxt]
     if "scene" not in c["tools"]:
         c["tools"].append("scene")
@@ -761,7 +777,8 @@ def aggregate_reports(reports: list[dict]) -> dict:
 
 
 def evolve_from_sessions(spec: dict, reports: list[dict],
-                         candidates_limit: int = 3) -> list[dict]:
+                         candidates_limit: int = 3,
+                         learner_state: dict | None = None) -> list[dict]:
     """从多份真实会话报告批量演化 —— O2/O3 的完整信号源。
 
     与 ``evolve`` 的差异：evolve 吃调用方手工构造的单会话启发式字段
@@ -783,7 +800,7 @@ def evolve_from_sessions(spec: dict, reports: list[dict],
     cands: list[dict] = []
     thr = float(spec["evaluation"].get("threshold", 0.6))
     if agg["avg_value"] < thr or agg["pass_rate"] < 0.5:
-        c = _candidate_o1(base, spec)
+        c = _candidate_o1(base, spec, learner_state=learner_state)
         if c is not None:
             cands.append(c)
     if agg["guard_triggers"]:
@@ -852,7 +869,8 @@ def evolve_for_stuck(spec: dict, learner_state: dict,
         "guard_triggers": {},
         "steps_used": 0,
     }
-    candidates = evolve(spec, report, candidates_limit=candidates_limit)
+    candidates = evolve(spec, report, candidates_limit=candidates_limit,
+                        learner_state=learner_state)
     return {"evolved": True, "source": "stuck", "trigger": trigger,
             "candidates": candidates}
 
@@ -971,7 +989,8 @@ def evolve_for_regression(spec: dict, learner_state: dict,
         "guard_triggers": {"budget_ok": trigger["attempts"]},
         "steps_used": 0,
     }
-    candidates = evolve(spec, report, candidates_limit=candidates_limit)
+    candidates = evolve(spec, report, candidates_limit=candidates_limit,
+                        learner_state=learner_state)
     return {"evolved": True, "source": "regression", "trigger": trigger,
             "candidates": candidates}
 
@@ -1183,7 +1202,7 @@ def evolve_joint(spec: dict, learner_state: dict,
             f"会话统计：n={agg['n']} 达标率 {agg['pass_rate']:.2f}，"
             f"均值 {agg['avg_value']:.2f}（阈值 {threshold:.2f}）")
     if o1_fired:
-        c = _candidate_o1(base, spec)
+        c = _candidate_o1(base, spec, learner_state=learner_state)
         if c is not None:
             cands.append(c)
             if focused and focused.get("stuck"):
