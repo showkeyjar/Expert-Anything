@@ -1,0 +1,604 @@
+{
+  "profile": {},
+  "concepts": {
+    "两级市场架构": {
+      "name": "两级市场架构",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "省级电力交易中心": {
+      "name": "省级电力交易中心",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "中长期交易": {
+      "name": "中长期交易",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "现货交易": {
+      "name": "现货交易",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "发电企业": {
+      "name": "发电企业",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "售电公司": {
+      "name": "售电公司",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "电力用户": {
+      "name": "电力用户",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "电网企业": {
+      "name": "电网企业",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "调度机构": {
+      "name": "调度机构",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "上网电价": {
+      "name": "上网电价",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "输配电价": {
+      "name": "输配电价",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "销售电价": {
+      "name": "销售电价",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "节点边际电价lmp": {
+      "name": "节点边际电价(LMP)",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "中长期交易流程": {
+      "name": "中长期交易流程",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "日前市场流程": {
+      "name": "日前市场流程",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "实时平衡流程": {
+      "name": "实时平衡流程",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "容量电费": {
+      "name": "容量电费",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "电量电费": {
+      "name": "电量电费",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "不平衡资金": {
+      "name": "不平衡资金",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-002"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "总量控制": {
+      "name": "总量控制",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "碳排放配额": {
+      "name": "碳排放配额",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "配额分配方式": {
+      "name": "配额分配方式",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "履约周期": {
+      "name": "履约周期",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "碳排放权交易市场": {
+      "name": "碳排放权交易市场",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "碳价形成": {
+      "name": "碳价形成",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "抵消机制": {
+      "name": "抵消机制",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "自愿减排量": {
+      "name": "自愿减排量",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "mrv 监测 报告 核查": {
+      "name": "MRV 监测-报告-核查",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "排放核算方法": {
+      "name": "排放核算方法",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "核查机构": {
+      "name": "核查机构",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "碳市场监管": {
+      "name": "碳市场监管",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "合规风险": {
+      "name": "合规风险",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-003"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "超短期预测": {
+      "name": "超短期预测",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "短期预测": {
+      "name": "短期预测",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "中长期预测": {
+      "name": "中长期预测",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "预测时间尺度": {
+      "name": "预测时间尺度",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "数值天气预报nwp": {
+      "name": "数值天气预报(NWP)",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "功率曲线": {
+      "name": "功率曲线",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "历史出力数据": {
+      "name": "历史出力数据",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "气象要素": {
+      "name": "气象要素",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "风电功率预测": {
+      "name": "风电功率预测",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "光伏功率预测": {
+      "name": "光伏功率预测",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "负荷预测": {
+      "name": "负荷预测",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "预测误差": {
+      "name": "预测误差",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "集合预报": {
+      "name": "集合预报",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "偏差校正": {
+      "name": "偏差校正",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-004"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "分布式发电": {
+      "name": "分布式发电",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "分布式光伏": {
+      "name": "分布式光伏",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "分散式风电": {
+      "name": "分散式风电",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "分布式热电与生物质": {
+      "name": "分布式热电与生物质",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "微电网": {
+      "name": "微电网",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "虚拟电厂vpp": {
+      "name": "虚拟电厂(VPP)",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "需求响应dr": {
+      "name": "需求响应(DR)",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "削峰填谷": {
+      "name": "削峰填谷",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "就地消纳": {
+      "name": "就地消纳",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "电压与无功支撑": {
+      "name": "电压与无功支撑",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "与电网互动": {
+      "name": "与电网互动",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "市场化交易": {
+      "name": "市场化交易",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "韧性提升": {
+      "name": "韧性提升",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    },
+    "碳减排协同": {
+      "name": "碳减排协同",
+      "mastery": 0.0,
+      "sources": [
+        "a20260908-005"
+      ],
+      "last_feedback": "",
+      "updated_at": ""
+    }
+  },
+  "assets": {
+    "a20260908-002": {
+      "title": "中国电力市场交易体系：从政策到实践的快速理解",
+      "path": [
+        "c001",
+        "c005",
+        "c007",
+        "c010",
+        "c011",
+        "c012",
+        "c013"
+      ],
+      "current_index": 0,
+      "completed": []
+    },
+    "a20260908-003": {
+      "title": "碳排放权交易体系：总量、市场与 MRV",
+      "path": [
+        "c001",
+        "c002",
+        "c003",
+        "c004",
+        "c005",
+        "c006",
+        "c009"
+      ],
+      "current_index": 0,
+      "completed": []
+    },
+    "a20260908-004": {
+      "title": "新能源功率预测体系：风电光伏与数值天气的协同",
+      "path": [
+        "c004",
+        "c005",
+        "c006",
+        "c009",
+        "c010",
+        "c012",
+        "c013"
+      ],
+      "current_index": 0,
+      "completed": []
+    },
+    "a20260908-005": {
+      "title": "分布式能源资源体系：微电网与虚拟电厂",
+      "path": [
+        "c001",
+        "c005",
+        "c006",
+        "c008",
+        "c011",
+        "c012",
+        "c013"
+      ],
+      "current_index": 0,
+      "completed": []
+    }
+  },
+  "history": []
+}

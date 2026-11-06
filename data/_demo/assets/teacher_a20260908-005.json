@@ -1,0 +1,229 @@
+{
+  "asset_id": "a20260908-005",
+  "status": "fallback",
+  "method": "deterministic_fallback_v1",
+  "synthesized_at": "2026-09-08T00:00:00+00:00",
+  "concept_notes": [
+    {
+      "concept_id": "c001",
+      "name": "分布式发电",
+      "significance": "该概念有 3 条关系，以「是一种」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 微电网",
+        "[是一种] 分布式光伏",
+        "[是一种] 分散式风电"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c002",
+      "name": "分布式光伏",
+      "significance": "该概念有 2 条关系，以「是一种」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[是一种] 分布式发电",
+        "[对比] 分散式风电"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c003",
+      "name": "分散式风电",
+      "significance": "该概念有 2 条关系，以「是一种」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[是一种] 分布式发电",
+        "[对比] 分布式光伏"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c004",
+      "name": "分布式热电与生物质",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c005",
+      "name": "微电网",
+      "significance": "该概念有 3 条关系，以「前提」为主。",
+      "prerequisites": [
+        "分布式发电"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 分布式发电",
+        "[前提] 虚拟电厂(VPP)",
+        "[导致] 韧性提升"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c006",
+      "name": "虚拟电厂(VPP)",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "微电网"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 微电网",
+        "[前提] 削峰填谷"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c007",
+      "name": "需求响应(DR)",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c008",
+      "name": "削峰填谷",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "虚拟电厂(VPP)"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 虚拟电厂(VPP)",
+        "[前提] 与电网互动"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c009",
+      "name": "就地消纳",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c010",
+      "name": "电压与无功支撑",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c011",
+      "name": "与电网互动",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "削峰填谷"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 削峰填谷",
+        "[前提] 市场化交易"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c012",
+      "name": "市场化交易",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "与电网互动"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 与电网互动",
+        "[前提] 韧性提升"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c013",
+      "name": "韧性提升",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "市场化交易"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 市场化交易",
+        "[导致] 微电网"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c014",
+      "name": "碳减排协同",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    }
+  ],
+  "anomalies": [
+    {
+      "id": "ande73a997",
+      "kind": "needs_llm",
+      "description": "未开启智能分析，自我学习层（概念深加工与疑点检测）暂时无法运行。开启后点击「重新自检」即可生成。",
+      "location": "",
+      "severity": "info",
+      "status": "open",
+      "resolution": "",
+      "source": "internal"
+    }
+  ]
+}

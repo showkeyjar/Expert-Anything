@@ -1,0 +1,214 @@
+{
+  "asset_id": "a20260908-003",
+  "status": "fallback",
+  "method": "deterministic_fallback_v1",
+  "synthesized_at": "2026-09-08T00:00:00+00:00",
+  "concept_notes": [
+    {
+      "concept_id": "c001",
+      "name": "总量控制",
+      "significance": "该概念有 1 条关系，以「前提」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 碳排放配额"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c002",
+      "name": "碳排放配额",
+      "significance": "该概念有 3 条关系，以「前提」为主。",
+      "prerequisites": [
+        "总量控制"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 总量控制",
+        "[前提] 配额分配方式",
+        "[导致] 碳价形成"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c003",
+      "name": "配额分配方式",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "碳排放配额"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 碳排放配额",
+        "[前提] 履约周期"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c004",
+      "name": "履约周期",
+      "significance": "该概念有 3 条关系，以「前提」为主。",
+      "prerequisites": [
+        "配额分配方式"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 配额分配方式",
+        "[前提] 碳排放权交易市场",
+        "[组成部分] MRV 监测-报告-核查"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c005",
+      "name": "碳排放权交易市场",
+      "significance": "该概念有 3 条关系，以「前提」为主。",
+      "prerequisites": [
+        "履约周期"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 履约周期",
+        "[前提] 碳价形成",
+        "[对比] 自愿减排量"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c006",
+      "name": "碳价形成",
+      "significance": "该概念有 3 条关系，以「前提」为主。",
+      "prerequisites": [
+        "碳排放权交易市场"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 碳排放权交易市场",
+        "[前提] MRV 监测-报告-核查",
+        "[导致] 碳排放配额"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c007",
+      "name": "抵消机制",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c008",
+      "name": "自愿减排量",
+      "significance": "该概念有 1 条关系，以「对比」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[对比] 碳排放权交易市场"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c009",
+      "name": "MRV 监测-报告-核查",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "碳价形成"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 碳价形成",
+        "[组成部分] 履约周期"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c010",
+      "name": "排放核算方法",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c011",
+      "name": "核查机构",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c012",
+      "name": "碳市场监管",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c013",
+      "name": "合规风险",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    }
+  ],
+  "anomalies": [
+    {
+      "id": "ande73a997",
+      "kind": "needs_llm",
+      "description": "未开启智能分析，自我学习层（概念深加工与疑点检测）暂时无法运行。开启后点击「重新自检」即可生成。",
+      "location": "",
+      "severity": "info",
+      "status": "open",
+      "resolution": "",
+      "source": "internal"
+    }
+  ]
+}

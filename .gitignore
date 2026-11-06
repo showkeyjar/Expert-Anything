@@ -1,4 +1,7 @@
-data/
+data/*
+
+# 演示数据是测试夹具（CI 全新 checkout 依赖它跑满 846 基线）——个人学习数据仍被忽略
+!data/_demo/
 __pycache__/
 *.pyc
 

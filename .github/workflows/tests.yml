@@ -48,4 +48,4 @@ jobs:
         # pass/fail gate (decoder quality must not regress below the fallback,
         # and the teaching loop must demonstrably teach). Exits non-zero on any
         # failed check so a broken decoder or pedagogy regression blocks the PR.
-        run: python -m expert_anything.core.quality_gate
+        run: python run_quality_gate.py

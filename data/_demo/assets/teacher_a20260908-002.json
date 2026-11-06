@@ -1,0 +1,291 @@
+{
+  "asset_id": "a20260908-002",
+  "status": "fallback",
+  "method": "deterministic_fallback_v1",
+  "synthesized_at": "2026-09-08T00:00:00+00:00",
+  "concept_notes": [
+    {
+      "concept_id": "c001",
+      "name": "两级市场架构",
+      "significance": "该概念有 1 条关系，以「前提」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 发电企业"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c002",
+      "name": "省级电力交易中心",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c003",
+      "name": "中长期交易",
+      "significance": "该概念有 1 条关系，以「对比」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[对比] 现货交易"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c004",
+      "name": "现货交易",
+      "significance": "该概念有 2 条关系，以「对比」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[对比] 中长期交易",
+        "[导致] 节点边际电价(LMP)"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c005",
+      "name": "发电企业",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "两级市场架构"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 两级市场架构",
+        "[前提] 电力用户"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c006",
+      "name": "售电公司",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c007",
+      "name": "电力用户",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "发电企业"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 发电企业",
+        "[前提] 上网电价"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c008",
+      "name": "电网企业",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c009",
+      "name": "调度机构",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c010",
+      "name": "上网电价",
+      "significance": "该概念有 3 条关系，以「前提」为主。",
+      "prerequisites": [
+        "电力用户"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 电力用户",
+        "[前提] 输配电价",
+        "[组成部分] 销售电价"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c011",
+      "name": "输配电价",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "上网电价"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 上网电价",
+        "[前提] 销售电价"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c012",
+      "name": "销售电价",
+      "significance": "该概念有 3 条关系，以「前提」为主。",
+      "prerequisites": [
+        "输配电价"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 输配电价",
+        "[前提] 节点边际电价(LMP)",
+        "[组成部分] 上网电价"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c013",
+      "name": "节点边际电价(LMP)",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "销售电价"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 销售电价",
+        "[导致] 现货交易"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c014",
+      "name": "中长期交易流程",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c015",
+      "name": "日前市场流程",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c016",
+      "name": "实时平衡流程",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c017",
+      "name": "容量电费",
+      "significance": "该概念有 1 条关系，以「对比」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[对比] 电量电费"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c018",
+      "name": "电量电费",
+      "significance": "该概念有 1 条关系，以「对比」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[对比] 容量电费"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c019",
+      "name": "不平衡资金",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    }
+  ],
+  "anomalies": [
+    {
+      "id": "ande73a997",
+      "kind": "needs_llm",
+      "description": "未开启智能分析，自我学习层（概念深加工与疑点检测）暂时无法运行。开启后点击「重新自检」即可生成。",
+      "location": "",
+      "severity": "info",
+      "status": "open",
+      "resolution": "",
+      "source": "internal"
+    }
+  ]
+}

@@ -1,0 +1,229 @@
+{
+  "asset_id": "a20260908-004",
+  "status": "fallback",
+  "method": "deterministic_fallback_v1",
+  "synthesized_at": "2026-09-08T00:00:00+00:00",
+  "concept_notes": [
+    {
+      "concept_id": "c001",
+      "name": "超短期预测",
+      "significance": "该概念有 2 条关系，以「组成部分」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[组成部分] 预测时间尺度",
+        "[对比] 短期预测"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c002",
+      "name": "短期预测",
+      "significance": "该概念有 2 条关系，以「组成部分」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[组成部分] 预测时间尺度",
+        "[对比] 超短期预测"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c003",
+      "name": "中长期预测",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c004",
+      "name": "预测时间尺度",
+      "significance": "该概念有 3 条关系，以「组成部分」为主。",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 数值天气预报(NWP)",
+        "[组成部分] 超短期预测",
+        "[组成部分] 短期预测"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c005",
+      "name": "数值天气预报(NWP)",
+      "significance": "该概念有 3 条关系，以「前提」为主。",
+      "prerequisites": [
+        "预测时间尺度"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 预测时间尺度",
+        "[前提] 功率曲线",
+        "[导致] 风电功率预测"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c006",
+      "name": "功率曲线",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "数值天气预报(NWP)"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 数值天气预报(NWP)",
+        "[前提] 风电功率预测"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c007",
+      "name": "历史出力数据",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c008",
+      "name": "气象要素",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c009",
+      "name": "风电功率预测",
+      "significance": "该概念有 3 条关系，以「前提」为主。",
+      "prerequisites": [
+        "功率曲线"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 功率曲线",
+        "[前提] 光伏功率预测",
+        "[导致] 数值天气预报(NWP)"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c010",
+      "name": "光伏功率预测",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "风电功率预测"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 风电功率预测",
+        "[前提] 预测误差"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c011",
+      "name": "负荷预测",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c012",
+      "name": "预测误差",
+      "significance": "该概念有 2 条关系，以「前提」为主。",
+      "prerequisites": [
+        "光伏功率预测"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 光伏功率预测",
+        "[前提] 集合预报"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c013",
+      "name": "集合预报",
+      "significance": "该概念有 1 条关系，以「前提」为主。",
+      "prerequisites": [
+        "预测误差"
+      ],
+      "misconceptions": [],
+      "connections": [
+        "[前提] 预测误差"
+      ],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    },
+    {
+      "concept_id": "c014",
+      "name": "偏差校正",
+      "significance": "",
+      "prerequisites": [],
+      "misconceptions": [],
+      "connections": [],
+      "external_notes": [],
+      "external_concepts": [],
+      "learner_signals": [],
+      "note": ""
+    }
+  ],
+  "anomalies": [
+    {
+      "id": "ande73a997",
+      "kind": "needs_llm",
+      "description": "未开启智能分析，自我学习层（概念深加工与疑点检测）暂时无法运行。开启后点击「重新自检」即可生成。",
+      "location": "",
+      "severity": "info",
+      "status": "open",
+      "resolution": "",
+      "source": "internal"
+    }
+  ]
+}
