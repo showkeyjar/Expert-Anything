@@ -20,7 +20,7 @@ from expert_anything.core.domain_templates import (
 
 
 def generate_cap_and_allowance_scene() -> dict | None:
-    """总量控制 → 配额 → 分配：配额制的基础链条（ct-001/002/003）。"""
+    """总量控制 → 配额 → 分配 → MRV 报告：配额制的基础链条（ct-001/002/003）。"""
     spec = {
         "title": "总量控制与配额分配",
         "nodes": [
@@ -29,19 +29,22 @@ def generate_cap_and_allowance_scene() -> dict | None:
             {"id": "n3", "label": "免费分配", "kind": "box"},
             {"id": "n4", "label": "有偿拍卖", "kind": "box"},
             {"id": "n5", "label": "排放单位", "kind": "note"},
+            {"id": "n6", "label": "MRV 报告", "kind": "flow"},
         ],
         "edges": [
-            {"from": "n1", "to": "n2", "label": "设定上限"},
-            {"from": "n2", "to": "n3", "label": "分配方式"},
-            {"from": "n2", "to": "n4", "label": "分配方式"},
-            {"from": "n3", "to": "n5", "label": "获得配额"},
-            {"from": "n4", "to": "n5", "label": "竞得配额"},
+            {"from": "n1", "to": "n2", "label": "设定上限", "type": "causes"},
+            {"from": "n2", "to": "n3", "label": "分配方式", "type": "related"},
+            {"from": "n2", "to": "n4", "label": "分配方式", "type": "related"},
+            {"from": "n3", "to": "n5", "label": "获得配额", "type": "causes"},
+            {"from": "n4", "to": "n5", "label": "竞得配额", "type": "causes"},
+            {"from": "n5", "to": "n6", "label": "提交", "type": "prereq"},
         ],
         "steps": [
             {"caption": "先定总量：对一定时期内的排放设定上限", "show": ["n1"], "active": "n1"},
             {"caption": "总量切分为配额：排放许可额度", "show": ["n1", "n2"], "active": "n2"},
             {"caption": "两条初始配置路径：免费分配与有偿拍卖", "show": ["n1", "n2", "n3", "n4"], "active": "n3"},
-            {"caption": "排放单位持有配额，进入合规与交易", "show": ["n1", "n2", "n3", "n4", "n5"], "active": "n5"},
+            {"caption": "排放单位持有配额并提交 MRV 报告", "show": ["n1", "n2", "n3", "n4", "n5", "n6"], "active": "n5"},
+            {"caption": "配额与 MRV 共同构成合规的前置条件", "show": ["n1", "n2", "n3", "n4", "n5", "n6"], "active": "n6"},
         ],
         "game": {
             "type": "sort",
@@ -55,7 +58,7 @@ def generate_cap_and_allowance_scene() -> dict | None:
 
 
 def generate_market_and_price_scene() -> dict | None:
-    """交易市场与碳价形成（ct-005/006）。"""
+    """交易市场与碳价形成 + CCER 抵消（ct-005/006）。"""
     spec = {
         "title": "碳市场与碳价形成",
         "nodes": [
@@ -64,18 +67,21 @@ def generate_market_and_price_scene() -> dict | None:
             {"id": "n3", "label": "配额需求", "kind": "store"},
             {"id": "n4", "label": "政策预期", "kind": "note"},
             {"id": "n5", "label": "碳价", "kind": "flow"},
+            {"id": "n6", "label": "CCER 抵消", "kind": "box"},
         ],
         "edges": [
-            {"from": "n2", "to": "n5", "label": "供给"},
-            {"from": "n3", "to": "n5", "label": "需求"},
-            {"from": "n4", "to": "n5", "label": "预期"},
-            {"from": "n1", "to": "n3", "label": "交易发生"},
+            {"from": "n2", "to": "n5", "label": "供给", "type": "causes"},
+            {"from": "n3", "to": "n5", "label": "需求", "type": "causes"},
+            {"from": "n4", "to": "n5", "label": "预期", "type": "causes"},
+            {"from": "n1", "to": "n3", "label": "交易发生", "type": "related"},
+            {"from": "n6", "to": "n3", "label": "降低", "type": "causes"},
         ],
         "steps": [
             {"caption": "市场以配额为主要交易标的", "show": ["n1"], "active": "n1"},
             {"caption": "配额供给与需求在市场相遇", "show": ["n1", "n2", "n3"], "active": "n2"},
             {"caption": "政策预期同样进入价格形成", "show": ["n1", "n2", "n3", "n4"], "active": "n4"},
-            {"caption": "三者共同形成碳价信号", "show": ["n1", "n2", "n3", "n4", "n5"], "active": "n5"},
+            {"caption": "CCER 抵消能降低配额需求", "show": ["n3", "n6"], "active": "n6"},
+            {"caption": "三者共同形成碳价信号", "show": ["n1", "n2", "n3", "n4", "n5", "n6"], "active": "n5"},
         ],
         "game": {
             "type": "sort",
@@ -89,7 +95,7 @@ def generate_market_and_price_scene() -> dict | None:
 
 
 def generate_compliance_cycle_scene() -> dict | None:
-    """履约周期：核算 → 报告 → 核查 → 清缴（ct-004/009/010）。"""
+    """履约周期：核算 → 报告 → 核查 → 清缴 + 处罚整改（ct-004/009/010）。"""
     spec = {
         "title": "履约周期与 MRV 流程",
         "nodes": [
@@ -98,18 +104,21 @@ def generate_compliance_cycle_scene() -> dict | None:
             {"id": "n3", "label": "第三方核查", "kind": "flow"},
             {"id": "n4", "label": "配额清缴", "kind": "current"},
             {"id": "n5", "label": "履约周期", "kind": "note"},
+            {"id": "n6", "label": "处罚/整改", "kind": "box"},
         ],
         "edges": [
-            {"from": "n1", "to": "n2", "label": "产出"},
-            {"from": "n2", "to": "n3", "label": "送核"},
-            {"from": "n3", "to": "n4", "label": "核证后"},
-            {"from": "n5", "to": "n1", "label": "按期启动"},
+            {"from": "n1", "to": "n2", "label": "产出", "type": "causes"},
+            {"from": "n2", "to": "n3", "label": "送核", "type": "prereq"},
+            {"from": "n3", "to": "n4", "label": "核证后", "type": "causes"},
+            {"from": "n5", "to": "n1", "label": "按期启动", "type": "prereq"},
+            {"from": "n4", "to": "n6", "label": "未达标触发", "type": "causes"},
         ],
         "steps": [
             {"caption": "履约周期启动：排放单位先核算排放量", "show": ["n5", "n1"], "active": "n1"},
             {"caption": "核算结果形成排放报告", "show": ["n5", "n1", "n2"], "active": "n2"},
             {"caption": "独立第三方核查数据", "show": ["n5", "n1", "n2", "n3"], "active": "n3"},
-            {"caption": "以核证数据为准清缴配额，完成履约", "show": ["n5", "n1", "n2", "n3", "n4"], "active": "n4"},
+            {"caption": "以核证数据为准清缴配额，完成履约", "show": ["n5", "n1", "n2", "n3", "n4", "n6"], "active": "n4"},
+            {"caption": "未按规定清缴触发处罚与整改", "show": ["n4", "n6"], "active": "n6"},
         ],
         "game": {
             "type": "sort",
@@ -123,7 +132,7 @@ def generate_compliance_cycle_scene() -> dict | None:
 
 
 def generate_offset_scene() -> dict | None:
-    """抵消机制与自愿减排量（ct-007/008）。"""
+    """抵消机制与自愿减排量 + 抵消比例上限（ct-007/008）。"""
     spec = {
         "title": "抵消机制：自愿减排量的用途",
         "nodes": [
@@ -131,19 +140,22 @@ def generate_offset_scene() -> dict | None:
             {"id": "n2", "label": "自愿减排量", "kind": "flow"},
             {"id": "n3", "label": "核证", "kind": "box"},
             {"id": "n4", "label": "抵消机制", "kind": "current"},
-            {"id": "n5", "label": "履约义���", "kind": "note"},
+            {"id": "n5", "label": "履约义务", "kind": "note"},
+            {"id": "n6", "label": "抵消比例上限", "kind": "note"},
         ],
         "edges": [
-            {"from": "n1", "to": "n2", "label": "产生"},
-            {"from": "n2", "to": "n3", "label": "经"},
-            {"from": "n3", "to": "n4", "label": "进入"},
-            {"from": "n4", "to": "n5", "label": "抵销部分"},
+            {"from": "n1", "to": "n2", "label": "产生", "type": "causes"},
+            {"from": "n2", "to": "n3", "label": "经", "type": "prereq"},
+            {"from": "n3", "to": "n4", "label": "进入", "type": "causes"},
+            {"from": "n4", "to": "n5", "label": "抵销部分", "type": "causes"},
+            {"from": "n6", "to": "n4", "label": "限制", "type": "prereq"},
         ],
         "steps": [
             {"caption": "自愿减排项目产生减排量", "show": ["n1"], "active": "n1"},
             {"caption": "减排量需经核证才可用", "show": ["n1", "n2", "n3"], "active": "n3"},
             {"caption": "核证减排量通过抵消机制使用", "show": ["n1", "n2", "n3", "n4"], "active": "n4"},
-            {"caption": "抵销部分履约义务（有使用范围限制）", "show": ["n1", "n2", "n3", "n4", "n5"], "active": "n5"},
+            {"caption": "抵销部分履约义务（有比例上限限制）", "show": ["n1", "n2", "n3", "n4", "n5", "n6"], "active": "n5"},
+            {"caption": "超过上限的减排量不能用于当期履约", "show": ["n4", "n6"], "active": "n6"},
         ],
         "game": {
             "type": "sort",

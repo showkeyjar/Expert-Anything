@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>分布式资源的平衡与支撑作用 — ExpertAnything</title>
+<style>
+  :root { --ink:#1C2B3A; --muted:#7B8FA3; --line:#E3EAF3; }
+  body { font-family: 'Noto Sans','Microsoft YaHei',sans-serif; margin: 0;
+         background: radial-gradient(1100px 420px at 50% -120px, #DCE9F8 0%,
+                      rgba(220,233,248,0) 62%), #F5F8FC;
+         color: var(--ink); }
+  .wrap { max-width: 800px; margin: 0 auto; padding: 26px 16px 70px; }
+  .hero { position: relative; overflow: hidden; color: #fff; border-radius: 18px;
+          padding: 26px 26px 22px; margin-bottom: 18px;
+          background: linear-gradient(120deg, #0D47A1 0%, #1976D2 55%, #00ACC1 100%);
+          box-shadow: 0 12px 30px rgba(13, 71, 161, 0.28); }
+  .hero::after { content: ""; position: absolute; right: -55px; top: -55px;
+          width: 210px; height: 210px; border-radius: 50%;
+          background: rgba(255,255,255,0.10); }
+  .hero::before { content: ""; position: absolute; right: 60px; bottom: -95px;
+          width: 180px; height: 180px; border-radius: 50%;
+          background: rgba(255,255,255,0.08); }
+  .hero-badge { display: inline-block; font-size: 11px; letter-spacing: 2.5px;
+          background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.35);
+          padding: 3px 12px; border-radius: 999px; }
+  .hero h1 { margin: 10px 0 4px; font-size: 24px; letter-spacing: 0.5px; }
+  .hero .sub { color: rgba(255,255,255,0.78); font-size: 13px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 18px;
+          padding: 18px; margin-bottom: 18px;
+          box-shadow: 0 8px 24px rgba(23, 54, 93, 0.07); }
+  .card-head { display: flex; align-items: center; justify-content: space-between;
+          gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+  h2 { font-size: 14px; color: #33475C; margin: 0; }
+  .pill { font-size: 11px; color: #5B7290; background: #EEF3FA;
+          border-radius: 999px; padding: 3px 10px; transition: all 0.3s; }
+  .stage { border-radius: 12px; overflow: hidden; background: #FBFDFF;
+          border: 1px solid #EDF2F8; }
+  .stage svg { display: block; width: 100%; height: auto; }
+  /* scene element state machine (classes toggled by the player) */
+  .stage .nd, .stage .ed { transition: opacity 0.55s ease; }
+  .stage .nd { transform-box: fill-box; transform-origin: center; }
+  .stage .nd.off { opacity: 0.07; }
+  .stage .nd.pop { animation: ndpop 0.6s cubic-bezier(0.2, 0.8, 0.3, 1.25); }
+  @keyframes ndpop { 0% { opacity: 0; transform: scale(0.5); }
+          60% { transform: scale(1.07); }
+          100% { opacity: 1; transform: scale(1); } }
+  .stage .nd .halo { opacity: 0; transition: opacity 0.4s; }
+  .stage .nd.act .halo { opacity: 1; animation: haloPulse 1.6s ease-in-out infinite; }
+  @keyframes haloPulse { 0%, 100% { stroke-opacity: 0.95; }
+          50% { stroke-opacity: 0.2; } }
+  .stage .ed.off { opacity: 0.05; }
+  .stage .ed.lit path { stroke-dasharray: 7 5; animation: edflow 1.1s linear infinite; }
+  @keyframes edflow { to { stroke-dashoffset: -24; } }
+  .caption { min-height: 40px; margin-top: 12px; font-size: 14.5px; color: #123B66;
+          opacity: 0; transform: translateY(6px); transition: all 0.45s ease; }
+  .caption.show { opacity: 1; transform: none; }
+  .caption b { display: inline-block; color: #fff; border-radius: 8px;
+          font-size: 12px; padding: 1px 9px; margin-right: 8px;
+          background: linear-gradient(120deg, #1976D2, #00ACC1); }
+  .timeline { display: flex; gap: 8px; margin: 12px 0 2px; }
+  .dot { width: 27px; height: 27px; border-radius: 50%; border: 2px solid #C6D4E4;
+          background: #fff; color: var(--muted); font-size: 12px; cursor: pointer;
+          transition: all 0.25s; }
+  .dot:hover { transform: translateY(-2px); }
+  .dot.done { background: #DCEBFB; border-color: #64B5F6; color: #1565C0; }
+  .dot.cur { color: #fff; border-color: transparent;
+          background: linear-gradient(120deg, #1976D2, #00ACC1);
+          box-shadow: 0 4px 10px rgba(25, 118, 210, 0.4); }
+  .btns button { border: 1px solid #C9D6E5; background: #fff; border-radius: 10px;
+          padding: 7px 16px; font-size: 13px; cursor: pointer; margin: 10px 6px 0 0;
+          color: #33475C; transition: all 0.2s; }
+  .btns button:hover { transform: translateY(-1px);
+          box-shadow: 0 4px 10px rgba(23, 54, 93, 0.12); }
+  .btns button.primary { color: #fff; border: none; font-weight: 600;
+          background: linear-gradient(120deg, #1976D2, #00ACC1); }
+  .btns button.ghost { border-style: dashed; color: #5B7290; }
+  /* game */
+  .goal { font-size: 13px; color: #5B7290; margin: 4px 0 10px; }
+  .chip { display: inline-block; margin: 4px; padding: 8px 14px;
+          border-radius: 999px; border: 1.5px solid #90CAF9; color: #0D47A1;
+          background: linear-gradient(180deg, #F4F9FF, #E3F2FD); font-size: 13px;
+          cursor: pointer; transition: all 0.18s; }
+  .chip:hover:not(:disabled) { transform: translateY(-2px);
+          box-shadow: 0 5px 12px rgba(33, 150, 243, 0.25); }
+  .chip:disabled { opacity: 0.25; cursor: default; }
+  .slots { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 4px; }
+  .slot { display: flex; align-items: center; gap: 10px; min-height: 42px;
+          border: 2px dashed #C6D4E4; border-radius: 12px; padding: 8px 12px;
+          background: #FBFDFF; transition: all 0.25s; }
+  .slot i { font-style: normal; flex: none; width: 22px; height: 22px;
+          border-radius: 50%; background: #E8EFF8; color: #5B7290;
+          display: flex; align-items: center; justify-content: center;
+          font-size: 12px; transition: all 0.25s; }
+  .slot span { font-size: 13.5px; color: #123B66; font-weight: 600; }
+  .slot.filled { border-style: solid; border-color: #64B5F6; background: #F1F8FF;
+          cursor: pointer; }
+  .slot.filled:hover { border-color: #EF5350; }
+  .slot.ok { border-color: #66BB6A; background: #EDF7ED; }
+  .slot.ok i { background: #66BB6A; color: #fff; }
+  .slot.ok::after { content: "\2713"; color: #2E7D32; font-weight: 700;
+          margin-left: auto; }
+  .slot.no { border-color: #EF9A9A; background: #FDEDED; }
+  .slot.no i { background: #EF9A9A; color: #fff; }
+  .slot.no::after { content: "\2717"; color: #C62828; font-weight: 700;
+          margin-left: auto; }
+  .slot.reveal { border-color: #FFB74D; background: #FFF8E1; }
+  .verdict { font-size: 14px; min-height: 22px; font-weight: 600; }
+  .verdict.ok { color: #2E7D32; }
+  .verdict.no { color: #C62828; }
+  #confetti { position: relative; height: 74px; overflow: hidden; margin-top: 2px; }
+  #confetti span { position: absolute; top: -14px; width: 9px; height: 14px;
+          border-radius: 2px; opacity: 0;
+          animation: fall 1.7s ease-in forwards; }
+  @keyframes fall { 0% { opacity: 1; transform: translateY(0) rotate(0deg); }
+          100% { opacity: 0; transform: translateY(95px) rotate(340deg); } }
+  .foot { text-align: center; color: #9FB1C4; font-size: 11px;
+          letter-spacing: 1.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hero">
+    <span class="hero-badge">知识解码</span>
+    <h1>分布式资源的平衡与支撑作用</h1>
+    <div class="sub">削峰填谷 · 就地消纳 · 电压支撑 · 分布式能源领域模板</div>
+  </div>
+  <section class="card" style="padding:14px 18px;">
+    <div style="margin-bottom:10px;"><div style="font-size:10px;font-weight:700;color:#5B7290;letter-spacing:1px;margin-bottom:4px;">概念定义</div><div style="font-size:13.5px;line-height:1.6;color:#1C2B3A;">贴近用户侧、分散接入电网的小型发电/储能/可控负荷资源及其聚合形态。</div></div>
+  </section>
+  <section class="card">
+    <div class="card-head">
+      <h2>知识解译</h2>
+      <span class="pill" id="stagepill">全景 · 静态结构图</span>
+    </div>
+    <div class="stage" id="stage"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 380" width="100%" style="font-family:'Noto Sans','Microsoft YaHei',sans-serif"><defs><linearGradient id="g_box" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#EAF4FE"/><stop offset="1" stop-color="#BBDEFB"/></linearGradient><linearGradient id="g_store" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFFDF2"/><stop offset="1" stop-color="#FFE082"/></linearGradient><linearGradient id="g_flow" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#F0F9F0"/><stop offset="1" stop-color="#C5E1A5"/></linearGradient><linearGradient id="g_note" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FAF0FC"/><stop offset="1" stop-color="#E1BEE7"/></linearGradient><linearGradient id="g_current" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2196F3"/><stop offset="1" stop-color="#0D47A1"/></linearGradient><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FDFEFF"/><stop offset="1" stop-color="#EFF5FA"/></linearGradient><pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.1" fill="#DAE5F0"/></pattern><filter id="soft" x="-25%" y="-25%" width="150%" height="150%"><feDropShadow dx="0" dy="2.5" stdDeviation="3" flood-color="#23384D" flood-opacity="0.20"/></filter><marker id="ar" viewBox="0 0 10 10" refX="8.6" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7E93A8"/></marker></defs><rect width="720" height="380" rx="14" fill="url(#bg)"/><rect width="720" height="380" rx="14" fill="url(#dots)"/><g class="ed" data-f="n2" data-t="n1"><path d="M 194,190 Q 360,243 526,190" fill="none" stroke="#AB47BC" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ar)"/><rect x="332" y="226" width="56" height="17" rx="8" fill="#FFFFFF" stroke="#AB47BC" stroke-width="1" opacity="0.96"/><text x="360" y="237" text-anchor="middle" font-size="11" font-weight="600" fill="#AB47BC">减少倒送</text></g><g class="ed" data-f="n3" data-t="n1"><path d="M 444,190 Q 485,203 526,190" fill="none" stroke="#EF5350" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ar)"/><rect x="457" y="186" width="56" height="17" rx="8" fill="#FFFFFF" stroke="#EF5350" stroke-width="1" opacity="0.96"/><text x="485" y="197" text-anchor="middle" font-size="11" font-weight="600" fill="#EF5350">支撑并网</text></g><g class="ed" data-f="n2" data-t="n3"><path d="M 194,190 Q 235,203 276,190" fill="none" stroke="#78909C" stroke-width="1.8" stroke-linecap="round" marker-end="url(#ar)"/><rect x="219" y="186" width="32" height="17" rx="8" fill="#FFFFFF" stroke="#78909C" stroke-width="1" opacity="0.96"/><text x="235" y="197" text-anchor="middle" font-size="11" font-weight="600" fill="#78909C">协同</text></g><g class="nd" data-id="n1"><rect class="halo" x="520" y="158" width="180" height="64" rx="13" fill="none" stroke="#FF9800" stroke-width="2.4"/><rect x="526" y="164" width="168" height="52" rx="10" fill="url(#g_current)" stroke="#0D47A1" stroke-width="1.6" filter="url(#soft)"/><circle cx="538" cy="176" r="8" fill="#0D47A1" opacity="0.92"/><text x="538" y="179.5" text-anchor="middle" font-size="9" fill="#FFFFFF">★</text><text x="610" y="195" text-anchor="middle" font-size="15" font-weight="600" fill="#FFFFFF">削峰填谷</text></g><g class="nd" data-id="n2"><rect class="halo" x="20" y="158" width="180" height="64" rx="13" fill="none" stroke="#FF9800" stroke-width="2.4"/><rect x="26" y="164" width="168" height="52" rx="10" fill="url(#g_box)" stroke="#42A5F5" stroke-width="1.6" filter="url(#soft)"/><circle cx="38" cy="176" r="8" fill="#42A5F5" opacity="0.92"/><text x="38" y="179.5" text-anchor="middle" font-size="9" fill="#FFFFFF">▪</text><text x="110" y="195" text-anchor="middle" font-size="15" font-weight="600" fill="#0D47A1">就地消纳</text></g><g class="nd" data-id="n3"><rect class="halo" x="270" y="158" width="180" height="64" rx="13" fill="none" stroke="#FF9800" stroke-width="2.4"/><rect x="276" y="164" width="168" height="52" rx="10" fill="url(#g_box)" stroke="#42A5F5" stroke-width="1.6" filter="url(#soft)"/><circle cx="288" cy="176" r="8" fill="#42A5F5" opacity="0.92"/><text x="288" y="179.5" text-anchor="middle" font-size="9" fill="#FFFFFF">▪</text><text x="360" y="195" text-anchor="middle" font-size="15" font-weight="600" fill="#0D47A1">电压/无功支撑</text></g></svg></div>
+    <div class="caption" id="caption"></div>
+    <div class="timeline" id="dots" style="display:none"></div>
+    <div class="btns">
+      <button id="back" class="ghost" style="display:none">
+        &#9678; 返回全景</button>
+      <button id="start" class="primary">分步讲解 &#8250;</button>
+      <span id="stepctl" style="display:none">
+        <button id="prev">&#8249; 上一步</button>
+        <button id="play">&#9654; 自动播放</button>
+        <button id="next">下一步 &#8250;</button>
+      </span>
+    </div>
+  </section>
+  <section class="card" style="padding:14px 18px;">
+    <div style="font-size:11px;font-weight:700;color:#8D6E63;letter-spacing:1px;
+                margin-bottom:8px;">关系图例</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;">
+      <span style="font-size:11px;color:#fff;background:#42A5F5;border-radius:8px;padding:2px 8px;">分类</span>
+      <span style="font-size:11px;color:#fff;background:#66BB6A;border-radius:8px;padding:2px 8px;">组成</span>
+      <span style="font-size:11px;color:#fff;background:#EF5350;border-radius:8px;padding:2px 8px;">因果</span>
+      <span style="font-size:11px;color:#fff;background:#AB47BC;border-radius:8px;padding:2px 8px;">前提</span>
+      <span style="font-size:11px;color:#fff;background:#FF9800;border-radius:8px;padding:2px 8px;">对比</span>
+      <span style="font-size:11px;color:#fff;background:#78909C;border-radius:8px;padding:2px 8px;">关联</span>
+    </div>
+  </section>
+  
+    <section class="card">
+      <div class="card-head">
+        <h2>动手排一排</h2>
+        <span class="pill">把步骤按正确顺序点出来，检验你是否真的理解了</span>
+      </div>
+      <p class="goal">把三种作用按服务目标排序（并网电压→消纳→曲线）</p>
+      <div class="chips" id="pool"><button class="chip" data-i="0">削峰填谷</button><button class="chip" data-i="1">就地消纳</button><button class="chip" data-i="2">电压/无功支撑</button></div>
+      <div class="slots" id="slots"><div class="slot" data-pos="0"><i>1</i><span></span></div><div class="slot" data-pos="1"><i>2</i><span></span></div><div class="slot" data-pos="2"><i>3</i><span></span></div></div>
+      <div class="btns">
+        <button id="check" class="primary">检查</button>
+        <button id="reveal">正确顺序</button>
+        <button id="retry">再试一次</button>
+      </div>
+      <p id="verdict" class="verdict"></p>
+      <div id="confetti"></div>
+    </section>
+    <script>
+    var ANSWER = [2, 1, 0];
+    var ITEMS = ["削峰填谷", "就地消纳", "电压/无功支撑"];
+    var PARTIAL = "答对 {ok}/{n} 个位置，绿色是正确的，再调整一下";
+    var CORRECT = "答对了！";
+    var picked = ITEMS.map(function() { return null; });
+    function render() {
+      picked.forEach(function(it, pos) {
+        var slot = document.querySelector('.slot[data-pos="' + pos + '"]');
+        slot.classList.toggle("filled", it !== null);
+        slot.querySelector("span").textContent = it === null ? "" : ITEMS[it];
+      });
+      Array.prototype.forEach.call(
+        document.querySelectorAll("#pool .chip"),
+        function(b) { b.disabled = picked.indexOf(+b.dataset.i) >= 0; });
+    }
+    function clearMarks() {
+      document.querySelectorAll(".slot").forEach(function(s) {
+        s.classList.remove("ok", "no", "reveal");
+      });
+      var v = document.getElementById("verdict");
+      v.className = "verdict"; v.textContent = "";
+    }
+    document.getElementById("pool").onclick = function(ev) {
+      var b = ev.target.closest("button.chip");
+      if (!b) return;
+      var i = +b.dataset.i;
+      if (picked.indexOf(i) >= 0) return;
+      for (var p = 0; p < picked.length; p++) {
+        if (picked[p] === null) { picked[p] = i; break; }
+      }
+      render();
+    };
+    document.getElementById("slots").onclick = function(ev) {
+      var slot = ev.target.closest(".slot");
+      if (!slot || !slot.classList.contains("filled")) return;
+      picked[+slot.dataset.pos] = null;
+      clearMarks(); render();
+    };
+    document.getElementById("check").onclick = function() {
+      if (picked.some(function(x) { return x === null; })) return;
+      var hits = 0;
+      picked.forEach(function(x, pos) {
+        var slot = document.querySelector('.slot[data-pos="' + pos + '"]');
+        var good = x === ANSWER[pos];
+        if (good) hits++;
+        slot.classList.add(good ? "ok" : "no");
+      });
+      var v = document.getElementById("verdict");
+      if (hits === ANSWER.length) {
+        v.textContent = CORRECT; v.className = "verdict ok"; confetti();
+      } else {
+        v.textContent = PARTIAL.replace("{ok}", hits).replace("{n}", ANSWER.length);
+        v.className = "verdict no";
+      }
+    };
+    document.getElementById("reveal").onclick = function() {
+      clearMarks();
+      ANSWER.forEach(function(it, pos) { picked[pos] = it; });
+      render();
+      document.querySelectorAll(".slot").forEach(function(s) {
+        s.classList.add("reveal");
+      });
+    };
+    document.getElementById("retry").onclick = function() {
+      clearMarks();
+      picked = ITEMS.map(function() { return null; });
+      render();
+    };
+    function confetti() {
+      var c = document.getElementById("confetti");
+      c.innerHTML = "";
+      var colors = ["#F44336", "#FF9800", "#FDD835", "#43A047",
+                    "#1E88E5", "#AB47BC"];
+      for (var k = 0; k < 44; k++) {
+        var s = document.createElement("span");
+        s.style.left = (Math.random() * 100) + "%";
+        s.style.background = colors[k % colors.length];
+        s.style.animationDelay = (Math.random() * 0.5).toFixed(2) + "s";
+        c.appendChild(s);
+      }
+      setTimeout(function() { c.innerHTML = ""; }, 2600);
+    }
+    render();
+    </script>
+  <div class="foot">EXPERTANYTHING &middot; KNOWLEDGE DECODER</div>
+</div>
+<script>
+var FRAMES = [{"caption": "削峰填谷：高峰放电、低谷充电平抑净负荷", "show": ["n1"], "active": "n1"}, {"caption": "就地消纳在接入点附近直接消耗出力，减少倒送", "show": ["n1", "n2"], "active": "n2"}, {"caption": "电压/无功支撑维持并网点电压合格", "show": ["n1", "n2", "n3"], "active": "n3"}, {"caption": "就地消纳减少倒送，降低对削峰填谷的压力", "show": ["n1", "n2", "n3"], "active": "n2"}, {"caption": "三者共同保障分布式电源友好并网", "show": ["n1", "n2", "n3"], "active": "n1"}];
+var OVERVIEW = "全景视图 · 先整体看清结构；需要逐步讲解时再点击「分步讲解」";
+var PILL_OV = "全景 · 静态结构图";
+var PILL_STEP = "分步讲解 · 逐步揭示";
+var stage = document.getElementById("stage");
+var nodesArr = stage.querySelectorAll(".nd");
+var edgesArr = stage.querySelectorAll(".ed");
+var dotsBox = document.getElementById("dots");
+var cap = document.getElementById("caption");
+var pill = document.getElementById("stagepill");
+var playBtn = document.getElementById("play");
+var backBtn = document.getElementById("back");
+var startBtn = document.getElementById("start");
+var stepCtl = document.getElementById("stepctl");
+var PLAY_LABEL = playBtn.innerHTML;
+FRAMES.forEach(function(f, k) {
+  var d = document.createElement("button");
+  d.className = "dot"; d.textContent = k + 1;
+  d.onclick = function() { enterStep(k); };
+  dotsBox.appendChild(d);
+});
+var idx = 0, timer = null, inStep = false;
+function setCaption(html) {
+  cap.classList.remove("show"); void cap.offsetWidth;
+  cap.innerHTML = html; cap.classList.add("show");
+}
+/* L1 — static overview: everything visible, nothing animates */
+function showStatic() {
+  inStep = false; stopPlay();
+  nodesArr.forEach(function(n) { n.classList.remove("off", "act", "pop"); });
+  edgesArr.forEach(function(e) { e.classList.remove("off", "lit"); });
+  setCaption("<b>&#9678;</b> " + OVERVIEW);
+  pill.textContent = PILL_OV;
+  dotsBox.style.display = "none";
+  backBtn.style.display = "none";
+  startBtn.style.display = "";
+  stepCtl.style.display = "none";
+}
+/* L2 — step-by-step walkthrough (opt-in, never the default) */
+function enterStep(i) {
+  if (!inStep) {
+    inStep = true;
+    dotsBox.style.display = "flex";
+    backBtn.style.display = "";
+    startBtn.style.display = "none";
+    stepCtl.style.display = "";
+    pill.textContent = PILL_STEP;
+  }
+  show(i);
+}
+function show(i) {
+  idx = Math.max(0, Math.min(FRAMES.length - 1, i));
+  var vis = {};
+  for (var k = 0; k <= idx; k++)
+    FRAMES[k].show.forEach(function(id) { vis[id] = 1; });
+  var act = FRAMES[idx].active;
+  nodesArr.forEach(function(n) {
+    var on = !!vis[n.dataset.id];
+    var wasOff = n.classList.contains("off");
+    n.classList.toggle("off", !on);
+    if (on && wasOff) {
+      n.classList.remove("pop"); void n.getBoundingClientRect();
+      n.classList.add("pop");
+    }
+    n.classList.toggle("act", n.dataset.id === act);
+  });
+  edgesArr.forEach(function(e) {
+    var on = !!vis[e.dataset.f] && !!vis[e.dataset.t];
+    var wasOff = e.classList.contains("off");
+    e.classList.toggle("off", !on);
+    e.classList.remove("lit");
+    if (on && wasOff) {
+      void e.getBoundingClientRect(); e.classList.add("lit");
+      setTimeout(function() { e.classList.remove("lit"); }, 1500);
+    }
+  });
+  setCaption("<b>" + (idx + 1) + "/" + FRAMES.length + "</b> " +
+             FRAMES[idx].caption);
+  dotsBox.querySelectorAll(".dot").forEach(function(d, k) {
+    d.className = "dot" + (k === idx ? " cur" : (k < idx ? " done" : ""));
+  });
+}
+document.getElementById("prev").onclick = function() { show(idx - 1); };
+document.getElementById("next").onclick = function() { show(idx + 1); };
+function stopPlay() {
+  if (timer) { clearInterval(timer); timer = null; }
+  playBtn.innerHTML = PLAY_LABEL;
+}
+playBtn.onclick = function() {
+  if (timer) { stopPlay(); return; }
+  enterStep(0);
+  playBtn.innerHTML = "&#10074;&#10074;";
+  timer = setInterval(function() {
+    if (idx >= FRAMES.length - 1) { stopPlay(); return; }
+    show(idx + 1);
+  }, 2600);
+};
+startBtn.onclick = function() { enterStep(0); };
+backBtn.onclick = function() { showStatic(); };
+document.addEventListener("keydown", function(ev) {
+  if (!inStep) {
+    if (ev.key === "ArrowRight" || ev.code === "Space") {
+      ev.preventDefault(); enterStep(0);
+    }
+    return;
+  }
+  if (ev.key === "ArrowLeft") show(idx - 1);
+  else if (ev.key === "ArrowRight") show(idx + 1);
+  else if (ev.key === "Escape") showStatic();
+  else if (ev.code === "Space") { ev.preventDefault(); playBtn.click(); }
+});
+showStatic();
+</script>
+</body>
+</html>

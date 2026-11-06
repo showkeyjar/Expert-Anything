@@ -42,6 +42,32 @@ LLM_API_KEY = os.environ.get("EXPERTANYTHING_LLM_API_KEY", "")
 LLM_BASE_URL = os.environ.get("EXPERTANYTHING_LLM_BASE_URL", "https://api.openai.com/v1")
 LLM_MODEL = os.environ.get("EXPERTANYTHING_LLM_MODEL", "gpt-4o-mini")
 
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+# Single in-flight request by default: the local llama.cpp endpoint exposes one
+# decoding slot, and serialising removes one source of run-to-run jitter. Raise
+# it for cloud endpoints that genuinely serve concurrent requests.
+LLM_MAX_CONCURRENCY = _env_int("EXPERTANYTHING_LLM_MAX_CONCURRENCY", 1)
+# Fixed sampling seed for extraction calls (0 = deterministic attempt).
+LLM_SEED = os.environ.get("EXPERTANYTHING_LLM_SEED", "0")
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+# Base HTTP timeout; chat_json raises it for long generations (see _call_timeout).
+LLM_TIMEOUT = _env_float("EXPERTANYTHING_LLM_TIMEOUT", 60.0)
+
 # --- Storage ----------------------------------------------------------------
 DATA_DIR = Path(os.environ.get("EXPERTANYTHING_DATA_DIR", str(WORKSPACE / "data")))
 ASSETS_DIR = DATA_DIR / "assets"

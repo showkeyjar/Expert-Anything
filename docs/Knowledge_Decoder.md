@@ -29,7 +29,8 @@
 
 **铁律（来源约束延伸到多模态）**：场景节点与步骤必须源于概念的
 定义/证据/关系；LLM 编造的实体无法通过证据锚定，由 prompt 约束 +
-check_scene 结构校验双层把关（完全的证据级校验待 SourceLocation 落地后补强）。
+check_scene 结构校验双层把关（SourceLocation 已落地，证据级锚定与
+原文双向跳转见 AGENTS.md 设计理念 §4）。
 
 ## 2.1 逐级递增原则（progressive representation）
 

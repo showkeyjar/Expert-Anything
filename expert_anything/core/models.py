@@ -126,6 +126,10 @@ class Relation:
     label: str = ""
     type: str = "related"
     evidence: str = ""
+    # Anchor of `evidence` inside KnowledgeAsset.source_text (line/char/page),
+    # stamped like Concept.locations so the edge card can point at the exact
+    # passage instead of re-searching text in the UI.
+    location: SourceLocation | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -135,10 +139,12 @@ class Relation:
             "label": self.label,
             "type": self.type,
             "evidence": self.evidence,
+            "location": self.location.to_dict() if self.location else None,
         }
 
     @classmethod
     def from_dict(cls, d: dict) -> "Relation":
+        loc = d.get("location")
         return cls(
             id=d.get("id", _new_id("r")),
             source=d["source"],
@@ -146,6 +152,7 @@ class Relation:
             label=d.get("label", ""),
             type=d.get("type", "related"),
             evidence=d.get("evidence", ""),
+            location=SourceLocation.from_dict(loc) if isinstance(loc, dict) else None,
         )
 
 
@@ -181,6 +188,11 @@ class KnowledgeAsset:
     learning_path: list[str] = field(default_factory=list)
     method: str = "unknown"
     source_length: int = 0
+    # How this asset was actually produced (LLM vs deterministic fallback),
+    # which endpoint capability was used, whether the answer was truncated /
+    # repaired, and why a fallback happened. Queryable by callers and the UI so
+    # a degraded run is never presented as a successful LLM extraction.
+    provenance: dict = field(default_factory=dict)
 
     def concept_by_id(self, cid: str) -> Concept | None:
         return next((c for c in self.concepts if c.id == cid), None)
@@ -202,6 +214,7 @@ class KnowledgeAsset:
             "relations": [r.to_dict() for r in self.relations],
             "learning_path": self.learning_path,
             "method": self.method,
+            "provenance": self.provenance,
             "source_length": len(self.source_text),
         }
 
@@ -219,6 +232,7 @@ class KnowledgeAsset:
             relations=[Relation.from_dict(r) for r in d.get("relations", [])],
             learning_path=d.get("learning_path", []),
             method=d.get("method", "unknown"),
+            provenance=d.get("provenance", {}) or {},
             source_length=d.get("source_length", len(d.get("source_text", ""))),
         )
 

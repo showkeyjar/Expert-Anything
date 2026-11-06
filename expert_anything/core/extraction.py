@@ -10,11 +10,19 @@ from __future__ import annotations
 import concurrent.futures
 import functools
 import json
+import logging
+import os
 import re
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from expert_anything.core.llm import LLMClient, Message, parse_llm_json, chat_json
+from expert_anything.core.llm import (
+    LLMClient,
+    Message,
+    _profile_min_output_tokens,
+    chat_json,
+    parse_llm_json,
+)
 from expert_anything.core.models import (
     Chapter,
     Concept,
@@ -30,6 +38,97 @@ from expert_anything.core.parsers import title_from
 from expert_anything.core.prompt_registry import get_domain_prompt
 from expert_anything.core import i18n
 _t = i18n.t
+
+logger = logging.getLogger(__name__)
+
+
+def _extract_temperature() -> float:
+    """Temperature for extraction calls (default 0 for reproducibility)."""
+    try:
+        return float(os.environ.get("EXPERTANYTHING_EXTRACT_TEMPERATURE", "0"))
+    except ValueError:
+        return 0.0
+
+
+def _extract_seed() -> int | None:
+    """Fixed sampling seed so repeated local runs stay comparable."""
+    raw = os.environ.get("EXPERTANYTHING_LLM_SEED", "0").strip().lower()
+    if raw in ("", "none", "off", "disabled"):
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return 0
+
+
+_OUTPUT_RATIO_DEFAULT = 0.55
+_OUTPUT_FLOOR = 1024
+_OUTPUT_CEILING = 8192
+
+
+def _output_budget(snippet: str) -> int:
+    """Derive ``max_tokens`` from the chunk length instead of a fixed 1500.
+
+    A 9000-char Chinese chunk on this model needed ~2700–4400 output tokens
+    (AGENTS.md #48), so the old 1500 cap truncated the JSON. ``ratio=0.55``
+    plus 600 head-room yields ~5550 for that chunk; the floor protects small
+    chunks and the ceiling keeps prompt+output inside ``n_ctx=16384``.
+    """
+    try:
+        ratio = float(
+            os.environ.get("EXPERTANYTHING_LLM_OUTPUT_RATIO", str(_OUTPUT_RATIO_DEFAULT))
+        )
+    except ValueError:
+        ratio = _OUTPUT_RATIO_DEFAULT
+    try:
+        ceiling = int(
+            os.environ.get("EXPERTANYTHING_LLM_MAX_TOKENS_CEILING", str(_OUTPUT_CEILING))
+        )
+    except ValueError:
+        ceiling = _OUTPUT_CEILING
+    budget = int(len(snippet) * ratio) + 600
+    return max(_OUTPUT_FLOOR, min(ceiling, budget))
+
+
+def _provenance_from_reports(method: str, reports: list[dict]) -> dict:
+    """Aggregate per-call chat_json reports into one queryable provenance block."""
+    attempts = [a for r in reports for a in r.get("attempts", [])]
+    caps = [r["json_mode_capability"] for r in reports if r.get("json_mode_capability")]
+    return {
+        "source": method,
+        "llm": True,
+        "explicit_fallback": False,
+        "json_mode": any(a.get("json_mode") for a in attempts),
+        "json_mode_capability": caps[0] if caps else "unknown",
+        "json_mode_source": next(
+            (r["json_mode_source"] for r in reports if r.get("json_mode_source")), "default"
+        ),
+        "grammar_early_stop": any(r.get("grammar_early_stop") for r in reports),
+        "json_mode_downgraded": any(r.get("json_mode_downgraded") for r in reports),
+        "attempts": len(attempts),
+        "max_tokens": max((a.get("max_tokens") or 0) for a in attempts) if attempts else 0,
+        "finish_reasons": [a.get("finish_reason", "") for a in attempts],
+        "parse_repairs": sorted(
+            {rep for a in attempts for rep in a.get("repairs", [])}
+        ),
+        "truncation_retries": sum(r.get("truncation_retries", 0) for r in reports),
+        "truncated_partial": any(r.get("truncated_partial") for r in reports),
+        # Per-attempt facts: enough to tell "grammar stopped early" apart from
+        # "ran out of budget" without re-running the extraction.
+        "attempt_details": [
+            {
+                "json_mode": a.get("json_mode"),
+                "max_tokens": a.get("max_tokens"),
+                "finish_reason": a.get("finish_reason"),
+                "chars": a.get("chars"),
+                "tokens": a.get("tokens"),
+                "keys": a.get("keys"),
+            }
+            for a in attempts
+        ],
+        "temperature": _extract_temperature(),
+        "seed": _extract_seed(),
+    }
 
 
 def _new_id(prefix: str) -> str:
@@ -124,14 +223,17 @@ def _extract_with_llm(
     if len(text) <= CHUNK + OVERLAP:
         if on_progress:
             on_progress("extract", 0, 1, _t("ext_analyzing"))
+        report: dict = {}
         data = _call_extract(
             llm, text[: CHUNK + OVERLAP],
             domain_id=domain_id, concept_skeleton=concept_skeleton,
+            report=report,
         )
         if not data:
             raise ValueError(_t("ext_llm_failed"))
         asset = _assemble(data, text, filename, method="llm_extraction_v1",
                          page_offsets=page_offsets)
+        asset.provenance = _provenance_from_reports("llm_extraction_v1", [report])
         if on_progress:
             on_progress(
                 "extract", 1, 1,
@@ -151,14 +253,27 @@ def _extract_with_llm(
     # deterministic across runs while retaining the parallel latency benefit.
     done = 0
     chunk_results: list[dict | None] = [None] * total
-    with concurrent.futures.ThreadPoolExecutor(max_workers=min(4, total)) as pool:
-        # Bind the domain prompt inputs with partial() so the executor keeps
-        # receiving the same (fn, llm, chunk) call shape as before.
-        extract_chunk = functools.partial(
-            _call_extract, domain_id=domain_id, concept_skeleton=concept_skeleton,
-        )
+    reports: list[dict] = [{} for _ in range(total)]
+    # Reproducibility: the local Vulkan endpoint is not deterministic at temp 0
+    # even with a fixed seed, and concurrent slots make it worse. Keep the pool
+    # in step with the client's concurrency cap (1 slot => strictly serial).
+    workers = min(4, total)
+    if getattr(llm, "max_concurrency", workers) <= 1:
+        workers = 1
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        # Bind the domain prompt inputs and the per-chunk report with partial()
+        # so the executor keeps receiving the same (fn, llm, chunk) call shape.
         futures = {
-            pool.submit(extract_chunk, llm, chunk): index
+            pool.submit(
+                functools.partial(
+                    _call_extract,
+                    domain_id=domain_id,
+                    concept_skeleton=concept_skeleton,
+                    report=reports[index],
+                ),
+                llm,
+                chunk,
+            ): index
             for index, chunk in enumerate(chunks)
         }
         for fut in concurrent.futures.as_completed(futures):
@@ -206,8 +321,19 @@ def _extract_with_llm(
         for p in _as_str_list(d.get("learning_path", [])):
             if p not in merged["learning_path"]:
                 merged["learning_path"].append(p)
+    # A failed chunk must leave a trace: silently dropping it made the whole
+    # document look "successfully extracted but empty".
+    chunk_failures = [
+        {"chunk": index, "reason": reports[index].get("failure_reason") or "empty_result"}
+        for index, result in enumerate(chunk_results)
+        if not result
+    ]
     if not merged["concepts"]:
-        raise ValueError(_t("ext_chunks_failed"))
+        detail = "; ".join(f"#{f['chunk']}: {f['reason']}" for f in chunk_failures[:3])
+        raise ValueError(
+            f"{_t('ext_chunks_failed')}"
+            + (f" ({detail})" if detail else "")
+        )
     # Drop TOC-like noise concepts (chapter/section headings) so the focused
     # model keeps real concepts, then cap the merged set.
     _NOISE = {
@@ -222,6 +348,10 @@ def _extract_with_llm(
     merged["concepts"] = merged["concepts"][:40]
     asset = _assemble(merged, text, filename, method="llm_extraction_chunked_v1",
                       page_offsets=page_offsets)
+    asset.provenance = _provenance_from_reports("llm_extraction_chunked_v1", reports)
+    asset.provenance["chunk_failures"] = chunk_failures
+    asset.provenance["chunks_total"] = total
+    asset.provenance["chunks_failed"] = len(chunk_failures)
     if on_progress:
         on_progress(
             "extract", total, total,
@@ -233,6 +363,7 @@ def _extract_with_llm(
 def _call_extract(
     llm: LLMClient, snippet: str,
     domain_id: str | None = None, concept_skeleton: str = "",
+    report: dict | None = None,
 ) -> dict:
     """One extraction call.
 
@@ -244,16 +375,33 @@ def _call_extract(
     Grounding is enforced entirely in :func:`_assemble` (verbatim evidence,
     hallucinated concepts dropped); a domain prompt never relaxes those checks,
     and the skeleton is explicitly labelled as "not a knowledge source" there.
+
+    ``report`` (when supplied) receives the endpoint-capability / budget /
+    truncation / parse-repair facts recorded by :func:`chat_json`, so the
+    resulting asset can say *how* it was produced.
     """
     system = get_domain_prompt("extraction_system", domain_id)
     user = get_domain_prompt("extraction_user", domain_id).format(
         chunk_text=snippet, concept_skeleton=concept_skeleton
     )
+    # Start from a budget this endpoint already proved sufficient (round 34:
+    # 2286 truncated on a 3067-char doc, 3886 finished). The dynamic estimate is
+    # still the baseline for first-time endpoints / larger chunks.
+    budget = max(_output_budget(snippet), _profile_min_output_tokens(llm))
     return chat_json(
         llm,
         [Message("system", system), Message("user", user)],
-        temperature=0.2,
-        max_tokens=1500,
+        temperature=_extract_temperature(),
+        # Length-scaled budget: a fixed 1500 truncated a 9000-char chunk.
+        max_tokens=budget,
+        # `concepts` must carry content (an empty extraction is not an answer);
+        # `relations` only has to be *present* — an empty list is legitimate,
+        # but a missing key means the model stopped after the first field
+        # (llama.cpp JSON grammar, AGENTS.md #48) and json_mode must be dropped.
+        require_keys=("concepts", "relations"),
+        require_nonempty=("concepts",),
+        seed=_extract_seed(),
+        report=report,
     )
 
 
@@ -332,6 +480,44 @@ def _page_of(char_start: int, page_offsets: list[int] | None) -> int | None:
     return page + 1
 
 
+_SENTENCE_RE = re.compile(r"[^。！？!?\.\n]+[。！？!?\.]?")
+
+
+def _recover_relation_evidence(
+    text: str, source_name: str, target_name: str, evidence: str
+) -> str:
+    """Return a verbatim source span for a relation, or "".
+
+    LLM relation evidence is usually an exact quote, but paraphrases happen.
+    Instead of silently dropping the edge we look for one *sentence* that names
+    both endpoints; only such a sentence is admissible. This keeps the
+    source-grounding rule intact while recovering edges the model really
+    supports, so the semantic network stays as dense as the text allows.
+    """
+    if not text:
+        return ""
+    evidence = (evidence or "").strip()
+    if evidence and evidence in text:
+        return evidence
+    s_name, t_name = (source_name or "").strip(), (target_name or "").strip()
+    if not s_name or not t_name:
+        return ""
+    s_low, t_low = s_name.lower(), t_name.lower()
+    for match in _SENTENCE_RE.finditer(text):
+        span = match.group(0).strip()
+        low = span.lower()
+        if s_low in low and t_low in low:
+            return span
+    return ""
+
+
+def _canonical_relation_type(label: str, rtype: str) -> str:
+    """Fold free-form LLM relation types into the six canonical semantics."""
+    from expert_anything.core.decoder import classify_relation
+
+    return classify_relation(label or "", rtype or "")
+
+
 def _stamp_locations(
     asset: "KnowledgeAsset", page_offsets: list[int] | None = None
 ) -> "KnowledgeAsset":
@@ -368,6 +554,27 @@ def _stamp_locations(
                 )
             )
         c.locations = locs
+
+    # Relation evidence gets the same anchor treatment: an edge without a
+    # locatable span is exactly the kind of unverifiable claim the UI must be
+    # able to expose, so we stamp what we can and leave the rest unanchored.
+    for r in asset.relations:
+        ev = (r.evidence or "").strip()
+        if not ev:
+            r.location = None
+            continue
+        start = text.find(ev)
+        if start < 0:
+            r.location = None
+            continue
+        r.location = SourceLocation(
+            char_start=start,
+            char_end=start + len(ev),
+            chapter="",
+            snippet=ev[:200],
+            line=text.count("\n", 0, start) + 1,
+            page=_page_of(start, page_offsets),
+        )
     return asset
 
 
@@ -407,30 +614,48 @@ def _assemble(
         )
 
     relations: list[Relation] = []
+    name_by_id = {c.id: c.name for c in concepts}
+    seen_relations: set[tuple[str, str, str]] = set()
     for r in data.get("relations", []):
         s, t = _norm(r.get("source", "")), _norm(r.get("target", ""))
-        relation_evidence = _as_str(r.get("evidence"))
+        if not (s in name_to_id and t in name_to_id) or s == t:
+            continue
+        source_id, target_id = name_to_id[s], name_to_id[t]
         # Relations affect the graph, prerequisite order and adaptive path, so
-        # accepting an unsupported edge is more harmful than omitting one.
-        # Require the LLM-provided evidence to be a verbatim source span, just
-        # as concept evidence is required to be grounded.
-        if (
-            s in name_to_id
-            and t in name_to_id
-            and s != t
-            and relation_evidence
-            and relation_evidence in text
-        ):
-            relations.append(
-                Relation(
-                    id=_new_id("r"),
-                    source=name_to_id[s],
-                    target=name_to_id[t],
-                    label=_as_str(r.get("label")),
-                    type=_as_str(r.get("type")) or "related",
-                    evidence=relation_evidence,
-                )
+        # accepting an unsupported edge is more harmful than omitting one:
+        # evidence must be a verbatim span, or recoverable from a sentence that
+        # names both endpoints.
+        relation_evidence = _recover_relation_evidence(
+            text,
+            name_by_id[source_id],
+            name_by_id[target_id],
+            _as_str(r.get("evidence")),
+        )
+        if not relation_evidence:
+            continue
+        rtype = _canonical_relation_type(
+            _as_str(r.get("label")), _as_str(r.get("type"))
+        )
+        # Chunked extraction overlaps, so the same claim often arrives twice.
+        # Contrast is symmetric (A↔B and B↔A are one claim); other semantics
+        # are directed and must stay distinct.
+        if rtype == "contrast":
+            key = (min(source_id, target_id), max(source_id, target_id), rtype)
+        else:
+            key = (source_id, target_id, rtype)
+        if key in seen_relations:
+            continue
+        seen_relations.add(key)
+        relations.append(
+            Relation(
+                id=_new_id("r"),
+                source=source_id,
+                target=target_id,
+                label=_as_str(r.get("label")),
+                type=rtype,
+                evidence=relation_evidence,
             )
+        )
 
     path_names = [_norm(n) for n in _as_str_list(data.get("learning_path", []))]
     learning_path = [name_to_id[n] for n in path_names if n in name_to_id]
@@ -492,10 +717,28 @@ def _fallback(
     # short, actual heading-shaped lines as structure, and keep chapter-level
     # Chinese headings used by this book family as well.
     raw_lines = text.splitlines()
-    heading_rows: list[tuple[int, str, int]] = []
+    # Character offset of every line start. Evidence is sliced from source_text
+    # through these offsets (never re-joined), so a quote stays verbatim even
+    # when the original text uses its own whitespace.
+    line_starts: list[int] = [0]
+    for _m in re.finditer("\n", text):
+        line_starts.append(_m.end())
+    # heading rows: (line number, concept name, nesting level, evidence line).
+    # The raw heading line is kept separately because it is the verbatim span
+    # a structural relation is derived from.
+    heading_rows: list[tuple[int, str, int, str]] = []
+    # A fenced code block may contain lines that begin with '#' (shell comments,
+    # comments in samples). Those are content, not document structure; treating
+    # them as headings created pseudo-concepts that never exist in the topic.
+    in_fence = False
     for line_no, raw_line in enumerate(raw_lines):
         s = raw_line.strip()
         if not s or len(s) > 100:
+            continue
+        if s.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            continue
+        if in_fence:
             continue
         # _extract_html_blocks surrounds real h1-h6 blocks with blank lines.
         # Requiring blank lines on both sides prevents the first paragraph
@@ -509,7 +752,11 @@ def _fallback(
             or (prev_blank and line_no == len(raw_lines) - 1)
         )
         if s.startswith("#") and len(s.lstrip("# ")) >= 2:
-            heading_rows.append((line_no, re.sub(r"^#+\s*", "", s), 0))
+            # Markdown encodes the real nesting depth in the '#' count. Collapsing
+            # every heading to chapter level threw away the document tree, so
+            # parent/child (hierarchy) relations could never be produced.
+            depth = len(s) - len(s.lstrip("#"))
+            heading_rows.append((line_no, re.sub(r"^#+\s*", "", s), depth - 1, s))
             continue
         chapter_match = re.match(r"^第\s*\d+\s*章\s*(.*)$", s)
         if chapter_match:
@@ -522,7 +769,7 @@ def _fallback(
                 and not any(mark in s for mark in "。！？“”‘’；")
                 and len(s) <= 60
             ):
-                heading_rows.append((line_no, s, 0))
+                heading_rows.append((line_no, s, 0, s))
             continue
         appendix_match = re.match(r"^附录\s*[A-ZＡ-Ｚ一二三四五六七八九十0-9]+\s*(.*)$", s, re.I)
         if appendix_match:
@@ -532,7 +779,7 @@ def _fallback(
                 and not any(mark in s for mark in "。！？“”‘’；")
                 and len(s) <= 60
             ):
-                heading_rows.append((line_no, s, 0))
+                heading_rows.append((line_no, s, 0, s))
             continue
         m = re.match(r"^(\d+(?:\.\d+)*)\s+\S", s)
         if m:
@@ -552,7 +799,7 @@ def _fallback(
                 and len(s) <= 60
                 and not looks_like_prose
             ):
-                heading_rows.append((line_no, s, level + 1))
+                heading_rows.append((line_no, s, level + 1, s))
             continue
 
         # EPUBs commonly use semantic h3/h4 headings without a numeric
@@ -564,18 +811,24 @@ def _fallback(
             semantic_heading
             and len(s) <= 60
             and not any(mark in s for mark in "。！？“”‘’/；")
-            and not s.startswith(("http://", "https://"))
+            and not s.startswith(("http://", "https://", ">", "|"))
+            # A blank-line-surrounded line that ends with a colon is a lead-in
+            # label for the text below ("关键观测："), not a section title; a
+            # punctuation-only line ("---") is a separator. Both used to become
+            # pseudo headings that produced bogus structure edges.
+            and not s.endswith(("：", ":"))
+            and re.search(r"[^\W_]", s)
         ):
             # Unnumbered semantic headings are most often h3 leaf sections in
             # this EPUB family. Keeping them one level below numbered h2
             # headings preserves the useful chapter → subsection → leaf walk.
-            heading_rows.append((line_no, s, 3))
+            heading_rows.append((line_no, s, 3, s))
 
     # De-duplicate repeated references that happen to look like headings. Keep
     # every real chapter and a bounded but broad set of sections per chapter;
     # this keeps the graph readable while retaining the book's structure.
     seen_headings: set[str] = set()
-    unique_rows: list[tuple[int, str, int]] = []
+    unique_rows: list[tuple[int, str, int, str]] = []
     for row in heading_rows:
         key = row[1].lower()
         if key in seen_headings:
@@ -596,18 +849,58 @@ def _fallback(
             selected_rows.extend(sections)
     else:
         selected_rows = unique_rows[:80]
-    heading_lines = [row[1] for row in selected_rows]
-
     concepts: list[Concept] = []
     name_to_id: dict[str, str] = {}
     structural_rows: list[tuple[str, int, str]] = []
+    selected_names = {row[1] for row in selected_rows}
 
     def _first_sentence(p: str) -> str:
         return re.split(r"(?<=[。!?.!?])\s*", p)[0].strip()
 
+    def _following_span(line_no: int) -> str:
+        """Evidence for a heading: a verbatim (ideally unique) source slice.
+
+        The old code kept only the first physical line, so code-fence markers
+        such as ```powershell became "evidence" and repeated lines produced
+        ambiguous anchors. Start at the first non-blank line that is neither a
+        fence marker nor another heading, then extend downward (max 3 lines)
+        until the slice occurs exactly once in the source. Slicing uses
+        character offsets, so the quote is never re-joined text.
+        """
+        index = line_no + 1
+        while index < len(raw_lines):
+            candidate = raw_lines[index].strip()
+            if not candidate or candidate.startswith(("```", "~~~")):
+                index += 1
+                continue
+            if candidate in selected_names:
+                return ""
+            break
+        if index >= len(raw_lines):
+            return ""
+        end = index
+        while end < len(raw_lines) and end - index < 3:
+            candidate = raw_lines[end].strip()
+            if end > index and (
+                not candidate
+                or candidate.startswith(("```", "~~~"))
+                or candidate in selected_names
+            ):
+                break
+            end += 1
+            span = text[
+                line_starts[index] : line_starts[end - 1] + len(raw_lines[end - 1])
+            ].strip()[:360]
+            if span and text.count(span) == 1:
+                return span
+        span = text[
+            line_starts[index] : line_starts[end - 1] + len(raw_lines[end - 1])
+        ].strip()
+        return span[:360]
+
     if selected_rows:
         current_chapter_title = ""
-        for i, (line_no, h, _level) in enumerate(selected_rows):
+        for i, (line_no, h, _level, evidence_line) in enumerate(selected_rows):
             if _level == 0:
                 current_chapter_title = h[:80]
             name = re.sub(r"^#+\s*", "", h).strip()
@@ -616,25 +909,8 @@ def _fallback(
             name = name or f"章节 {i + 1}"
             cid = _new_id("c")
             name_to_id[name.lower()] = cid
-            # Evidence should describe the selected heading's nearby section,
-            # not repeat the first paragraph of the whole book for every node.
-            following: list[str] = []
-            for next_line in raw_lines[line_no + 1:]:
-                candidate = next_line.strip()
-                if not candidate:
-                    if following:
-                        break
-                    continue
-                if any(candidate == other[1] for other in selected_rows):
-                    break
-                following.append(candidate)
-                if len(" ".join(following)) >= 360:
-                    break
-            # Keep the first physical source line as evidence. Joining several
-            # XHTML lines would create text that is not literally present in
-            # source_text and would break source-location highlighting.
-            block = following[0].strip() if following else ""
-            ev = [block[:360]] if block else []
+            block = _following_span(line_no)
+            ev = [block] if block else []
             if not ev and paragraphs:
                 ev = [paragraphs[min(i, len(paragraphs) - 1)][:360]]
             concepts.append(
@@ -653,24 +929,31 @@ def _fallback(
                     chapter=current_chapter_title,
                 )
             )
-            structural_rows.append((cid, _level, h))
+            structural_rows.append((cid, _level, evidence_line))
     else:
         # No headings: chunk the body into small groups of sentences so a long
         # single-block document (typical pasted/PDF text) still yields several
-        # grounded concepts instead of one mega-chunk.
-        sentences = [s.strip() for s in re.split(r"(?<=[。!?.!?])\s+|\n+", text) if len(s.strip()) >= 8]
-        if len(sentences) > len(paragraphs):
-            chunks = [sentences[i : i + 3] for i in range(0, len(sentences), 3)][:10]
+        # grounded concepts instead of one mega-chunk. Evidence is sliced from
+        # the text through sentence offsets: joining sentences with spaces
+        # produced strings that never occur in the source (0% locatable).
+        sent_spans = [
+            (m.start(), m.end()) for m in re.finditer(r"[^。!?.!?\n]+", text)
+            if len(text[m.start() : m.end()].strip()) >= 8
+        ]
+        if len(sent_spans) > len(paragraphs):
+            groups = [sent_spans[i : i + 3] for i in range(0, len(sent_spans), 3)][:10]
+            blocks = [
+                text[group[0][0] : group[-1][1]].strip()[:360] for group in groups
+            ]
         else:
-            chunks = paragraphs[:10]
-        for i, chunk in enumerate(chunks):
-            block = " ".join(chunk) if isinstance(chunk, list) else chunk
+            blocks = [p[:360] for p in paragraphs[:10]]
+        for i, block in enumerate(blocks):
             cid = _new_id("c")
             hint = _first_sentence(block)[:12].strip()
             name = (hint + "...") if len(_first_sentence(block)) > 12 else (hint or f"片段 {i + 1}")
             name_to_id[name.lower()] = cid
             concepts.append(
-                Concept(id=cid, name=name, definition=_first_sentence(block)[:200], evidence=[block[:360]])
+                Concept(id=cid, name=name, definition=_first_sentence(block)[:200], evidence=[block])
             )
 
     # Even without an LLM, heading nesting is a source-grounded relation:
@@ -697,7 +980,7 @@ def _fallback(
         hierarchy_stack.append((level, cid))
     chapters = (
         [Chapter(id=_new_id("ch"), title=h, order=i) for i, h in enumerate(
-            [h for _line, h, level in selected_rows if level == 0]
+            [h for _line, h, level, _ev in selected_rows if level == 0]
         )]
         if selected_rows
         else []
@@ -714,6 +997,8 @@ def _fallback(
         relations=relations,
         learning_path=[c.id for c in concepts],
         method="deterministic_fallback_v1",
+        provenance={"source": "deterministic_index", "llm": False,
+                    "explicit_fallback": False},
     )
     asset = _assign_chapters(asset)
     return _stamp_locations(asset, page_offsets)
@@ -737,10 +1022,23 @@ def extract_knowledge(
                 text, filename, llm, on_progress=on_progress,
                 page_offsets=page_offsets, domain_id=domain_id,
             )
-        except Exception:
-            # Degrade gracefully: never fail the import on an LLM hiccup.
+        except Exception as exc:
+            # Degrade gracefully: never fail the import on an LLM hiccup. But
+            # never degrade *silently*: the reason is logged and stamped into
+            # asset.provenance so callers and the UI can query it.
+            reason = f"{type(exc).__name__}: {exc}"[:400]
+            logger.warning(
+                "extract_knowledge: LLM extraction failed, using explicit "
+                "deterministic fallback (%s)", reason,
+            )
             asset = _fallback(text, filename, page_offsets=page_offsets)
             asset.method = "llm_failed_fallback_v1"
+            asset.provenance = {
+                "source": "deterministic_fallback_after_llm_error",
+                "llm": False,
+                "explicit_fallback": True,
+                "fallback_reason": reason,
+            }
             if on_progress:
                 on_progress("extract", 1, 1, _t("ext_llm_fallback"))
             return asset

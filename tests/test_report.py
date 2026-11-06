@@ -84,9 +84,9 @@ class TestReportHTML(unittest.TestCase):
 
     def test_localize_method(self):
         set_lang("zh-CN")
-        self.assertEqual(localize_method("llm_extraction_chunked_v1"), "LLM 抽取")
-        self.assertEqual(localize_method("llm_failed_fallback_v1"), "确定性模式（未深度加工）")
-        self.assertEqual(localize_method("deterministic_v1"), "确定性模式（未深度加工）")
+        self.assertEqual(localize_method("llm_extraction_chunked_v1"), "智能分析")
+        self.assertEqual(localize_method("llm_failed_fallback_v1"), "基础模式（未深度加工）")
+        self.assertEqual(localize_method("deterministic_v1"), "基础模式（未深度加工）")
         self.assertEqual(localize_method("something_unknown"), "未知方法")
 
     def test_build_html_basic(self):
@@ -136,7 +136,7 @@ class TestReportHTML(unittest.TestCase):
         html = build_html_report(
             ASSETS, LEARNER_TRACE, lang="zh-CN", current_asset_id="a1")
         # audit section exists and reads the trace (record = source of truth)
-        self.assertIn("轨迹审计", html)
+        self.assertIn("学习轨迹明细", html)
         self.assertIn("作答次数", html)
         self.assertEqual(html.count("Memory") >= 2, True)
         self.assertIn("策略轮换 1 次", html)          # rotated_style counted
@@ -154,15 +154,15 @@ class TestReportHTML(unittest.TestCase):
             ASSETS, {"concepts": {}, "history": []}, lang="zh-CN",
             current_asset_id="a1")
         self.assertIn("暂无学习轨迹记录", html)
-        self.assertIn("轨迹审计", html)
+        self.assertIn("学习轨迹明细", html)
 
     def test_trace_audit_three_langs(self):
         for lang in ("zh-CN", "en", "ja"):
             set_lang(lang)
             html = build_html_report(
                 ASSETS, LEARNER_TRACE, lang=lang, current_asset_id="a1")
-            self.assertIn("Trace Audit" if lang == "en"
-                          else ("軌跡監査" if lang == "ja" else "轨迹审计"), html)
+            self.assertIn("Learning trace details" if lang == "en"
+                          else ("学習軌跡の明細" if lang == "ja" else "学习轨迹明细"), html)
 
 
 if __name__ == "__main__":

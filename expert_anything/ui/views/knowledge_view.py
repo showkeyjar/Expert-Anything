@@ -20,13 +20,27 @@ from PySide6.QtWidgets import (
 from expert_anything.core.learner import (
     adaptive_path,
     concept_density,
+    get_note,
+    has_note,
+    is_favorite,
     normalize,
     record_evaluation,
     topic_clusters,
 )
 from expert_anything.core.teacher import anomaly_concept_ids, TeacherModel
 from expert_anything.core.i18n import t
-from expert_anything.ui.widgets.shared import StatCard
+from expert_anything.ui.widgets._helpers import CollapsibleSection
+from expert_anything.ui import theme
+from expert_anything.ui.widgets.shared import PageHeader, StatCard
+
+# -- TOC item roles ---------------------------------------------------------
+# PySide6 stores a *plain int* role 2 in the item's display slot, so writing
+# the ("concept", id) payload there silently wiped every row caption and the
+# chapter TOC rendered blank rows.  Payloads therefore live at Qt.UserRole and
+# up, leaving DisplayRole for the caption the learner actually reads.
+_ROLE_PAYLOAD = int(Qt.ItemDataRole.UserRole)  # ("concept", c.id) / ("chapter", title)
+_ROLE_DIFF = _ROLE_PAYLOAD + 1  # difficulty bucket of the row
+_ROLE_CAPTION = _ROLE_PAYLOAD + 2  # plain caption (note filter appends/restores)
 
 
 def localize_method(method: str) -> str:
@@ -51,6 +65,8 @@ class KnowledgeView(QWidget):
     )  # concept_name, topic_name, concept_names_queue, mastered_count
     focus_graph = Signal(str)  # concept_id
     jump_evidence = Signal(str, str)  # concept_id, evidence
+    group_quiz_requested = Signal(list, str)  # concept_ids, group title
+    glossary_requested = Signal()  # open the domain terminology table
 
     def __init__(self, main, parent=None):
         super().__init__(parent)
@@ -100,6 +116,14 @@ class KnowledgeView(QWidget):
                         "dash_fallback_warn", method=localize_method(cur_asset.method)
                     )
                 )
+                # Never hide *why* the LLM path degraded: provenance carries the
+                # explicit fallback reason (AGENTS.md #48 silent-degradation fix).
+                provenance = getattr(cur_asset, "provenance", None) or {}
+                reason = str(provenance.get("fallback_reason") or "").strip()
+                if reason:
+                    warn.setText(
+                        warn.text() + "\n" + self._main._t("dash_fallback_reason", reason=reason)
+                    )
                 warn.setWordWrap(True)
                 warn.setStyleSheet(
                     "background-color:#FFF4E5; color:#8A4B00; border:1px solid #FFD28A;"
@@ -122,22 +146,7 @@ class KnowledgeView(QWidget):
         self._root_layout.addWidget(scroll)
 
     def _view_header(self, title, subtitle=""):
-        header = QFrame()
-        header.setStyleSheet(
-            "background-color: white; border-bottom: 2px solid #1565C0;"
-        )
-        lay = QHBoxLayout(header)
-        lay.setContentsMargins(20, 7, 20, 7)
-        lay.setSpacing(10)
-        t = QLabel(str(title))
-        t.setStyleSheet("font-size: 18px; font-weight: bold; color: #1F2933;")
-        lay.addWidget(t)
-        if subtitle:
-            s = QLabel(str(subtitle))
-            s.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
-            lay.addWidget(s)
-        lay.addStretch()
-        return header
+        return PageHeader(title, subtitle)
 
     def _build_browse_drawer(self):
         drawer = QWidget()
@@ -150,11 +159,28 @@ class KnowledgeView(QWidget):
         stats_layout.setSpacing(12)
         stats = self._main._compute_stats()
         for card in [
-            ("📚", self._main._t("stat_total"), stats["total"], "#1565C0"),
-            ("✓", self._main._t("legend_mastered"), stats["mastered"], "#4CAF50"),
-            ("↗", self._main._t("legend_learning"), stats["learning"], "#FF9800"),
-            ("○", self._main._t("stat_unstudied"), stats["unstudied"], "#9E9E9E"),
-            ("⚠", self._main._t("stat_anomaly"), stats["anomalies"], "#F44336"),
+            ("📚", self._main._t("stat_total"), stats["total"], theme.ACCENT),
+            (
+                "✓",
+                self._main._t("legend_mastered"),
+                stats["mastered"],
+                theme.SUCCESS,
+            ),
+            (
+                "↗",
+                self._main._t("legend_learning"),
+                stats["learning"],
+                theme.WARNING,
+            ),
+            (
+                "○",
+                self._main._t("stat_unstudied"),
+                stats["unstudied"],
+                theme.TEXT_FAINT,
+            ),
+            ("⚠", self._main._t("stat_anomaly"), stats["anomalies"], theme.DANGER),
+            ("◔", self._main._t("stat_avg_mastery"), f"{stats['avg_mastery']:.0%}", "#7C3AED"),
+            ("◌", self._main._t("stat_unanchored"), stats["unanchored"], "#607D8B"),
         ]:
             stats_layout.addWidget(StatCard(*card))
         stats_layout.addStretch()
@@ -170,6 +196,7 @@ class KnowledgeView(QWidget):
             "padding: 5px 10px; font-size: 14px; background-color: white; }"
         )
         self._concept_search.textChanged.connect(self._on_concept_filter)
+        self._install_search_completer()
         filter_row.addWidget(self._concept_search, 1)
 
         self._mastery_filter = QComboBox()
@@ -179,6 +206,8 @@ class KnowledgeView(QWidget):
             self._main._t("filter_weak"),
             self._main._t("filter_learning"),
             self._main._t("filter_mastered"),
+            self._main._t("filter_favorite"),
+            self._main._t("filter_note"),
         ])
         self._mastery_filter.setStyleSheet(
             "QComboBox { border: 1px solid #BDBDBD; border-radius: 6px;"
@@ -186,7 +215,38 @@ class KnowledgeView(QWidget):
         )
         self._mastery_filter.currentIndexChanged.connect(self._on_concept_filter)
         filter_row.addWidget(self._mastery_filter)
+
+        # Domain terminology table.  Shown only when the asset title maps to a
+        # registered domain — otherwise there is no term to list and the button
+        # would be a dead link (设计理念第 7 条：死链接零容忍).
+        try:
+            from expert_anything.core.domain_templates import detect_domain_from_title
+
+            if detect_domain_from_title(getattr(self._main.get_asset(), "title", "")):
+                gloss_btn = QPushButton(self._main._t("glossary_btn"))
+                gloss_btn.setObjectName("glossary_btn")
+                gloss_btn.setToolTip(self._main._t("glossary_btn_tip"))
+                gloss_btn.setStyleSheet(
+                    "QPushButton { background-color: white; color: #00695C;"
+                    "border: 1px solid #B2DFDB; border-radius: 6px;"
+                    "padding: 4px 10px; font-size: 13.5px; }"
+                    "QPushButton:hover { background-color: #E0F2F1; }"
+                )
+                gloss_btn.clicked.connect(
+                    lambda checked=False: self.glossary_requested.emit()
+                )
+                filter_row.addWidget(gloss_btn)
+        except Exception:
+            pass
         dlayout.addLayout(filter_row)
+
+        # First screen keeps only the core three (stats, TOC, next-step path);
+        # the quick-deconstruction panorama, topic clusters and the dashboard
+        # graph live behind one 「更多」 fold — hidden, never removed, one
+        # click away (AGENTS.md first-screen discipline).
+        more_section = self._more_section = CollapsibleSection(
+            self._main._t("more_section")
+        )
 
         # Quick deconstruction: visual knowledge panorama
         asset = self._main.get_asset()
@@ -247,7 +307,28 @@ class KnowledgeView(QWidget):
                         lambda score: self._on_panorama_game_scored(score)
                     )
                     pan_lay.addWidget(dec_card)
-                    dlayout.addWidget(pan_card)
+
+                    # Game → learning-loop handoff: after a sorting round, point
+                    # the learner at the adaptive path's first concept instead
+                    # of leaving them on a "watched it, done" dead end.
+                    self._pan_feedback = QLabel()
+                    self._pan_feedback.setWordWrap(True)
+                    self._pan_feedback.hide()
+                    pan_lay.addWidget(self._pan_feedback)
+
+                    self._pan_learn_btn = QPushButton(self._main._t("start_teach"))
+                    self._pan_learn_btn.setStyleSheet(
+                        "QPushButton { background-color: #E65100; color: white; border: none;"
+                        "border-radius: 6px; padding: 5px 14px; font-size: 13.5px;"
+                        "font-weight: bold; }"
+                        "QPushButton:hover { background-color: #BF360C; }"
+                    )
+                    self._pan_learn_btn.clicked.connect(self._on_pan_go_learn)
+                    self._pan_learn_btn.hide()
+                    pan_lay.addWidget(
+                        self._pan_learn_btn, 0, Qt.AlignmentFlag.AlignRight
+                    )
+                    more_section.add(pan_card)
             except Exception:
                 pass
 
@@ -256,8 +337,9 @@ class KnowledgeView(QWidget):
             # TOC
             toc_card = QFrame()
             toc_card.setStyleSheet(
-                "QFrame { background-color: white; border: 1px solid #E0E0E0;"
-                "border-radius: 10px; }"
+                f"QFrame {{ background-color: {theme.SURFACE};"
+                f" border: 1px solid {theme.BORDER};"
+                f" border-radius: {theme.RADIUS_LG}px; }}"
             )
             toc_lay = QVBoxLayout(toc_card)
             toc_lay.setContentsMargins(16, 12, 16, 12)
@@ -265,7 +347,7 @@ class KnowledgeView(QWidget):
 
             toc_title = QLabel(self._main._t("toc_title"))
             toc_title.setStyleSheet(
-                "font-size: 16px; font-weight: bold; color: #1F2933;"
+                f"font-size: 15px; font-weight: 600; color: {theme.TEXT};"
             )
             toc_lay.addWidget(toc_title)
 
@@ -277,9 +359,12 @@ class KnowledgeView(QWidget):
             self._toc_tree.setHeaderHidden(True)
             self._toc_tree.setMaximumHeight(240)
             self._toc_tree.setStyleSheet(
-                "QTreeWidget { background-color: #FAFAFA; border: 1px solid #E0E0E0;"
-                "border-radius: 6px; font-size: 14.5px; }"
-                "QTreeWidget::item { padding: 3px; }"
+                f"QTreeWidget {{ background-color: {theme.SURFACE_MUTED};"
+                f" border: 1px solid {theme.BORDER};"
+                f" border-radius: {theme.RADIUS_MD}px; font-size: 13px; }}"
+                "QTreeWidget::item { padding: 4px; }"
+                f"QTreeWidget::item:selected {{ background-color: {theme.ACCENT_TINT};"
+                f" color: {theme.ACCENT_HOVER}; }}"
             )
             by_ch = {}
             for c in asset.concepts:
@@ -373,8 +458,25 @@ class KnowledgeView(QWidget):
                 )
                 ch_layout.addWidget(count_label, 0)
 
+                ch_quiz = QPushButton("📚")
+                ch_quiz.setObjectName("chapter_quiz_btn")
+                ch_quiz.setToolTip(self._main._t("group_quiz_hint"))
+                ch_quiz.setFixedWidth(30)
+                ch_quiz.setStyleSheet(
+                    "QPushButton { background-color: white; color: #6A1B9A;"
+                    "border: 1px solid #E1BEE7; border-radius: 6px;"
+                    "padding: 1px 4px; font-size: 12.5px; }"
+                    "QPushButton:hover { background-color: #F3E5F5; }"
+                )
+                ch_quiz.clicked.connect(
+                    lambda checked, t=ch_title: self.group_quiz_requested.emit(
+                        [c.id for c in by_ch.get(t, [])], t
+                    )
+                )
+                ch_layout.addWidget(ch_quiz, 0)
+
                 top = QTreeWidgetItem([""])
-                top.setData(0, 2, ("chapter", ch_title))
+                top.setData(0, _ROLE_PAYLOAD, ("chapter", ch_title))
                 self._toc_tree.addTopLevelItem(top)
                 self._toc_tree.setItemWidget(top, 0, ch_widget)
 
@@ -392,9 +494,15 @@ class KnowledgeView(QWidget):
                 for c in by_ch[ch_title][:25]:
                     diff = diff_map.get(c.name, "unknown")
                     bg, fg, label = diff_colors.get(diff, diff_colors["unknown"])
-                    child = QTreeWidgetItem([f"  {c.name}  [{label}]"])
-                    child.setData(0, 2, ("concept", c.id))
-                    child.setData(0, 3, diff)
+                    star = "★ " if is_favorite(self._main.learner, c.name) else ""
+                    note_mark = "📝 " if has_note(self._main.learner, c.name) else ""
+                    child = QTreeWidgetItem([f"  {star}{note_mark}{c.name}  [{label}]"])
+                    child.setData(0, _ROLE_PAYLOAD, ("concept", c.id))
+                    child.setData(0, _ROLE_DIFF, diff)
+                    # Base caption kept so the note filter can append the note
+                    # and restore the plain row when the filter is cleared.
+                    child.setData(0, _ROLE_CAPTION, child.text(0))
+                    child.setToolTip(0, self._main._t("toc_row_tip"))
                     top.addChild(child)
             unassigned = [c for k, lst in by_ch.items() if not k for c in lst]
             if unassigned:
@@ -410,13 +518,17 @@ class KnowledgeView(QWidget):
                     "unknown": ("#F5F5F5", "#9E9E9E", "?"),
                 }
                 top = QTreeWidgetItem([self._main._t("toc_other")])
-                top.setData(0, 2, ("chapter", ""))
+                top.setData(0, _ROLE_PAYLOAD, ("chapter", ""))
                 for c in unassigned[:20]:
                     diff = diff_map.get(c.name, "unknown")
                     bg, fg, label = diff_colors.get(diff, diff_colors["unknown"])
-                    child = QTreeWidgetItem([f"  {c.name}  [{label}]"])
-                    child.setData(0, 2, ("concept", c.id))
-                    child.setData(0, 3, diff)
+                    star = "★ " if is_favorite(self._main.learner, c.name) else ""
+                    note_mark = "📝 " if has_note(self._main.learner, c.name) else ""
+                    child = QTreeWidgetItem([f"  {star}{note_mark}{c.name}  [{label}]"])
+                    child.setData(0, _ROLE_PAYLOAD, ("concept", c.id))
+                    child.setData(0, _ROLE_DIFF, diff)
+                    child.setData(0, _ROLE_CAPTION, child.text(0))
+                    child.setToolTip(0, self._main._t("toc_row_tip"))
                     top.addChild(child)
                 self._toc_tree.addTopLevelItem(top)
             if self._toc_tree.topLevelItemCount() == 0:
@@ -424,6 +536,7 @@ class KnowledgeView(QWidget):
                     QTreeWidgetItem([self._main._t("chapter_empty")])
                 )
             self._toc_tree.itemClicked.connect(self._on_toc_clicked)
+            self._toc_tree.itemDoubleClicked.connect(self._on_toc_double_clicked)
             toc_lay.addWidget(self._toc_tree)
             dlayout.addWidget(toc_card)
 
@@ -433,15 +546,16 @@ class KnowledgeView(QWidget):
             if big:
                 topic_card = QFrame()
                 topic_card.setStyleSheet(
-                    "QFrame { background-color: white; border: 1px solid #E0E0E0;"
-                    "border-radius: 10px; }"
+                    f"QFrame {{ background-color: {theme.SURFACE};"
+                    f" border: 1px solid {theme.BORDER};"
+                    f" border-radius: {theme.RADIUS_LG}px; }}"
                 )
                 tp_lay = QVBoxLayout(topic_card)
                 tp_lay.setContentsMargins(16, 12, 16, 12)
                 tp_lay.setSpacing(6)
                 tp_title = QLabel(self._main._t("topics_title"))
                 tp_title.setStyleSheet(
-                    "font-size: 16px; font-weight: bold; color: #1F2933;"
+                    f"font-size: 15px; font-weight: 600; color: {theme.TEXT};"
                 )
                 tp_lay.addWidget(tp_title)
                 tp_hint = QLabel(self._main._t("topics_hint"))
@@ -492,8 +606,23 @@ class KnowledgeView(QWidget):
                         lambda checked, cid=cl["id"]: self._start_topic(cid)
                     )
                     row.addWidget(learn_btn)
+                    quiz_btn = QPushButton(self._main._t("group_quiz_start"))
+                    quiz_btn.setObjectName("topic_quiz_btn")
+                    quiz_btn.setToolTip(self._main._t("group_quiz_hint"))
+                    quiz_btn.setStyleSheet(
+                        "QPushButton { background-color: white; color: #6A1B9A;"
+                        "border: 1px solid #E1BEE7; border-radius: 6px;"
+                        "padding: 3px 10px; font-size: 13px; }"
+                        "QPushButton:hover { background-color: #F3E5F5; }"
+                    )
+                    quiz_btn.clicked.connect(
+                        lambda checked, ids=list(cl["concept_ids"]), nm=cl["name"]: (
+                            self.group_quiz_requested.emit(ids, nm)
+                        )
+                    )
+                    row.addWidget(quiz_btn)
                     tp_lay.addLayout(row)
-                dlayout.addWidget(topic_card)
+                more_section.add(topic_card)
 
         # Adaptive path + graph
         cards_container = QWidget()
@@ -503,7 +632,8 @@ class KnowledgeView(QWidget):
 
         section_title = QLabel(self._main._t("section_recommend"))
         section_title.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #1565C0; padding: 4px 0;"
+            f"font-size: 15px; font-weight: 600; color: {theme.ACCENT_HOVER};"
+            " padding: 4px 0;"
         )
         cards_layout.addWidget(section_title)
 
@@ -536,15 +666,17 @@ class KnowledgeView(QWidget):
 
         graph_title = QLabel(self._main._t("section_graph"))
         graph_title.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #1565C0; padding: 4px 0;"
+            f"font-size: 15px; font-weight: 600; color: {theme.ACCENT_HOVER};"
+            " padding: 4px 0;"
         )
         graph_layout.addWidget(graph_title)
 
         self._dash_graph = self._main._dash_graph_ref()
         self._dash_graph.setMinimumHeight(300)
         self._dash_graph.setStyleSheet(
-            "QGraphicsView { background-color: white; border: 1px solid #E0E0E0;"
-            "border-radius: 8px; }"
+            f"QGraphicsView {{ background-color: {theme.SURFACE};"
+            f" border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_MD}px; }}"
         )
         graph_layout.addWidget(self._dash_graph)
 
@@ -584,16 +716,45 @@ class KnowledgeView(QWidget):
                     self._on_dashboard_node_clicked
                 )
 
-        dlayout.addWidget(graph_container)
+        more_section.add(graph_container)
+        if more_section.body_layout().count():
+            dlayout.addWidget(more_section)
         dlayout.addStretch()
         return drawer
 
     def _on_toc_clicked(self, item):
-        kind, payload = item.data(0, 2) or ("", "")
+        kind, payload = item.data(0, _ROLE_PAYLOAD) or ("", "")
         if kind == "chapter":
             self.focus_graph.emit(payload)  # navigate to source, scroll to title
         elif kind == "concept":
             self.focus_graph.emit(payload)
+
+    def _on_toc_double_clicked(self, item, _column=0):
+        """Double-click a concept row → open its evidence in the source text.
+
+        The single click already opens the concept map, so the reader is never
+        hijacked: the second click is an explicit "show me where this is said".
+        """
+        kind, payload = item.data(0, _ROLE_PAYLOAD) or ("", "")
+        if kind == "concept" and payload:
+            self.jump_evidence.emit(payload, "")
+
+    def _install_search_completer(self):
+        """Suggest concept names as the learner types — fast lookup beats
+        remembering exact titles.  Rebuilt per _rebuild(), so it always
+        reflects the current asset."""
+        asset = self._main.get_asset()
+        if asset is None or not asset.concepts:
+            return
+        from PySide6.QtWidgets import QCompleter
+
+        names = [c.name for c in asset.concepts if c.name]
+        if not names:
+            return
+        completer = QCompleter(names, self._concept_search)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self._concept_search.setCompleter(completer)
 
     def _on_concept_filter(self):
         """Filter the TOC tree by search text and mastery level."""
@@ -608,7 +769,7 @@ class KnowledgeView(QWidget):
             ch_visible = False
             for j in range(ch_item.childCount()):
                 child = ch_item.child(j)
-                data = child.data(0, 2) or ("", "")
+                data = child.data(0, _ROLE_PAYLOAD) or ("", "")
                 if data[0] != "concept":
                     child.setHidden(False)
                     continue
@@ -621,8 +782,20 @@ class KnowledgeView(QWidget):
                 if query and query not in c.name.lower() and query not in (c.definition or "").lower():
                     child.setHidden(True)
                     continue
+                # Favorites filter
+                if filter_idx == 5:
+                    if not is_favorite(self._main.learner, c.name):
+                        child.setHidden(True)
+                        continue
+                # Notes filter — the learner's own words (generation effect)
+                # only pay off if they can be read back; the row shows the
+                # note inline instead of just a 📝 marker.
+                elif filter_idx == 6:
+                    if not has_note(self._main.learner, c.name):
+                        child.setHidden(True)
+                        continue
                 # Mastery filter
-                if filter_idx > 0:
+                elif filter_idx > 0:
                     nk = normalize(c.name)
                     m = float(
                         self._main.learner.get("concepts", {})
@@ -642,6 +815,17 @@ class KnowledgeView(QWidget):
                         child.setHidden(True)
                         continue
                 child.setHidden(False)
+                base = child.data(0, _ROLE_CAPTION)
+                if base:
+                    if filter_idx == 6:
+                        note = " ".join(
+                            (get_note(self._main.learner, c.name) or "").split()
+                        )
+                        if len(note) > 60:
+                            note = note[:60] + "…"
+                        child.setText(0, f"{base}  —  {note}")
+                    else:
+                        child.setText(0, base)
                 ch_visible = True
             ch_item.setHidden(not ch_visible and bool(query or filter_idx > 0))
 
@@ -722,9 +906,55 @@ class KnowledgeView(QWidget):
 
     def _on_panorama_game_scored(self, score: float):
         """Panorama sorting game score — lightweight overview check, not a
-        per-concept mastery record. Keeps the game meaningful without
-        polluting the learning trajectory."""
-        pass
+        per-concept mastery record.  But "watched it, done" is a dead end:
+        hand the learner to the adaptive path's first concept either way."""
+        label = getattr(self, "_pan_feedback", None)
+        btn = getattr(self, "_pan_learn_btn", None)
+        if label is None or btn is None:
+            return
+        # 反馈与「去学下一个」按钮住在折叠区里：确认区必须先展开，否则用户
+        # 玩完排序游戏只看到一张静止卡片，反馈被藏起来了。
+        sec = getattr(self, "_more_section", None)
+        if sec is not None:
+            sec.set_expanded(True)
+        try:
+            pct = round(float(score) * 100)
+        except (TypeError, ValueError):
+            return
+        if pct >= 100:
+            label.setText(self._main._t("pan_feedback_full"))
+            label.setStyleSheet(
+                "font-size: 13px; color: #2E7D32; font-weight: bold;"
+            )
+        else:
+            label.setText(self._main._t("pan_feedback_partial", score=pct))
+            label.setStyleSheet("font-size: 13px; color: #E65100;")
+        next_name = self._first_path_name()
+        if next_name:
+            self._pan_next_name = next_name
+            btn.setText(f"{self._main._t('start_teach')}：{next_name}")
+            btn.setVisible(True)
+        else:
+            self._pan_next_name = ""
+            btn.setVisible(False)
+        label.setVisible(True)
+
+    def _first_path_name(self) -> str:
+        """First concept of the adaptive path — the coach's top pick."""
+        try:
+            items = self._main.get_adaptive_path(self._main.current_asset_id)
+            for it in items or []:
+                name = (it or {}).get("name") or ""
+                if name:
+                    return name
+        except Exception:
+            pass
+        return ""
+
+    def _on_pan_go_learn(self):
+        name = getattr(self, "_pan_next_name", "")
+        if name:
+            self.teach_requested.emit(name)
 
 
 # Avoid import cycle: methods are provided by MainWindow

@@ -2,12 +2,59 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
 )
 
 from expert_anything.core.i18n import t as _t
+from expert_anything.ui import theme
+
+
+class PageHeader(QFrame):
+    """One page header, one look.
+
+    Every view used to hand-roll this row and paint a 2px Material-blue
+    underline beneath it, which is most of what made the app feel dated.
+    The header now sits flat on the surface: title, muted subtitle, generous
+    breathing room, and a hairline separator only.
+    """
+
+    def __init__(self, title, subtitle="", parent=None):
+        super().__init__(parent)
+        self.setObjectName("page_header")
+        self.setStyleSheet(theme.page_header_style())
+        # Keep the header compact when the page is taller than its content;
+        # otherwise the hbox centres the title inside a giant empty band.
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(20, 12, 20, 12)
+        lay.setSpacing(10)
+        self.title_label = QLabel(str(title))
+        self.title_label.setStyleSheet(
+            f"font-size: 19px; font-weight: 600; color: {theme.TEXT};"
+        )
+        lay.addWidget(self.title_label)
+        self.subtitle_label = None
+        if subtitle:
+            self.subtitle_label = QLabel(str(subtitle))
+            self.subtitle_label.setStyleSheet(
+                f"color: {theme.TEXT_MUTED}; font-size: 13px;"
+            )
+            lay.addWidget(self.subtitle_label)
+        self._layout = lay
+        lay.addStretch()
+
+    def add_widget(self, widget) -> None:
+        """Append an accessory (e.g. a domain chip) before the trailing stretch."""
+        self._layout.insertWidget(self._layout.count() - 1, widget)
 
 
 class KnowledgeCard(QFrame):
@@ -36,22 +83,18 @@ class KnowledgeCard(QFrame):
         title_row.setSpacing(8)
 
         title_label = QLabel(self.concept_name)
-        font = QFont("Segoe UI", 12, QFont.Weight.Bold)
-        title_label.setFont(font)
+        title_label.setStyleSheet(
+            f"font-size: 14.5px; font-weight: 600; color: {theme.TEXT};"
+        )
         title_row.addWidget(title_label)
 
         # Tags
         for tag in self.tags[:2]:
             tag_label = QLabel(tag)
-            tag_label.setStyleSheet("""
-                QLabel {
-                    background-color: #E3F2FD;
-                    color: #1565C0;
-                    padding: 2px 8px;
-                    border-radius: 4px;
-                    font-size: 12px;
-                }
-            """)
+            tag_label.setStyleSheet(
+                f"background-color: {theme.ACCENT_TINT}; color: {theme.ACCENT};"
+                " padding: 2px 8px; border-radius: 6px; font-size: 11.5px;"
+            )
             title_row.addWidget(tag_label)
         title_row.addStretch()
         layout.addLayout(title_row)
@@ -63,7 +106,9 @@ class KnowledgeCard(QFrame):
         dot.setStyleSheet(f"color: {self._get_mastery_hex()}; font-size: 14px;")
         dot_row.addWidget(dot)
         pct = QLabel(f"{self.mastery:.0%}")
-        pct.setStyleSheet("color: #616161; font-size: 14px; font-weight: bold;")
+        pct.setStyleSheet(
+            f"color: {theme.TEXT_MUTED}; font-size: 14px; font-weight: 600;"
+        )
         dot_row.addWidget(pct)
         dot_row.addStretch()
         layout.addLayout(dot_row)
@@ -72,56 +117,33 @@ class KnowledgeCard(QFrame):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         learn_btn = QPushButton(_t("panel_teach"))
-        learn_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #1565C0;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 6px 16px;
-                font-size: 13px;
-            }
-            QPushButton:hover {
-                background-color: #0D47A1;
-            }
-        """)
+        learn_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        learn_btn.setStyleSheet(theme.primary_button_style(compact=True))
         learn_btn.clicked.connect(lambda: self.clicked.emit(self.concept_name))
         btn_row.addWidget(learn_btn)
         layout.addLayout(btn_row)
 
     def apply_style(self):
         if self.is_top:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: #E3F2FD;
-                    border: 2px solid #1565C0;
-                    border-radius: 12px;
-                }
-            """)
+            self.setStyleSheet(
+                f"QFrame {{ background-color: {theme.ACCENT_TINT};"
+                f" border: 1px solid {theme.ACCENT_SOFT};"
+                f" border-radius: {theme.RADIUS_LG}px; }}"
+            )
         elif self.urgency:
-            self.setStyleSheet(f"""
-                QFrame {{
-                    background-color: white;
-                    border: 1px solid #E0E0E0;
-                    border-left: 4px solid {self.urgency};
-                    border-radius: 8px;
-                }}
-                QFrame:hover {{
-                    border: 1px solid #90CAF9;
-                    border-left: 4px solid {self.urgency};
-                }}
-            """)
+            self.setStyleSheet(
+                f"QFrame {{ background-color: {theme.SURFACE};"
+                f" border: 1px solid {self.urgency};"
+                f" border-radius: {theme.RADIUS_LG}px; }}"
+                f"QFrame:hover {{ border-color: {theme.ACCENT_SOFT}; }}"
+            )
         else:
-            self.setStyleSheet("""
-                QFrame {
-                    background-color: white;
-                    border: 1px solid #E0E0E0;
-                    border-radius: 8px;
-                }
-                QFrame:hover {
-                    border: 1px solid #90CAF9;
-                }
-            """)
+            self.setStyleSheet(
+                f"QFrame {{ background-color: {theme.SURFACE};"
+                f" border: 1px solid {theme.BORDER};"
+                f" border-radius: {theme.RADIUS_LG}px; }}"
+                f"QFrame:hover {{ border-color: {theme.ACCENT_SOFT}; }}"
+            )
 
     def _get_mastery_color(self):
         if self.mastery >= 0.6:
@@ -156,7 +178,9 @@ class StatCard(QFrame):
         # Icon circle
         icon_circle = QFrame(self)
         icon_circle.setFixedSize(32, 32)
-        icon_circle.setStyleSheet(f"background-color: {color}20; border-radius: 16px;")
+        icon_circle.setStyleSheet(
+            f"background-color: {theme.rgba(color)}; border-radius: 16px;"
+        )
         icon_layout = QVBoxLayout(icon_circle)
         icon_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon_label = QLabel(icon)
@@ -170,14 +194,18 @@ class StatCard(QFrame):
         layout.addLayout(header)
 
         value_widget = QLabel(str(value))
-        value_widget.setStyleSheet(f"color: {color}; font-size: 26px; font-weight: bold;")
+        value_widget.setStyleSheet(
+            f"color: {color}; font-size: 22px; font-weight: 600;"
+        )
         layout.addWidget(value_widget)
-        layout.addStretch()
 
-        self.setStyleSheet("""
-            QFrame {
-                background-color: white;
-                border: 1px solid #E0E0E0;
-                border-radius: 10px;
-            }
-        """)
+        # Stat cards keep their natural height; a stretch inside the card made
+        # them balloon into empty outlined boxes when the page had spare room.
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        self.setStyleSheet(
+            f"QFrame {{ background-color: {theme.SURFACE};"
+            f" border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_LG}px; }}"
+        )

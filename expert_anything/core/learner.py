@@ -20,6 +20,19 @@ from expert_anything.core.i18n import t
 
 MASTERY_ALPHA = 0.4  # weight given to the newest evaluation
 
+# Active-recall (Feynman self-explanation) evidence.  A recall score measures
+# how completely the learner *explained* a concept — it is first-hand mastery
+# evidence, but it is NOT evidence that a teaching strategy worked.  Teaching-
+# side aggregators (stuck / regression / mastery prediction / style credit)
+# skip it exactly like ``meta.review``; mastery, difficulty and the error book
+# keep it (learner-view totality semantics).
+RECALL_CHANNEL = "recall"
+
+
+def is_recall_record(row: dict) -> bool:
+    """True for Feynman self-explanation records (``meta.channel == recall``)."""
+    return (row.get("meta") or {}).get("channel") == RECALL_CHANNEL
+
 # History retention (AGENTS.md #12: the learning trace is the single source of
 # truth for stuck/regression/session-report detection). A flat 50-row cap
 # silently starved those detectors once a book covered >50 evaluations, so
@@ -114,11 +127,6 @@ def set_study_goal(state: dict, target_concepts: int, days: int = 7) -> dict:
     state["study_goal"] = goal
     save(state)
     return goal
-
-
-def get_study_goal(state: dict) -> dict | None:
-    """Get current study goal, or None if not set."""
-    return state.get("study_goal")
 
 
 def study_goal_progress(state: dict) -> dict:
@@ -306,6 +314,338 @@ def record_evaluation(
     return new
 
 
+def save_reading_position(state: dict, asset_id: str, position: int) -> None:
+    """Persist the source reader's scroll offset for one asset.
+
+    Lets the reader resume exactly where they stopped — losing the reading
+    position every time they jump to a lesson and come back breaks flow.
+    """
+    if not asset_id:
+        return
+    state.setdefault("reading_positions", {})[asset_id] = max(0, int(position))
+
+
+def load_reading_position(state: dict, asset_id: str) -> int | None:
+    """Return the saved source scroll offset for an asset, if any."""
+    pos = state.get("reading_positions", {}).get(asset_id)
+    if isinstance(pos, bool):  # bool is an int subclass — reject explicitly
+        return None
+    if isinstance(pos, (int, float)) and pos > 0:
+        return int(pos)
+    return None
+
+
+RECENT_TAUGHT_CAP = 8
+
+
+def record_taught_concept(state: dict, concept_name: str) -> None:
+    """Push a concept onto the MRU list of lessons started.
+
+    Captures teaching *intent* even when no evaluation follows (a lesson the
+    learner read but did not answer), which the evaluation history misses —
+    powers the one-tap re-teach bar in the teach view.
+    """
+    if not concept_name:
+        return
+    recent = [c for c in state.get("recent_taught", []) if c != concept_name]
+    recent.insert(0, concept_name)
+    state["recent_taught"] = recent[:RECENT_TAUGHT_CAP]
+
+
+def recent_taught_concepts(state: dict, limit: int = 5) -> list[str]:
+    """Most-recently-taught concept names, newest first."""
+    return [c for c in state.get("recent_taught", []) if c][:limit]
+
+
+def toggle_favorite(state: dict, concept_name: str) -> bool:
+    """Toggle a concept bookmark; returns the new state (True = now favorite).
+
+    Keyed by normalized concept *name* (same convention as
+    ``record_taught_concept``) so a favorite survives asset reloads and follows
+    the same-named concept across assets — the learner bookmarks the idea,
+    not one asset's row id.
+    """
+    if not concept_name:
+        return False
+    key = normalize(concept_name)
+    favs = state.setdefault("favorites", [])
+    if key in favs:
+        favs.remove(key)
+        return False
+    favs.append(key)
+    return True
+
+
+def is_favorite(state: dict, concept_name: str) -> bool:
+    """Whether the concept (by name) is bookmarked."""
+    if not concept_name:
+        return False
+    return normalize(concept_name) in state.get("favorites", [])
+
+
+def favorite_set(state: dict) -> set[str]:
+    """All bookmarked normalized concept names."""
+    return set(state.get("favorites", []))
+
+
+# ---- personal notes (generation effect: writing beats reading) ---------------
+
+NOTE_CAP = 2000
+
+
+def set_note(state: dict, concept_name: str, text: str) -> bool:
+    """Write the learner's own-words note for a concept; returns True when a
+    note exists after the call (empty text deletes the note).
+
+    Keyed by normalized concept *name* — same convention as favorites — so a
+    note follows the idea across assets and survives asset reloads. Writing
+    an explanation in your own words is the strongest cheap comprehension
+    check the system can offer, so notes live in the learner state (the one
+    source of truth) rather than in any asset file.
+    """
+    if not concept_name:
+        return False
+    key = normalize(concept_name)
+    notes = state.setdefault("notes", {})
+    text = (text or "").strip()
+    if text:
+        notes[key] = text[:NOTE_CAP]
+        return True
+    notes.pop(key, None)
+    return False
+
+
+def get_note(state: dict, concept_name: str) -> str:
+    """The learner's note for a concept, or "" when absent."""
+    if not concept_name:
+        return ""
+    val = state.get("notes", {}).get(normalize(concept_name), "")
+    return val if isinstance(val, str) else ""
+
+
+def has_note(state: dict, concept_name: str) -> bool:
+    return bool(get_note(state, concept_name))
+
+
+def note_set(state: dict) -> set[str]:
+    """All normalized concept names carrying a non-empty note."""
+    return {k for k, v in state.get("notes", {}).items() if isinstance(v, str) and v}
+
+
+# ---- lesson snapshots (re-read a past explanation at zero LLM cost) ----------
+
+LESSON_SNAPSHOT_CAP = 4000
+LESSON_STEP_CAP = 500
+LESSON_STEPS_MAX = 8
+
+
+def save_lesson_snapshot(
+    state: dict,
+    concept_name: str,
+    asset_id: str,
+    style: str,
+    explanation: str,
+    steps: list | None,
+) -> bool:
+    """Persist the *latest* lesson content for a concept (bounded).
+
+    Review wants "show me that explanation again", not "generate a fresh
+    one" — the snapshot closes that loop without another LLM call. Only the
+    most recent lesson per concept is kept; lengths are clamped so the
+    learner state file stays small.
+    """
+    explanation = (explanation or "").strip()
+    if not concept_name or not explanation:
+        return False
+    snap = {
+        "name": concept_name,
+        "asset_id": asset_id or "",
+        "style": style or "",
+        "explanation": explanation[:LESSON_SNAPSHOT_CAP],
+        "steps": [str(s)[:LESSON_STEP_CAP] for s in (steps or []) if str(s).strip()][
+            :LESSON_STEPS_MAX
+        ],
+        "at": datetime.now(timezone.utc).isoformat(),
+    }
+    state.setdefault("lesson_snapshots", {})[normalize(concept_name)] = snap
+    return True
+
+
+def get_lesson_snapshot(state: dict, concept_name: str) -> dict | None:
+    """The latest saved lesson snapshot for a concept, or None."""
+    if not concept_name:
+        return None
+    snap = state.get("lesson_snapshots", {}).get(normalize(concept_name))
+    if isinstance(snap, dict) and snap.get("explanation"):
+        return snap
+    return None
+
+
+def score_trail(state: dict, concept_name: str, limit: int = 5) -> list[dict]:
+    """Chronological recent evaluation scores for one concept.
+
+    Each item: ``{"score": float, "review": bool, "recall": bool}``. Returns []
+    when fewer than two records exist — a single point is not a trend, and the
+    detail card should stay silent rather than render noise.
+    """
+    if not concept_name:
+        return []
+    key = normalize(concept_name)
+    rows = [h for h in state.get("history", []) if h.get("key") == key]
+    out = [
+        {
+            "score": float(h.get("score", 0.0)),
+            "review": bool((h.get("meta") or {}).get("review")),
+            "recall": (h.get("meta") or {}).get("channel") == RECALL_CHANNEL,
+        }
+        for h in reversed(rows[: max(1, limit)])
+    ]
+    return out if len(out) >= 2 else []
+
+
+# Canonical channel order for the mastery breakdown ("where did this % come
+# from?").  Unknown channels keep their raw name and sink to the end.
+CHANNEL_ORDER = ("answer", "quiz", "practice", "flashcard", "recall", "harness")
+
+
+def mastery_breakdown(state: dict, concept_name: str) -> list[dict]:
+    """Per-channel breakdown of how a concept's mastery was earned.
+
+    Projects the history trace (``meta.channel``) into
+    ``[{channel, count, avg, last_score}]`` ordered by :data:`CHANNEL_ORDER`.
+    Legacy rows without ``meta`` count as ``"answer"`` (the teaching loop).
+    Pure function, no LLM — it answers the learner's "why is my mastery 62%?".
+    """
+    if not concept_name:
+        return []
+    key = normalize(concept_name)
+    buckets: dict[str, dict] = {}
+    for h in state.get("history", []):  # newest first
+        if (h.get("key") or normalize(h.get("concept", ""))) != key:
+            continue
+        meta = h.get("meta") or {}
+        channel = str(meta.get("channel") or "answer")
+        rec = buckets.setdefault(
+            channel, {"channel": channel, "scores": [], "last_score": None}
+        )
+        try:
+            score = float(h.get("score", 0.0))
+        except (TypeError, ValueError):
+            continue
+        rec["scores"].append(score)
+        if rec["last_score"] is None:
+            rec["last_score"] = round(score, 2)  # newest row seen first
+    out = []
+    for channel, rec in buckets.items():
+        scores = rec["scores"]
+        out.append(
+            {
+                "channel": channel,
+                "count": len(scores),
+                "avg": round(sum(scores) / len(scores), 2) if scores else 0.0,
+                "last_score": rec["last_score"] or 0.0,
+            }
+        )
+
+    def _rank(item: dict) -> tuple[int, str]:
+        channel = item["channel"]
+        idx = CHANNEL_ORDER.index(channel) if channel in CHANNEL_ORDER else -1
+        return (idx if idx >= 0 else len(CHANNEL_ORDER), channel)
+
+    out.sort(key=_rank)
+    return out
+
+
+def recall_trend(state: dict, concept_name: str, limit: int = 5) -> list[float]:
+    """Coverage of the most recent self-explanations, oldest → newest.
+
+    The direct "did I actually get better at explaining it?" signal.  Pure
+    projection of ``channel="recall"`` rows; returns [] when the learner has
+    never done a Feynman check on this concept.
+    """
+    if not concept_name:
+        return []
+    key = normalize(concept_name)
+    rows = [
+        h
+        for h in state.get("history", [])
+        if (h.get("meta") or {}).get("channel") == RECALL_CHANNEL
+        and (h.get("key") or normalize(h.get("concept", ""))) == key
+    ][: max(1, limit)]
+    try:
+        return [round(float(h.get("score", 0.0)), 2) for h in reversed(rows)]
+    except (TypeError, ValueError):
+        return []
+
+
+def learning_streak(state: dict) -> dict:
+    """Calculate the current and best learning streak (consecutive days).
+
+    A "day" counts if there is at least one evaluation in the learner's
+    history with a timestamp on that calendar day (UTC). The streak
+    extends backwards from today: if today has no activity yet but
+    yesterday did, the streak is still alive (today just hasn't started).
+
+    Returns:
+        current: consecutive days ending today or yesterday
+        best: longest streak ever achieved
+        total_days: total distinct days with activity
+        last_active: ISO date string of the most recent active day
+    """
+    from datetime import date as _date
+
+    history = state.get("history", [])
+    if not history:
+        return {"current": 0, "best": 0, "total_days": 0, "last_active": ""}
+
+    active_days: set[_date] = set()
+    for h in history:
+        ts_str = h.get("at", "")
+        try:
+            ts = datetime.fromisoformat(ts_str)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            active_days.add(ts.date())
+        except (TypeError, ValueError):
+            continue
+
+    if not active_days:
+        return {"current": 0, "best": 0, "total_days": 0, "last_active": ""}
+
+    sorted_days = sorted(active_days, reverse=True)
+    today = datetime.now(timezone.utc).date()
+    yesterday = today.fromordinal(today.toordinal() - 1)
+
+    # Current streak: count back from today (or yesterday if today is empty)
+    current = 0
+    cursor = today if today in active_days else (yesterday if yesterday in active_days else None)
+    if cursor is not None:
+        current = 1
+        check = cursor.fromordinal(cursor.toordinal() - 1)
+        while check in active_days:
+            current += 1
+            check = check.fromordinal(check.toordinal() - 1)
+
+    # Best streak: iterate sorted days and find longest consecutive run
+    best = 1
+    run = 1
+    for i in range(1, len(sorted_days)):
+        prev = sorted_days[i]
+        before = sorted_days[i - 1]
+        if (before - prev).days == 1:
+            run += 1
+            best = max(best, run)
+        else:
+            run = 1
+
+    return {
+        "current": current,
+        "best": max(best, current),
+        "total_days": len(active_days),
+        "last_active": sorted_days[0].isoformat(),
+    }
+
+
 def mark_completed(state: dict, asset_id: str, concept_id: str) -> None:
     entry = state.get("assets", {}).get(asset_id)
     if not entry:
@@ -393,6 +733,43 @@ def concept_difficulty(state: dict, asset_id: str | None = None) -> dict[str, st
             out[name] = "medium"
         else:
             out[name] = "hard"
+    return out
+
+
+def structural_complexity(asset: KnowledgeAsset) -> dict[str, float]:
+    """Compute structural complexity per concept based on graph centrality.
+
+    A concept is structurally complex when many other concepts depend on it
+    (high in-degree in prereq/causes relations) and/or it has many connections
+    overall (high degree centrality). This is independent of the learner's
+    evaluation history — it measures inherent knowledge structure difficulty.
+
+    Returns ``{concept_id: 0.0–1.0}`` where 1.0 = maximally connected hub.
+    """
+    from expert_anything.core.decoder import classify_relation
+
+    degree: dict[str, int] = {c.id: 0 for c in asset.concepts}
+    in_degree: dict[str, int] = {c.id: 0 for c in asset.concepts}
+
+    for r in asset.relations:
+        if r.source in degree:
+            degree[r.source] += 1
+        if r.target in degree:
+            degree[r.target] += 1
+        # In-degree: how many concepts point TO this one (depend on it)
+        sem = classify_relation(r.label or "", r.type or "")
+        if sem in ("prereq", "causes", "part_of") and r.target in in_degree:
+            in_degree[r.target] += 1
+
+    max_degree = max(degree.values()) if degree and max(degree.values()) > 0 else 1
+    max_in = max(in_degree.values()) if in_degree and max(in_degree.values()) > 0 else 1
+
+    out: dict[str, float] = {}
+    for cid in degree:
+        deg_score = degree[cid] / max_degree
+        in_score = in_degree[cid] / max_in
+        # Weighted: in-degree (dependency load) matters more than raw degree
+        out[cid] = round(0.4 * deg_score + 0.6 * in_score, 2)
     return out
 
 
@@ -627,6 +1004,8 @@ def style_effectiveness(state: dict) -> dict[str, dict]:
         meta = h.get("meta") or {}
         if meta.get("review"):
             continue  # retention evidence, not teaching evidence
+        if meta.get("channel") == RECALL_CHANNEL:
+            continue  # self-explanation coverage, not a teaching style
         style = meta.get("style") or meta.get("channel") or "default"
         score = float(h.get("score", 0.0))
         concept = h.get("concept", "")
@@ -872,8 +1251,9 @@ def mastery_prediction(state: dict, concept_name: str) -> dict:
     """
     scores: list[float] = []
     for h in state.get("history", []):
-        if (h.get("meta") or {}).get("review"):
-            continue  # retention dips are the review loop's job, not a trend
+        meta = h.get("meta") or {}
+        if meta.get("review") or meta.get("channel") == RECALL_CHANNEL:
+            continue  # retention / self-explanation dips are not teaching trends
         if normalize(h.get("concept", "")) == normalize(concept_name):
             scores.append(float(h.get("score", 0.0)))
 
@@ -1064,7 +1444,11 @@ def adaptive_path(
             score += (
                 unlock_bonus * deficit
             )  # weighted by how much we still need to learn it
-            if unlock_bonus >= 0.15:
+            # A concept that transitively unlocks >= 3 downstream concepts is
+            # high-leverage regardless of the bonus magnitude — the bonus
+            # formula saturates slowly (leverage 5 only yields 0.15), which
+            # hid genuine hubs from the coach's focus claim.
+            if dw >= 3 or unlock_bonus >= 0.15:
                 tags.append("high_leverage")
             tags.append(f"unblock:{dw}")
         if cid in pos:
@@ -1248,8 +1632,9 @@ def stuck_concepts(
     recent: dict[str, list[float]] = {}
     names: dict[str, str] = {}
     for h in state.get("history", []):  # newest first
-        if (h.get("meta") or {}).get("review"):
-            continue  # retention evidence — not a teaching-strategy failure
+        meta = h.get("meta") or {}
+        if meta.get("review") or meta.get("channel") == RECALL_CHANNEL:
+            continue  # retention / self-explanation evidence — not strategy failure
         key = h.get("key") or normalize(h.get("concept", ""))
         if not key:
             continue
@@ -1282,7 +1667,7 @@ def is_stuck(state: dict, concept_name: str, attempts: int = 3) -> bool:
     return any(s["key"] == key for s in stuck_concepts(state, attempts=attempts))
 
 
-def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
+def due_for_review(state: dict, limit: int = 8, asset=None, now=None) -> list[dict]:
     """Concepts whose mastery needs refreshing (spacing-effect based).
 
     A concept becomes *due* when the days since its last evaluation exceed a
@@ -1291,6 +1676,12 @@ def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
     turns the Learner Model into an active review scheduler instead of a
     passive scoreboard, so learned material is revisited right before it would
     fade (Ebbinghaus-style spacing).
+
+    ``now`` is an optional ``datetime`` used as "today" instead of
+    ``datetime.now(timezone.utc)`` — injected only by the benchmark/tests so
+    the spacing algorithm can be fast-forwarded deterministically (no wall
+    clock, no randomness).  Callers that don't pass it keep the original
+    behaviour.
 
     If ``asset`` is provided, concepts whose prerequisite/causes neighbours are
     weak get a boost — reviewing a shaky foundation is more urgent because it
@@ -1352,7 +1743,7 @@ def due_for_review(state: dict, limit: int = 8, asset=None) -> list[dict]:
     }
 
     out: list[dict] = []
-    now = datetime.now(timezone.utc)
+    now = now if now is not None else datetime.now(timezone.utc)
     for key, rec in state.get("concepts", {}).items():
         if asset_keys is not None and key not in asset_keys:
             continue

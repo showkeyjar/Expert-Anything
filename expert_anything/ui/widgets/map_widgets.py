@@ -11,7 +11,10 @@ class MapLegend(QFrame):
     """A horizontal row of visual chips explaining the cognitive map.
 
     Two rows:
-    - Node chips: mastery levels + special node states.
+    - Node chips: mastery levels + special node states.  The row rebuilds via
+      :meth:`set_mode` when the graph switches heatmap modes — a legend that
+      keeps describing grey/amber/green while every node is painted red→green
+      heat is actively lying to the learner.
     - Edge chips: 6 semantic relation types with their matching colors, so the
       learner can read structural meaning (causes / part-of / prerequisite / …)
       at a glance instead of guessing what each line color means.
@@ -23,19 +26,13 @@ class MapLegend(QFrame):
         outer.setContentsMargins(10, 6, 10, 6)
         outer.setSpacing(4)
 
-        # Row 1 — node mastery chips
-        node_row = QHBoxLayout()
-        node_row.setContentsMargins(0, 0, 0, 0)
-        node_row.setSpacing(14)
-        node_row.addWidget(self._chip("#E1E4E8", "#78909C", solid=1, text=_t("legend_unstudied")))
-        node_row.addWidget(self._chip("#FDEBCE", "#78909C", solid=1, text=_t("legend_partial")))
-        node_row.addWidget(self._chip("#C5E6C6", "#78909C", solid=1, text=_t("legend_mastered")))
-        node_row.addWidget(self._chip("#E1E4E8", "#E67828", solid=1, dashed=True, text=_t("legend_frontier")))
-        node_row.addWidget(self._chip("#E1E4E8", "#E67828", solid=3, text=_t("legend_anomaly")))
-        node_row.addWidget(self._chip("#E1E4E8", "#0284C7", solid=3, text=_t("legend_current")))
-        node_row.addWidget(self._chip("#FFFFFF", "#90A4AE", solid=1, dashed=True, text="◌ " + _t("legend_unanchored")))
-        node_row.addStretch()
-        outer.addLayout(node_row)
+        # Row 1 — node chips (rebuilt on mode change)
+        self._node_host = QWidget()
+        self._node_row = QHBoxLayout(self._node_host)
+        self._node_row.setContentsMargins(0, 0, 0, 0)
+        self._node_row.setSpacing(14)
+        outer.addWidget(self._node_host)
+        self.set_mode()
 
         # Row 2 — edge relation type chips
         edge_row = QHBoxLayout()
@@ -52,11 +49,72 @@ class MapLegend(QFrame):
         edge_row.addStretch()
         outer.addLayout(edge_row)
 
+        # Direction key: colour says *what* the relation is, the marker says
+        # *which way* it points. Without this line the arrows are guesswork.
+        direction = QLabel(_t("legend_direction"))
+        direction.setStyleSheet("font-size: 11px; color: #90A4AE;")
+        outer.addWidget(direction)
+
         self.setStyleSheet(
             "QFrame { background-color: white; border: 1px solid #E0E0E0;"
             "border-radius: 8px; }"
             "QLabel { font-size: 12px; color: #455A64; }"
         )
+
+    # -- mode adaptation ------------------------------------------------------ #
+
+    def set_mode(
+        self,
+        mastery_heat: bool = False,
+        density: bool = False,
+        hop2: bool = False,
+    ) -> None:
+        """Rebuild the node chip row for the graph's current display mode.
+
+        ``mastery_heat`` / ``density`` replace the three static mastery chips
+        with a gradient scale (they repaint every node fill); ``hop2`` adds a
+        chip for the dimmed second-ring nodes.
+        """
+        row = self._node_row
+        self._clear_row(row)
+        if mastery_heat:
+            row.addWidget(
+                self._gradient_chip(
+                    "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 #C62828, stop:0.5 #FFA000, stop:1 #2E7D32)",
+                    f"{_t('legend_heat_low')} → {_t('legend_heat_high')}",
+                )
+            )
+        elif density:
+            row.addWidget(
+                self._gradient_chip(
+                    "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                    "stop:0 #1A237E, stop:0.5 #FFD54F, stop:1 #C62828)",
+                    f"{_t('legend_density_low')} → {_t('legend_density_high')}",
+                )
+            )
+        else:
+            row.addWidget(self._chip("#E1E4E8", "#78909C", solid=1, text=_t("legend_unstudied")))
+            row.addWidget(self._chip("#FDEBCE", "#78909C", solid=1, text=_t("legend_partial")))
+            row.addWidget(self._chip("#C5E6C6", "#78909C", solid=1, text=_t("legend_mastered")))
+        # Special states survive every fill mode (border semantics, §3 orthogonal)
+        row.addWidget(self._chip("#E1E4E8", "#E67828", solid=1, dashed=True, text=_t("legend_frontier")))
+        row.addWidget(self._chip("#E1E4E8", "#E67828", solid=3, text=_t("legend_anomaly")))
+        row.addWidget(self._chip("#E1E4E8", "#0284C7", solid=3, text=_t("legend_current")))
+        row.addWidget(self._chip("#FFFFFF", "#90A4AE", solid=1, dashed=True, text="◌ " + _t("legend_unanchored")))
+        if hop2:
+            row.addWidget(self._chip("#EDF0F3", "#B0BEC5", solid=1, text=_t("legend_hop2_node")))
+        row.addStretch()
+
+    @staticmethod
+    def _clear_row(row: QHBoxLayout) -> None:
+        while row.count():
+            item = row.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+    # -- chip builders --------------------------------------------------------- #
 
     def _chip(self, fill: str, border: str, solid: int = 1, dashed: bool = False,
               text: str = "") -> QWidget:
@@ -70,6 +128,25 @@ class MapLegend(QFrame):
         border_style = " dashed" if dashed else ""
         box.setStyleSheet(
             f"QFrame {{ background-color: {fill}; border: {solid}px{border_style} {border};"
+            f" border-radius: 4px; }}"
+        )
+        wrap.addWidget(box)
+        lbl = QLabel(text)
+        wrap.addWidget(lbl)
+        host = QWidget()
+        host.setLayout(wrap)
+        host.setStyleSheet("background: transparent; border: none;")
+        return host
+
+    def _gradient_chip(self, gradient: str, text: str) -> QWidget:
+        """A small horizontal gradient bar + label — for heatmap scale rows."""
+        wrap = QHBoxLayout()
+        wrap.setContentsMargins(0, 0, 0, 0)
+        wrap.setSpacing(5)
+        box = QFrame()
+        box.setFixedSize(48, 12)
+        box.setStyleSheet(
+            f"QFrame {{ background: {gradient}; border: 1px solid #90A4AE;"
             f" border-radius: 4px; }}"
         )
         wrap.addWidget(box)

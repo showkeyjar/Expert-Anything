@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -19,6 +19,8 @@ from expert_anything.core.learner import (
     mark_completed,
     normalize,
     record_evaluation,
+    record_taught_concept,
+    recent_taught_concepts,
     set_profile,
     stuck_concepts,
 )
@@ -29,6 +31,7 @@ from expert_anything.core.teacher import (
 )
 from expert_anything.core.storage import save_teacher
 from expert_anything.core.tutor import Tutor
+from expert_anything.ui import theme
 
 
 class TeachWorker(QThread):
@@ -157,8 +160,6 @@ class TeachView(QWidget):
     teach_started = Signal(str)  # concept_name (for stuck detection)
     stuck_detected = Signal(str, object)  # concept_name, stuck_info
     followup_done = Signal(str, str)  # question, answer
-    harness_adopted = Signal(object)  # candidate spec
-    harness_transferred = Signal(object)  # payload
     evidence_jump_requested = Signal(str, str)  # concept id, evidence text
     evaluate_recorded = Signal()  # refresh topbar
     quiz_result = Signal(float)  # quiz score (delegated from TeachResultView)
@@ -201,6 +202,8 @@ class TeachView(QWidget):
         # vary=1; regular topic packs never set this.
         self._topic_review: bool = False
         self._topic_banner = None
+        self._recent_host = None
+        self._recent_layout = None
         # External callers/tests can submit an already-scored quiz through the
         # view-level compatibility signal.  Connect once per TeachView lifetime,
         # not once per rendered result card.
@@ -233,6 +236,7 @@ class TeachView(QWidget):
     def refresh(self):
         self._rebuild_concept_list()
         self._rebuild_style_combo()
+        self._rebuild_recent_bar()
 
     def _restore_style_combo(self):
         """Restore style combo to learner profile preference."""
@@ -279,6 +283,50 @@ class TeachView(QWidget):
             next_c, _ = self._main._next_concept()
             if next_c is not None and next_c.name in names:
                 self._concept_list.setCurrentText(next_c.name)
+
+    def _rebuild_recent_bar(self) -> None:
+        """Render recently-taught concepts of THIS asset as quick-jump pills."""
+        host = getattr(self, "_recent_host", None)
+        layout = getattr(self, "_recent_layout", None)
+        if host is None or layout is None:
+            return
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        asset = self._main.get_asset()
+        if asset is None:
+            host.setVisible(False)
+            return
+        asset_names = {c.name for c in asset.concepts}
+        recent = [
+            n for n in recent_taught_concepts(self._main.learner, limit=5)
+            if n in asset_names
+        ]
+        if not recent:
+            host.setVisible(False)
+            return
+
+        title = QLabel(self._main._t("recent_taught_title"))
+        title.setStyleSheet("font-size: 12px; color: #78909C; font-weight: bold;")
+        layout.addWidget(title)
+        for name in recent:
+            pill = QPushButton(name)
+            pill.setCursor(Qt.CursorShape.PointingHandCursor)
+            pill.setStyleSheet(
+                "QPushButton { background-color: #F1F5F9; color: #334155;"
+                "border: 1px solid #CBD5E1; border-radius: 12px;"
+                "padding: 4px 12px; font-size: 12.5px; text-align: left; }"
+                "QPushButton:hover { background-color: #E2E8F0;"
+                "border-color: #1565C0; color: #1565C0; }"
+            )
+            pill.clicked.connect(
+                lambda _checked=False, n=name: self.start_teach_by_name(n)
+            )
+            layout.addWidget(pill)
+        host.setVisible(True)
 
     def _on_recommend_next(self):
         """Pick the best next concept using adaptive_path scoring and teach it.
@@ -354,54 +402,51 @@ class TeachView(QWidget):
         layout.setSpacing(0)
 
         # Slim header
-        header = QFrame()
-        header.setStyleSheet(
-            "background-color: white; border-bottom: 1px solid #E0E0E0;"
+        from expert_anything.ui.widgets.shared import PageHeader
+
+        layout.addWidget(
+            PageHeader(self._main._t("nav_teach"), self._main._t("teach_hint"))
         )
-        h_lay = QHBoxLayout(header)
-        h_lay.setContentsMargins(20, 5, 20, 5)
-        h_lay.setSpacing(10)
-        h_t = QLabel(self._main._t("nav_teach"))
-        h_t.setStyleSheet("font-size: 16px; font-weight: bold; color: #1F2933;")
-        h_lay.addWidget(h_t)
-        h_s = QLabel(self._main._t("teach_hint"))
-        h_s.setStyleSheet("color: #9E9E9E; font-size: 13px;")
-        h_lay.addWidget(h_s)
-        h_lay.addStretch()
-        layout.addWidget(header)
 
         splitter = QSplitter()
         # Left panel: concept selector
         left = QWidget()
         left_layout = QVBoxLayout(left)
-        left_layout.setContentsMargins(16, 16, 8, 16)
+        left_layout.setContentsMargins(20, 18, 12, 18)
+        left_layout.setSpacing(8)
 
         concept_label = QLabel(self._main._t("swap_concept"))
-        concept_label.setStyleSheet("font-size: 15px; font-weight: bold;")
+        concept_label.setStyleSheet(
+            f"font-size: 12.5px; font-weight: 600; color: {theme.TEXT_MUTED};"
+        )
         left_layout.addWidget(concept_label)
 
         self._concept_list = QComboBox()
-        self._concept_list.setStyleSheet("""
-            QComboBox { padding: 6px; border: 1px solid #E0E0E0;
-                        border-radius: 4px; font-size: 14px; background-color: white; }
-        """)
         self._rebuild_concept_list()
         left_layout.addWidget(self._concept_list)
 
+        # Recently-taught quick-jump bar — learners bounce between 3-5
+        # concepts while building a mental model; this removes the
+        # dropdown hunt when going back to a concept just taught.
+        self._recent_host = QWidget()
+        self._recent_layout = QVBoxLayout(self._recent_host)
+        self._recent_layout.setContentsMargins(0, 10, 0, 0)
+        self._recent_layout.setSpacing(5)
+        left_layout.addWidget(self._recent_host)
+        self._rebuild_recent_bar()
+
         # Smart recommendation button 鈥?picks the best next concept
         self._recommend_btn = QPushButton(self._main._t("recommend_next"))
-        self._recommend_btn.setStyleSheet(
-            "QPushButton { background-color: #00695C; color: white; border: none;"
-            "border-radius: 6px; padding: 8px 12px; font-size: 14px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #004D40; }"
-        )
+        self._recommend_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._recommend_btn.setStyleSheet(theme.secondary_button_style())
         self._recommend_btn.setToolTip(self._main._t("recommend_tip"))
         self._recommend_btn.clicked.connect(self._on_recommend_next)
         left_layout.addWidget(self._recommend_btn)
 
         style_label = QLabel(self._main._t("style_label"))
         style_label.setStyleSheet(
-            "font-size: 14px; font-weight: bold; margin-top: 12px;"
+            f"font-size: 12.5px; font-weight: 600; color: {theme.TEXT_MUTED};"
+            " margin-top: 10px;"
         )
         left_layout.addWidget(style_label)
 
@@ -414,30 +459,27 @@ class TeachView(QWidget):
             ]
         )
         self._style_combo.currentIndexChanged.connect(self._on_style_changed)
-        self._style_combo.setStyleSheet("""
-            QComboBox { padding: 6px; border: 1px solid #E0E0E0;
-                        border-radius: 4px; font-size: 14px; }
-        """)
         left_layout.addWidget(self._style_combo)
 
         # Review mode toggle
         self._review_toggle = QPushButton(self._main._t("review_mode"))
         self._review_toggle.setCheckable(True)
-        self._review_toggle.setStyleSheet("""
-            QPushButton { background-color: white; color: #6A1B9A;
-                          border: 1px solid #CE93D8; border-radius: 6px;
-                          padding: 6px 12px; font-size: 13px; }
-            QPushButton:checked { background-color: #F3E5F5; }
-        """)
+        self._review_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._review_toggle.setStyleSheet(
+            f"QPushButton {{ background-color: transparent;"
+            f" color: {theme.TEXT_MUTED}; border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_MD}px; padding: 7px 12px;"
+            " font-size: 12.5px; text-align: left; }"
+            f"QPushButton:hover {{ background-color: {theme.SURFACE_HOVER}; }}"
+            f"QPushButton:checked {{ background-color: {theme.ACCENT_TINT};"
+            f" border-color: {theme.ACCENT_SOFT}; color: {theme.ACCENT_HOVER}; }}"
+        )
         self._review_toggle.clicked.connect(self._on_review_toggle)
         left_layout.addWidget(self._review_toggle)
 
         start_btn = QPushButton(self._main._t("start_teach"))
-        start_btn.setStyleSheet("""
-            QPushButton { background-color: #1565C0; color: white; border: none;
-                          border-radius: 6px; padding: 10px 20px; font-size: 15px; }
-            QPushButton:hover { background-color: #0D47A1; }
-        """)
+        start_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        start_btn.setStyleSheet(theme.primary_button_style())
         start_btn.clicked.connect(self._on_start_teach)
         left_layout.addWidget(start_btn)
         left_layout.addStretch()
@@ -449,15 +491,18 @@ class TeachView(QWidget):
         right_layout.setContentsMargins(8, 16, 16, 16)
 
         self._result_label = QLabel(self._main._t("lesson_ready"))
-        self._result_label.setStyleSheet("color: #757575; font-size: 15px;")
+        self._result_label.setStyleSheet(
+            f"color: {theme.TEXT_MUTED}; font-size: 13px;"
+        )
         right_layout.addWidget(self._result_label)
 
         self._graph = self._main._teach_graph_ref()
         self._graph.setMinimumHeight(140)
         self._graph.setMaximumHeight(170)
         self._graph.setStyleSheet(
-            "QGraphicsView { background-color: white; border: 1px solid #E0E0E0;"
-            "border-radius: 8px; }"
+            f"QGraphicsView {{ background-color: {theme.SURFACE};"
+            f" border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_MD}px; }}"
         )
         self._graph.setVisible(False)
         right_layout.addWidget(self._graph)
@@ -470,22 +515,22 @@ class TeachView(QWidget):
         self._topic_banner = QFrame()
         self._topic_banner.setVisible(False)
         self._topic_banner.setStyleSheet(
-            "QFrame { background-color: #F3E5F5; border: 1px solid #CE93D8;"
-            "border-radius: 8px; }"
+            f"QFrame {{ background-color: {theme.ACCENT_TINT};"
+            f" border: 1px solid {theme.ACCENT_SOFT};"
+            f" border-radius: {theme.RADIUS_MD}px; }}"
         )
         tb_lay = QHBoxLayout(self._topic_banner)
         tb_lay.setContentsMargins(12, 8, 12, 8)
         tb_lay.setSpacing(8)
         self._topic_banner_label = QLabel("")
         self._topic_banner_label.setStyleSheet(
-            "font-size: 14.5px; color: #4A148C; font-weight: 600;"
+            f"font-size: 13px; color: {theme.ACCENT_HOVER}; font-weight: 600;"
         )
         tb_lay.addWidget(self._topic_banner_label)
         self._topic_next_btn = QPushButton("")
+        self._topic_next_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._topic_next_btn.setStyleSheet(
-            "QPushButton { background-color: #7B1FA2; color: white; border: none;"
-            "border-radius: 6px; padding: 4px 12px; font-size: 13.5px; font-weight: bold; }"
-            "QPushButton:hover { background-color: #4A148C; }"
+            theme.primary_button_style(compact=True)
         )
         self._topic_next_btn.setVisible(False)
         self._topic_next_btn.clicked.connect(self._on_topic_next)
@@ -494,10 +539,32 @@ class TeachView(QWidget):
 
         self._result_area = QScrollArea()
         self._result_area.setWidgetResizable(True)
-        self._result_area.setStyleSheet("""
-            QScrollArea { border: 1px solid #E0E0E0; border-radius: 8px;
-                          background-color: white; }
-        """)
+        self._result_area.setStyleSheet(
+            f"QScrollArea {{ border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_LG}px;"
+            f" background-color: {theme.SURFACE}; }}"
+        )
+        # An empty bordered pane reads as "unfinished software"; show a calm
+        # placeholder until a concept is picked.  It is replaced by the lesson
+        # view through the normal _display_result path.
+        empty = QWidget()
+        empty_lay = QVBoxLayout(empty)
+        empty_lay.setContentsMargins(24, 24, 24, 24)
+        empty_lay.addStretch()
+        empty_title = QLabel(self._main._t("lesson_ready"))
+        empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_title.setStyleSheet(
+            f"font-size: 17px; font-weight: 600; color: {theme.TEXT};"
+        )
+        empty_lay.addWidget(empty_title)
+        empty_hint = QLabel(self._main._t("teach_hint"))
+        empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_hint.setStyleSheet(
+            f"font-size: 12.5px; color: {theme.TEXT_FAINT}; margin-top: 6px;"
+        )
+        empty_lay.addWidget(empty_hint)
+        empty_lay.addStretch()
+        self._result_area.setWidget(empty)
         right_layout.addWidget(self._result_area, 1)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 1)
@@ -550,6 +617,12 @@ class TeachView(QWidget):
         self._show_teaching_content(concept, vary=vary, style=explicit_style)
 
     def _show_teaching_content(self, concept, vary=0, style=None):
+        # Remember every lesson actually started (even when no evaluation
+        # follows) so the recently-taught bar can jump back in one tap.
+        record_taught_concept(self._main.learner, concept.name)
+        self._main.save_learner_state()
+        self._rebuild_recent_bar()
+
         if not self._tutor:
             asset = self._main.get_asset()
             self._tutor = Tutor(asset, llm=self._main.llm_client, learner_state=self._main.learner)
@@ -615,27 +688,6 @@ class TeachView(QWidget):
             self, self._main._t("error"), self._main._t("teach_error", msg=error_msg)
         )
 
-    def _attach_harness_history(self, view):
-        """Render this asset's harness evolution audit trail in the result view.
-
-        Pure read: load_harness_history → filter by current asset → append.
-        Any failure stays silent — history is informational, never lesson-
-        critical (AGENTS.md §12: 教学视图渲染历史块).
-        """
-        try:
-            from expert_anything.core import auto_harness as _ah
-            from expert_anything.core import config as _config
-
-            hist = _ah.load_harness_history(
-                _config.DATA_DIR / "harness_state.json"
-            )
-            asset_id = getattr(self._main, "current_asset_id", "")
-            events = [e for e in hist if e.get("asset_id") == asset_id]
-            if events:
-                view.append_harness_history(events)
-        except Exception:
-            pass
-
     def _attach_doubt_strip(self, view, concept):
         """Render the teacher-model doubt strip into a lesson result view.
 
@@ -664,6 +716,30 @@ class TeachView(QWidget):
         except Exception:
             pass
 
+    def _attach_misconceptions(self, view, concept) -> None:
+        """Render the teacher model's common misconceptions for this concept.
+
+        Walk-ahead principle (AGENTS.md §2): surface known pitfalls so the
+        learner can self-check before the quiz. Silent on failure.
+        """
+        try:
+            asset = self._main.get_asset()
+            if asset is None or concept is None:
+                return
+            if not hasattr(view, "append_misconceptions"):
+                return
+            td = getattr(self._main, "teacher_models", {}).get(asset.asset_id)
+            if not td:
+                return
+            from expert_anything.core.teacher import TeacherModel
+
+            tm = TeacherModel.from_dict(td)
+            note = tm.concept_note_by_id(concept.id)
+            if note and note.misconceptions:
+                view.append_misconceptions(note.misconceptions)
+        except Exception:
+            pass
+
     def _display_result(self, result):
         old = self._result_area.takeWidget()
         if old is not None:
@@ -675,11 +751,23 @@ class TeachView(QWidget):
         self._teach_view_widget = view
         self._teach_concept_now = result.get("concept", "")
         self._teach_lesson = result
-        # Harness suggestion cards live inside the result view; without this
-        # wiring their adopt/transfer buttons emit into the void (AGENTS.md §12).
-        view.harness_adopt_requested.connect(self.on_adopt_harness)
-        view.harness_transfer_requested.connect(self.on_transfer_harness)
-        self._attach_harness_history(view)
+        # Persist a bounded snapshot of this lesson so the learner can re-read
+        # the explanation later without another LLM call (zero-cost review;
+        # detail card "重看讲解" reads it).
+        try:
+            from expert_anything.core.learner import save_lesson_snapshot
+
+            if save_lesson_snapshot(
+                self._main.learner,
+                result.get("concept", ""),
+                self._main.current_asset_id or "",
+                result.get("style", ""),
+                result.get("explanation", ""),
+                result.get("steps", []),
+            ):
+                self._main.save_learner_state()
+        except Exception:
+            pass  # snapshot is an enhancement, never blocks the lesson
         # Teacher-model doubt strip (AGENTS.md §2 walk-ahead)
         _asset0 = self._main.get_asset()
         _concept0 = (
@@ -689,6 +777,7 @@ class TeachView(QWidget):
         )
         if _concept0 is not None:
             self._attach_doubt_strip(view, _concept0)
+            self._attach_misconceptions(view, _concept0)
         self._teach_result_label = self._main._t("generating_lesson")
         if view.answer_input is not None:
             self._teach_answer_input = view.answer_input
@@ -737,6 +826,15 @@ class TeachView(QWidget):
         view.next_requested.connect(self._on_next_requested)
         view.retry_requested.connect(self._on_retry_requested)
         view.vary_requested.connect(self._on_vary_requested)
+        # Answer submission and follow-up questions live inside the result
+        # view, so their widgets are only reachable from here.  Without these
+        # two connections the answer box and the question box were painted
+        # buttons that did nothing (the whole answer → evaluation → mastery
+        # loop was unreachable from the UI).
+        view.submit_requested.connect(
+            lambda v=view: self._on_submit_requested(v)
+        )
+        view.followup_requested.connect(self.on_followup)
         # Evidence badge click -> jump the reader to that exact passage
         # (AGENTS.md 长期演进 #1: source-anchored answers).
         view.evidence_jump_requested.connect(self._on_evidence_jump)
@@ -772,6 +870,22 @@ class TeachView(QWidget):
         if concept is not None:
             style = self._IDX_TO_CODE.get(self._style_combo.currentIndex(), None)
             self._show_teaching_content(concept, vary=1, style=style)
+
+    def _on_submit_requested(self, view):
+        """提交答案 — the answer box belongs to ``view``, so read it there.
+
+        Reading through the live view (instead of a cached widget pointer)
+        avoids touching a QTextEdit that ``setWidget`` already deleted.
+        """
+        box = getattr(view, "answer_input", None)
+        if box is None:
+            return
+        try:
+            answer = (box.toPlainText() or "").strip()
+        except RuntimeError:  # underlying C++ object already deleted
+            return
+        if answer:
+            self.on_submit_answer(answer)
 
     def on_submit_answer(self, answer: str):
         concept_name = self._teach_concept_now
@@ -1105,6 +1219,25 @@ class TeachView(QWidget):
         if concept is None:
             return
         self._quiz_concept = concept
+        meta = {
+            "channel": "quiz",
+            "style": (self._teach_lesson or {}).get("style", ""),
+            "vary": self._teach_vary,
+            "review": bool(self._quiz_vary),
+        }
+        # The question / my answer / the right answer ride along in the trace:
+        # later the concept card can show "what exactly did I miss?" instead of
+        # a bare score.  Data comes from the view that rendered the quiz.
+        last = getattr(self._teach_view_widget, "_quiz_last", None)
+        if isinstance(last, dict) and last.get("question"):
+            meta.update(
+                {
+                    "quiz_kind": last.get("kind", ""),
+                    "quiz_question": last.get("question", ""),
+                    "quiz_given": last.get("given", ""),
+                    "quiz_expected": last.get("expected", ""),
+                }
+            )
         record_evaluation(
             self._main.learner,
             concept.name,
@@ -1112,12 +1245,7 @@ class TeachView(QWidget):
             score,
             "",
             "quick self-test",
-            meta={
-                "channel": "quiz",
-                "style": (self._teach_lesson or {}).get("style", ""),
-                "vary": self._teach_vary,
-                "review": bool(self._quiz_vary),
-            },
+            meta=meta,
         )
         if score >= 0.6:
             mark_completed(self._main.learner, asset.asset_id, concept.id)
@@ -1250,13 +1378,21 @@ class TeachView(QWidget):
             pass
 
     def _check_review_gain_for(self, concept, asset):
-        """After a review attempt: if the concept's review average fell at
-        least 0.1 below its first-time baseline, sink a learner_gap anomaly
-        into the teacher model so the anomaly-prioritized path re-teaches it
-        (rotated style) instead of scheduling more identical reviews."""
+        """Post-evaluation teacher sync (all three channels land here):
+
+        1. If the concept's review average fell at least 0.1 below its
+           first-time baseline, sink a learner_gap anomaly into the teacher
+           model so the anomaly-prioritized path re-teaches it (rotated
+           style) instead of scheduling more identical reviews.
+        2. Resolve anomalies whose fix is now evidenced (mastery back above
+           threshold / evidence anchored) so a closed gap stops crying wolf
+           in doubt strips and the coach (AGENTS.md §34)."""
         if concept is None:
             return
-        from expert_anything.core.teacher import incorporate_review_gain_signal
+        from expert_anything.core.teacher import (
+            incorporate_review_gain_signal,
+            resolve_satisfied_anomalies,
+        )
 
         try:
             teacher = None
@@ -1266,16 +1402,11 @@ class TeachView(QWidget):
             teacher = incorporate_review_gain_signal(
                 asset, teacher, concept.id, self._main.learner
             )
+            resolve_satisfied_anomalies(asset, teacher, self._main.learner)
             save_teacher(asset.asset_id, teacher)
             self._main.teacher_models[asset.asset_id] = teacher.to_dict()
         except Exception:
             pass
-
-    def on_adopt_harness(self, candidate):
-        self.harness_adopted.emit(candidate)
-
-    def on_transfer_harness(self, payload):
-        self.harness_transferred.emit(payload)
 
     def start_teach_by_name(self, concept_name: str, review: bool = False):
         self._review_mode = review
@@ -1330,6 +1461,10 @@ class TeachView(QWidget):
             view.next_requested.connect(self._on_next_requested)
             view.retry_requested.connect(self._on_retry_requested)
             view.vary_requested.connect(self._on_vary_requested)
+            view.submit_requested.connect(
+                lambda v=view: self._on_submit_requested(v)
+            )
+            view.followup_requested.connect(self.on_followup)
             self._result_area.setWidget(view)
         self._quiz_concept = concept
         # Standalone quick-quiz from the map card: no lesson context, so

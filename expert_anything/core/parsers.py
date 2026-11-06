@@ -5,7 +5,6 @@ and adds plain-text / HTML fallbacks. PDF uses pypdf when available.
 """
 from __future__ import annotations
 
-import base64
 import html
 import re
 import zipfile
@@ -33,10 +32,6 @@ def extract_from_bytes(raw: bytes, filename: str) -> str:
     if suffix in (".html", ".htm"):
         return clean_text(raw.decode("utf-8", errors="ignore"))
     return raw.decode("utf-8", errors="ignore")
-
-
-def extract_from_base64(content_b64: str, filename: str) -> str:
-    return extract_from_bytes(base64.b64decode(content_b64), filename)
 
 
 def _extract_epub(raw: bytes) -> str:

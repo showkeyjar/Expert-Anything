@@ -17,12 +17,35 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from expert_anything.core.learner import due_for_review, normalize
-from expert_anything.ui.widgets.shared import KnowledgeCard, StatCard
+from expert_anything.core.learner import (
+    due_for_review,
+    normalize,
+    record_evaluation,
+)
+from expert_anything.core.i18n import t as _i18n_t
+from expert_anything.ui import theme
+from expert_anything.ui.widgets.shared import KnowledgeCard, PageHeader, StatCard
 from expert_anything.ui.widgets.trend_chart import (
     TrendChartView,
     MasteryDistributionBar,
 )
+
+# Channel labels for the "my answers" replay card.  Keys appear here as
+# literals so the i18n integrity guard sees real references (no dynamic family).
+_CHANNEL_LABEL_KEYS = {
+    "answer": "breakdown_answer",
+    "quiz": "breakdown_quiz",
+    "practice": "breakdown_practice",
+    "flashcard": "breakdown_flashcard",
+    "recall": "breakdown_recall",
+    "harness": "breakdown_harness",
+}
+
+
+def _channel_text(channel: str) -> str:
+    # Look up at render time so a language switch takes effect immediately.
+    key = _CHANNEL_LABEL_KEYS.get(channel)
+    return _i18n_t(key) if key else channel
 
 
 class LearnerView(QWidget):
@@ -88,8 +111,36 @@ class LearnerView(QWidget):
                 "#0284C7",
             )
         )
+
+        # Streak card
+        from expert_anything.core.learner import learning_streak
+        streak = learning_streak(self._main.learner)
+        streak_card = StatCard(
+            "🔥",
+            self._main._t("streak_label"),
+            f"{streak['current']}d",
+            theme.WARNING if streak["current"] > 0 else theme.TEXT_FAINT,
+        )
+        stat_row.addWidget(streak_card)
         stat_row.addStretch()
         layout.addLayout(stat_row)
+
+        # Streak detail bar
+        if streak["current"] > 0 or streak["best"] > 0:
+            streak_bar = QLabel(
+                self._main._t(
+                    "streak_detail",
+                    current=streak["current"],
+                    best=streak["best"],
+                    total_days=streak["total_days"],
+                )
+            )
+            streak_bar.setStyleSheet(
+                f"background-color: {theme.ACCENT_TINT};"
+                f" color: {theme.ACCENT_HOVER}; border-radius: 8px;"
+                " padding: 6px 14px; font-size: 13px; font-weight: 600;"
+            )
+            layout.addWidget(streak_bar)
 
         # Overview narrative
         concepts_all = self._main.learner.get("concepts", {})
@@ -151,20 +202,23 @@ class LearnerView(QWidget):
 
         overview = QFrame()
         overview.setStyleSheet(
-            "QFrame { background-color: white; border: 1px solid #E0E0E0;"
-            "border-radius: 10px; }"
+            f"QFrame {{ background-color: {theme.SURFACE};"
+            f" border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_LG}px; }}"
         )
         ov_lay = QVBoxLayout(overview)
         ov_lay.setContentsMargins(16, 12, 16, 12)
         ov_lay.setSpacing(6)
 
         ov_title = QLabel(self._main._t("overview_title"))
-        ov_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #1F2933;")
+        ov_title.setStyleSheet(
+            f"font-size: 15px; font-weight: 600; color: {theme.TEXT};"
+        )
         ov_lay.addWidget(ov_title)
 
         sum_lbl = QLabel(" ".join(parts))
         sum_lbl.setWordWrap(True)
-        sum_lbl.setStyleSheet("font-size: 15px; color: #37474F;")
+        sum_lbl.setStyleSheet(f"font-size: 14px; color: {theme.TEXT_MUTED};")
         ov_lay.addWidget(sum_lbl)
 
         dist = MasteryDistributionBar(
@@ -188,7 +242,7 @@ class LearnerView(QWidget):
             dot = QLabel("●")
             dot.setStyleSheet(f"color: {color}; font-size: 12px;")
             t = QLabel(text)
-            t.setStyleSheet("color: #757575; font-size: 13px;")
+            t.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 12.5px;")
             leg_row.addWidget(dot)
             leg_row.addWidget(t)
         leg_row.addStretch()
@@ -202,8 +256,9 @@ class LearnerView(QWidget):
         if goal_prog.get("active"):
             g_frame = QFrame()
             g_frame.setStyleSheet(
-                "QFrame { background-color: #FFF3E0; border: 1px solid #FFCC80;"
-                "border-radius: 10px; }"
+                f"QFrame {{ background-color: {theme.SURFACE};"
+                f" border: 1px solid {theme.BORDER};"
+                f" border-radius: {theme.RADIUS_LG}px; }}"
             )
             g_lay = QVBoxLayout(g_frame)
             g_lay.setContentsMargins(16, 12, 16, 12)
@@ -211,7 +266,9 @@ class LearnerView(QWidget):
 
             g_header = QHBoxLayout()
             g_title = QLabel(self._main._t("goal_title"))
-            g_title.setStyleSheet("font-size: 16px; font-weight: bold; color: #E65100;")
+            g_title.setStyleSheet(
+                f"font-size: 15px; font-weight: 600; color: {theme.TEXT};"
+            )
             g_header.addWidget(g_title)
 
             if goal_prog["completed"]:
@@ -247,16 +304,20 @@ class LearnerView(QWidget):
             bar_frame = QFrame()
             bar_frame.setFixedHeight(24)
             bar_frame.setStyleSheet(
-                "QFrame { background-color: #FFE0B2; border-radius: 10px; }"
+                f"QFrame {{ background-color: {theme.BORDER};"
+                f" border-radius: {theme.RADIUS_SM}px; }}"
             )
             bar_lay = QHBoxLayout(bar_frame)
             bar_lay.setContentsMargins(0, 0, 0, 0)
             fill = QFrame()
             fill.setFixedWidth(int(bar_frame.width() * goal_prog["progress"]))
-            fill.setStyleSheet("background-color: #FF9800; border-radius: 10px;")
+            fill.setStyleSheet(
+                f"background-color: {theme.ACCENT};"
+                f" border-radius: {theme.RADIUS_SM}px;"
+            )
             bar_text = QLabel(f"{goal_prog['delta']} / {goal_prog['target']}")
             bar_text.setStyleSheet(
-                "font-size: 13px; font-weight: bold; color: #BF360C;"
+                f"font-size: 12.5px; font-weight: 600; color: {theme.TEXT_MUTED};"
             )
             bar_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
             g_lay.addWidget(bar_frame)
@@ -266,20 +327,44 @@ class LearnerView(QWidget):
             days_label = QLabel(
                 self._main._t("goal_days_left", n=goal_prog["days_left"])
             )
-            days_label.setStyleSheet("font-size: 13px; color: #BF360C;")
+            days_label.setStyleSheet(
+                f"font-size: 12.5px; color: {theme.TEXT_MUTED};"
+            )
             g_lay.addWidget(days_label)
             layout.addWidget(g_frame)
         else:
             # Set goal button
             set_goal_btn = QPushButton(self._main._t("goal_set"))
-            set_goal_btn.setStyleSheet(
-                "QPushButton { background-color: #FFF3E0; color: #E65100;"
-                "border: 1px solid #FFCC80; border-radius: 8px;"
-                "padding: 8px 16px; font-size: 15px; font-weight: bold; }"
-                "QPushButton:hover { background-color: #FFE0B2; }"
-            )
+            set_goal_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            set_goal_btn.setStyleSheet(theme.secondary_button_style())
             set_goal_btn.clicked.connect(lambda: self._on_set_goal())
             layout.addWidget(set_goal_btn)
+
+        # ---- analysis fold (AGENTS.md §49) ------------------------------
+        # The page leads with ONE mainline (progress -> review -> plan); the
+        # analytical cards below are *evidence*, not instructions, so they sit
+        # behind a disclosure instead of competing with the mainline for
+        # attention. Hidden, never removed: every capability stays reachable.
+        self._analysis_toggle = QPushButton()
+        self._analysis_toggle.setCheckable(True)
+        self._analysis_toggle.setChecked(False)
+        self._analysis_toggle.setText("\u25b8 " + self._main._t("coach_more"))
+        self._analysis_toggle.setToolTip(self._main._t("coach_more_hint"))
+        self._analysis_toggle.setStyleSheet(
+            f"QPushButton {{ background-color: transparent;"
+            f" color: {theme.TEXT_MUTED}; border: none; text-align: left;"
+            " padding: 6px 0; font-size: 12.5px; font-weight: 600; }"
+            f"QPushButton:hover {{ color: {theme.ACCENT}; }}"
+        )
+        self._analysis_toggle.toggled.connect(self._on_analysis_toggled)
+        layout.addWidget(self._analysis_toggle)
+
+        self._analysis_body = QWidget()
+        analysis_lay = QVBoxLayout(self._analysis_body)
+        analysis_lay.setContentsMargins(0, 0, 0, 0)
+        analysis_lay.setSpacing(10)
+        self._analysis_body.setVisible(False)
+        layout.addWidget(self._analysis_body)
 
         # Learning efficiency dashboard
         from expert_anything.core.learner import learning_efficiency
@@ -288,8 +373,9 @@ class LearnerView(QWidget):
         if eff["total_sessions"] > 0:
             eff_frame = QFrame()
             eff_frame.setStyleSheet(
-                "QFrame { background-color: #E3F2FD; border: 1px solid #90CAF9;"
-                "border-radius: 10px; }"
+                f"QFrame {{ background-color: {theme.SURFACE};"
+                f" border: 1px solid {theme.BORDER};"
+                f" border-radius: {theme.RADIUS_LG}px; }}"
             )
             eff_lay = QVBoxLayout(eff_frame)
             eff_lay.setContentsMargins(16, 12, 16, 12)
@@ -297,7 +383,7 @@ class LearnerView(QWidget):
 
             eff_title = QLabel(self._main._t("efficiency_title"))
             eff_title.setStyleSheet(
-                "font-size: 16px; font-weight: bold; color: #0D47A1;"
+                f"font-size: 15px; font-weight: 600; color: {theme.ACCENT_HOVER};"
             )
             eff_lay.addWidget(eff_title)
 
@@ -313,7 +399,7 @@ class LearnerView(QWidget):
             }
             trend_color = {
                 "improving": "#2E7D32",
-                "stable": "#1565C0",
+                "stable": theme.ACCENT,
                 "declining": "#C62828",
                 "unknown": "#9E9E9E",
             }
@@ -325,7 +411,11 @@ class LearnerView(QWidget):
             }
 
             metrics = [
-                (self._main._t("eff_sessions"), str(eff["total_sessions"]), "#1565C0"),
+                (
+                    self._main._t("eff_sessions"),
+                    str(eff["total_sessions"]),
+                    theme.ACCENT,
+                ),
                 (
                     self._main._t("eff_concepts"),
                     str(eff["total_concepts_studied"]),
@@ -362,7 +452,7 @@ class LearnerView(QWidget):
 
             metrics_row.addStretch()
             eff_lay.addLayout(metrics_row)
-            layout.addWidget(eff_frame)
+            analysis_lay.addWidget(eff_frame)
 
         # Milestones / achievements
         milestones = self._compute_milestones(
@@ -408,7 +498,7 @@ class LearnerView(QWidget):
 
             ms_row.addStretch()
             ms_lay.addLayout(ms_row)
-            layout.addWidget(ms_frame)
+            analysis_lay.addWidget(ms_frame)
 
         # Style effectiveness — which teaching style works best for this learner
         from expert_anything.core.learner import style_effectiveness
@@ -499,7 +589,7 @@ class LearnerView(QWidget):
                 insight.setWordWrap(True)
                 se_lay.addWidget(insight)
 
-            layout.addWidget(se_frame)
+            analysis_lay.addWidget(se_frame)
 
         # Review consolidation gain — did vary=1 reviews actually help?
         # Visible Learning-Gain anchor (AGENTS.md §5): the review queue is
@@ -555,7 +645,7 @@ class LearnerView(QWidget):
                 nb.setWordWrap(True)
                 rg_lay.addWidget(nb)
 
-            layout.addWidget(rg_frame)
+            analysis_lay.addWidget(rg_frame)
         else:
             # No review records yet: show an educational hint instead of
             # hiding the section (the metric must be discoverable).
@@ -654,7 +744,7 @@ class LearnerView(QWidget):
                 row.addWidget(go_btn)
                 pf_lay.addLayout(row)
 
-            layout.addWidget(pf_frame)
+            analysis_lay.addWidget(pf_frame)
 
         # Knowledge blind spots — high-risk unlearned prerequisites
         asset = self._main.get_asset()
@@ -665,8 +755,9 @@ class LearnerView(QWidget):
             if spots:
                 bs_frame = QFrame()
                 bs_frame.setStyleSheet(
-                    "QFrame { background-color: #FFEBEE; border: 1px solid #EF9A9A;"
-                    "border-radius: 10px; }"
+                    f"QFrame {{ background-color: {theme.SURFACE};"
+                    f" border: 1px solid {theme.BORDER};"
+                    f" border-radius: {theme.RADIUS_LG}px; }}"
                 )
                 bs_lay = QVBoxLayout(bs_frame)
                 bs_lay.setContentsMargins(16, 12, 16, 12)
@@ -674,12 +765,14 @@ class LearnerView(QWidget):
 
                 bs_title = QLabel(self._main._t("blind_spot_title"))
                 bs_title.setStyleSheet(
-                    "font-size: 16px; font-weight: bold; color: #C62828;"
+                    f"font-size: 15px; font-weight: 600; color: {theme.DANGER};"
                 )
                 bs_lay.addWidget(bs_title)
 
                 bs_hint = QLabel(self._main._t("blind_spot_hint"))
-                bs_hint.setStyleSheet("font-size: 13px; color: #B71C1C;")
+                bs_hint.setStyleSheet(
+                    f"font-size: 12.5px; color: {theme.TEXT_MUTED};"
+                )
                 bs_hint.setWordWrap(True)
                 bs_lay.addWidget(bs_hint)
 
@@ -689,24 +782,25 @@ class LearnerView(QWidget):
                     # Risk indicator
                     risk = sp["risk"]
                     if risk >= 3:
-                        risk_color = "#C62828"
-                        risk_bg = "#FFCDD2"
+                        risk_color = theme.DANGER
+                        risk_bg = theme.DANGER_TINT
                     elif risk >= 1.5:
-                        risk_color = "#E65100"
-                        risk_bg = "#FFE0B2"
+                        risk_color = theme.WARNING
+                        risk_bg = theme.WARNING_TINT
                     else:
-                        risk_color = "#F57F17"
-                        risk_bg = "#FFF9C4"
-                    risk_lbl = QLabel(f"⚠ {risk:.1f}")
+                        risk_color = theme.WARNING
+                        risk_bg = theme.WARNING_TINT
+                    risk_lbl = QLabel(f"{risk:.1f}")
                     risk_lbl.setStyleSheet(
                         f"background-color: {risk_bg}; color: {risk_color};"
-                        "border-radius: 8px; padding: 2px 8px; font-size: 13px; font-weight: bold;"
+                        " border-radius: 6px; padding: 2px 8px;"
+                        " font-size: 11.5px; font-weight: 600;"
                     )
                     row.addWidget(risk_lbl)
 
                     name = QLabel(sp["name"])
                     name.setStyleSheet(
-                        "font-size: 14px; color: #37474F; font-weight: 500;"
+                        f"font-size: 13px; color: {theme.TEXT}; font-weight: 500;"
                     )
                     row.addWidget(name)
 
@@ -714,15 +808,14 @@ class LearnerView(QWidget):
                     if len(sp["dependents"]) > 3:
                         deps_text += "..."
                     deps = QLabel(deps_text)
-                    deps.setStyleSheet("font-size: 12px; color: #78909C;")
+                    deps.setStyleSheet(
+                        f"font-size: 11.5px; color: {theme.TEXT_FAINT};"
+                    )
                     row.addWidget(deps, 1)
 
                     fix_btn = QPushButton(self._main._t("blind_spot_fix"))
-                    fix_btn.setStyleSheet(
-                        "QPushButton { background-color: #C62828; color: white; border: none;"
-                        "border-radius: 6px; padding: 3px 10px; font-size: 12px; }"
-                        "QPushButton:hover { background-color: #B71C1C; }"
-                    )
+                    fix_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    fix_btn.setStyleSheet(theme.secondary_button_style())
                     fix_btn.clicked.connect(
                         lambda checked, n=sp["name"]: self.teach_requested.emit(n)
                     )
@@ -750,8 +843,9 @@ class LearnerView(QWidget):
             if plan:
                 sp_frame = QFrame()
                 sp_frame.setStyleSheet(
-                    "QFrame { background-color: #EDE7F6; border: 1px solid #B39DDB;"
-                    "border-radius: 10px; }"
+                    f"QFrame {{ background-color: {theme.SURFACE};"
+                    f" border: 1px solid {theme.BORDER};"
+                    f" border-radius: {theme.RADIUS_LG}px; }}"
                 )
                 sp_lay = QVBoxLayout(sp_frame)
                 sp_lay.setContentsMargins(16, 12, 16, 12)
@@ -760,7 +854,7 @@ class LearnerView(QWidget):
                 sp_header = QHBoxLayout()
                 sp_title = QLabel(self._main._t("plan_title"))
                 sp_title.setStyleSheet(
-                    "font-size: 16px; font-weight: bold; color: #4527A0;"
+                    f"font-size: 15px; font-weight: 600; color: {theme.TEXT};"
                 )
                 sp_header.addWidget(sp_title)
                 total_min = sum(p["est_minutes"] for p in plan)
@@ -768,17 +862,18 @@ class LearnerView(QWidget):
                     self._main._t("plan_total_time", n=total_min, count=len(plan))
                 )
                 sp_time.setStyleSheet(
-                    "background-color: #7B1FA2; color: white; border-radius: 10px;"
-                    "padding: 2px 10px; font-size: 13px; font-weight: bold;"
+                    f"background-color: {theme.ACCENT_TINT};"
+                    f" color: {theme.ACCENT_HOVER}; border-radius: 6px;"
+                    " padding: 2px 10px; font-size: 11.5px; font-weight: 600;"
                 )
                 sp_header.addWidget(sp_time)
                 sp_header.addStretch()
                 sp_lay.addLayout(sp_header)
 
                 type_styles = {
-                    "review": ("#E3F2FD", "#1565C0", "🔄"),
-                    "new": ("#E8F5E9", "#2E7D32", "📚"),
-                    "blind_spot": ("#FFEBEE", "#C62828", "⚠️"),
+                    "review": (theme.ACCENT_TINT, theme.ACCENT_HOVER, "🔄"),
+                    "new": (theme.SUCCESS_TINT, theme.SUCCESS, "📚"),
+                    "blind_spot": (theme.DANGER_TINT, theme.DANGER, "⚠️"),
                 }
                 for i, p in enumerate(plan, 1):
                     row = QHBoxLayout()
@@ -800,11 +895,8 @@ class LearnerView(QWidget):
                     )
                     row.addWidget(est)
                     go_btn = QPushButton(self._main._t("plan_start"))
-                    go_btn.setStyleSheet(
-                        "QPushButton { background-color: #4527A0; color: white; border: none;"
-                        "border-radius: 6px; padding: 3px 10px; font-size: 12px; }"
-                        "QPushButton:hover { background-color: #311B92; }"
-                    )
+                    go_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    go_btn.setStyleSheet(theme.primary_button_style(compact=True))
                     go_btn.clicked.connect(
                         lambda checked, n=p["name"]: self.teach_requested.emit(n)
                     )
@@ -815,14 +907,32 @@ class LearnerView(QWidget):
 
         # Tabs
         tabs = QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #E0E0E0; border-radius: 4px; }
-            QTabBar::tab { background: white; padding: 8px 16px; margin-right: 2px; }
-            QTabBar::tab:selected { background: #E8F5E9; color: #2E7D32; }
-        """)
+        tabs.setStyleSheet(
+            f"QTabWidget::pane {{ border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_MD}px; background: {theme.SURFACE}; }}"
+            "QTabBar::tab { background: transparent; color: "
+            f"{theme.TEXT_MUTED}; padding: 7px 14px; margin-right: 2px;"
+            " border: none; }"
+            f"QTabBar::tab:selected {{ color: {theme.TEXT}; font-weight: 600; }}"
+            f"QTabBar::tab:hover {{ color: {theme.TEXT}; }}"
+        )
         tabs.addTab(self._build_concepts_tab(), self._main._t("tab_concepts"))
+        tabs.addTab(self._build_timeline_tab(), self._main._t("timeline_title"))
         tabs.addTab(self._build_history_tab(), self._main._t("tab_history"))
         layout.addWidget(tabs)
+
+    def _on_analysis_toggled(self, checked: bool) -> None:
+        """Reveal or hide the analytical cards; the mainline stays on top.
+
+        The arrow is part of the label so the affordance reads as a
+        disclosure rather than a navigation action (design intent §49).
+        """
+        try:
+            self._analysis_body.setVisible(bool(checked))
+            arrow = "\u25be" if checked else "\u25b8"
+            self._analysis_toggle.setText(arrow + " " + self._main._t("coach_more"))
+        except Exception:
+            pass
 
     def _on_set_goal(self):
         """Open a dialog to set a study goal."""
@@ -922,8 +1032,8 @@ class LearnerView(QWidget):
                 {
                     "icon": "⭐",
                     "label": self._main._t("ms_half_avg"),
-                    "color": "#1565C0",
-                    "bg": "#E3F2FD",
+                    "color": theme.ACCENT_HOVER,
+                    "bg": theme.ACCENT_TINT,
                 }
             )
 
@@ -933,8 +1043,8 @@ class LearnerView(QWidget):
                 {
                     "icon": "🎯",
                     "label": self._main._t("ms_high_avg"),
-                    "color": "#0D47A1",
-                    "bg": "#BBDEFB",
+                    "color": theme.ACCENT_HOVER,
+                    "bg": theme.ACCENT_TINT_STRONG,
                 }
             )
 
@@ -1006,27 +1116,40 @@ class LearnerView(QWidget):
         )
 
     def _view_header(self, title, subtitle=""):
-        header = QFrame()
-        header.setStyleSheet(
-            "background-color: white; border-bottom: 2px solid #1565C0;"
-        )
-        lay = QHBoxLayout(header)
-        lay.setContentsMargins(20, 7, 20, 7)
-        lay.setSpacing(10)
-        t = QLabel(str(title))
-        t.setStyleSheet("font-size: 18px; font-weight: bold; color: #1F2933;")
-        lay.addWidget(t)
-        if subtitle:
-            s = QLabel(str(subtitle))
-            s.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
-            lay.addWidget(s)
+        header = PageHeader(title, subtitle)
         domain_line = self._domain_profile_line()
         if domain_line:
             d = QLabel(domain_line)
-            d.setStyleSheet("color: #1565C0; font-size: 13.5px; font-weight: bold;")
-            lay.addWidget(d)
-        lay.addStretch()
+            d.setStyleSheet(
+                f"color: {theme.ACCENT}; font-size: 12.5px; font-weight: 600;"
+            )
+            header.add_widget(d)
         return header
+
+    def _build_timeline_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 16, 20, 20)
+        layout.setSpacing(8)
+
+        hint = QLabel(self._main._t("timeline_hint"))
+        hint.setStyleSheet("font-size: 13px; color: #9E9E9E;")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        from expert_anything.ui.widgets.timeline import LearningTimeline
+
+        self._timeline = LearningTimeline()
+        self._timeline.setStyleSheet(
+            "QWidget { background-color: white; border: 1px solid #E0E0E0;"
+            "border-radius: 8px; }"
+        )
+        history = self._main.learner.get("history", [])
+        self._timeline.set_data(history)
+        self._timeline.setMinimumHeight(300)
+        layout.addWidget(self._timeline, 1)
+        layout.addStretch()
+        return widget
 
     def _build_concepts_tab(self):
         widget = QWidget()
@@ -1079,6 +1202,18 @@ class LearnerView(QWidget):
                 lambda: self.review_all_requested.emit([d["name"] for d in due])
             )
             layout.addWidget(review_all_btn)
+
+            # Flashcard review — fast self-rate mode
+            flash_btn = QPushButton(self._main._t("flashcard_btn"))
+            flash_btn.setStyleSheet(
+                "QPushButton { background-color: #6A1B9A; color: white;"
+                "border: none; border-radius: 8px; padding: 8px 16px;"
+                "font-size: 14px; font-weight: bold; }"
+                "QPushButton:hover { background-color: #4A148C; }"
+            )
+            flash_btn.setToolTip(self._main._t("flashcard_btn_tip"))
+            flash_btn.clicked.connect(lambda: self._open_flashcards(due))
+            layout.addWidget(flash_btn)
 
             for d in due:
                 tags = [self._main._t("due_days", d=d["days_since"])]
@@ -1166,6 +1301,134 @@ class LearnerView(QWidget):
         layout.addStretch()
         return widget
 
+    def _build_weak_entry(self, we: dict) -> QWidget:
+        """One error-book row: concept, score, feedback, own answer, retry."""
+        host = QWidget()
+        host.setObjectName("error_book_entry")
+        entry = QVBoxLayout(host)
+        entry.setContentsMargins(0, 0, 0, 0)
+        entry.setSpacing(2)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        w_concept = QLabel(we.get("concept", "?"))
+        w_concept.setStyleSheet(
+            "font-size: 14px; color: #37474F; font-weight: 500;"
+        )
+        row.addWidget(w_concept)
+        w_score = QLabel(f"{float(we.get('score', 0)):.0%}")
+        w_score.setStyleSheet(
+            "background-color: #F44336; color: white; border-radius: 8px;"
+            "padding: 1px 8px; font-size: 12px; font-weight: bold;"
+        )
+        row.addWidget(w_score)
+        w_fb = QLabel(str(we.get("feedback", ""))[:60])
+        w_fb.setStyleSheet("font-size: 13px; color: #546E7A;")
+        w_fb.setWordWrap(True)
+        row.addWidget(w_fb, 1)
+        # Retry button
+        w_retry = QPushButton(self._main._t("error_book_retry"))
+        w_retry.setCursor(Qt.CursorShape.PointingHandCursor)
+        w_retry.setStyleSheet(theme.primary_button_style(compact=True))
+        w_retry.clicked.connect(
+            lambda checked, n=we.get("concept", ""): self.teach_requested.emit(n)
+        )
+        row.addWidget(w_retry)
+        entry.addLayout(row)
+
+        # "What I actually wrote" — meta-learning needs the learner's
+        # own words, not just the score and the system's comment.
+        answer = str(we.get("answer", "") or "").strip()
+        if answer:
+            shown = answer[:90] + ("…" if len(answer) > 90 else "")
+            w_ans = QLabel(self._main._t("error_book_your_answer", s=shown))
+            w_ans.setObjectName("error_book_answer_lbl")
+            w_ans.setWordWrap(True)
+            w_ans.setStyleSheet(
+                "font-size: 12.5px; color: #6D4C41;"
+                "background-color: #FFF8E1; border-radius: 4px;"
+                "padding: 2px 6px;"
+            )
+            entry.addWidget(w_ans)
+        return host
+
+    def _build_my_answers_card(self) -> QWidget | None:
+        """Aggregated replay of the learner's own outputs (history projection).
+
+        Answers, practice submissions and quiz attempts all carry an ``answer``
+        field in the trace.  The error book only keeps *failures* per concept;
+        this card keeps the learner's own words visible even when they passed.
+        """
+        answers = [
+            h
+            for h in self._main.learner.get("history", [])
+            if str(h.get("answer", "") or "").strip()
+        ][:6]
+        if not answers:
+            return None
+        frame = QFrame()
+        frame.setObjectName("my_answers_card")
+        frame.setStyleSheet(
+            "QFrame { background-color: #E3F2FD; border: 1px solid #90CAF9;"
+            "border-radius: 8px; }"
+        )
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(12, 10, 12, 10)
+        lay.setSpacing(6)
+
+        head = QHBoxLayout()
+        title = QLabel(self._main._t("my_answers_title"))
+        title.setStyleSheet(
+            f"font-size: 15px; font-weight: 600; color: {theme.TEXT};"
+        )
+        head.addWidget(title)
+        head.addStretch()
+        lay.addLayout(head)
+        hint = QLabel(self._main._t("my_answers_hint"))
+        hint.setWordWrap(True)
+        hint.setStyleSheet(f"font-size: 12.5px; color: {theme.TEXT_MUTED};")
+        lay.addWidget(hint)
+
+        for h in answers:
+            row = QHBoxLayout()
+            row.setSpacing(8)
+            concept = QLabel(str(h.get("concept", "?")))
+            concept.setStyleSheet(
+                "font-size: 14px; color: #37474F; font-weight: 500;"
+            )
+            row.addWidget(concept)
+            channel = str((h.get("meta") or {}).get("channel") or "answer")
+            chip = QLabel(_channel_text(channel))
+            chip.setStyleSheet(
+                f"background-color: {theme.ACCENT_TINT};"
+                f" color: {theme.ACCENT_HOVER}; border-radius: 6px;"
+                " padding: 1px 8px; font-size: 11.5px; font-weight: 600;"
+            )
+            row.addWidget(chip)
+            score_lbl = QLabel(f"{float(h.get('score', 0)):.0%}")
+            score_lbl.setStyleSheet("font-size: 12.5px; color: #546E7A;")
+            row.addWidget(score_lbl)
+            answer = str(h.get("answer", "") or "").strip()
+            shown = answer[:90] + ("…" if len(answer) > 90 else "")
+            a_lbl = QLabel(shown)
+            a_lbl.setObjectName("my_answers_lbl")
+            a_lbl.setWordWrap(True)
+            a_lbl.setStyleSheet(
+                "font-size: 12.5px; color: #37474F; background-color: white;"
+                "border-radius: 4px; padding: 2px 6px;"
+            )
+            row.addWidget(a_lbl, 1)
+            go = QPushButton(self._main._t("my_answers_open"))
+            go.setCursor(Qt.CursorShape.PointingHandCursor)
+            go.setStyleSheet(theme.primary_button_style(compact=True))
+            go.clicked.connect(
+                lambda checked, n=str(h.get("concept", "")): (
+                    self.teach_requested.emit(n)
+                )
+            )
+            row.addWidget(go)
+            lay.addLayout(row)
+        return frame
+
     def _build_history_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -1199,8 +1462,9 @@ class LearnerView(QWidget):
         if weak_entries:
             eb_frame = QFrame()
             eb_frame.setStyleSheet(
-                "QFrame { background-color: #FFF8E1; border: 1px solid #FFD54F;"
-                "border-radius: 8px; }"
+                f"QFrame {{ background-color: {theme.SURFACE};"
+                f" border: 1px solid {theme.BORDER};"
+                f" border-radius: {theme.RADIUS_LG}px; }}"
             )
             eb_lay = QVBoxLayout(eb_frame)
             eb_lay.setContentsMargins(12, 10, 12, 10)
@@ -1209,59 +1473,76 @@ class LearnerView(QWidget):
             eb_header = QHBoxLayout()
             eb_title = QLabel(self._main._t("error_book_title"))
             eb_title.setStyleSheet(
-                "font-size: 15px; font-weight: bold; color: #E65100;"
+                f"font-size: 15px; font-weight: 600; color: {theme.WARNING};"
             )
             eb_header.addWidget(eb_title)
             eb_count = QLabel(self._main._t("error_book_count", n=len(weak_entries)))
             eb_count.setStyleSheet(
-                "background-color: #FF6F00; color: white; border-radius: 10px;"
-                "padding: 2px 10px; font-size: 13px; font-weight: bold;"
+                f"background-color: {theme.WARNING}; color: white;"
+                " border-radius: 10px; padding: 2px 10px;"
+                " font-size: 12px; font-weight: 600;"
             )
             eb_header.addWidget(eb_count)
             eb_header.addStretch()
             eb_lay.addLayout(eb_header)
 
-            for we in weak_entries[:5]:
-                row = QHBoxLayout()
-                row.setSpacing(8)
-                w_concept = QLabel(we.get("concept", "?"))
-                w_concept.setStyleSheet(
-                    "font-size: 14px; color: #37474F; font-weight: 500;"
+            # Entries: first 5 by default; "show all N" expands the rest into
+            # a scrollable area instead of silently truncating the error book.
+            entries_host = QWidget()
+            entries_box = QVBoxLayout(entries_host)
+            entries_box.setContentsMargins(0, 0, 0, 0)
+            entries_box.setSpacing(6)
+            entry_widgets = []
+            for idx, we in enumerate(weak_entries):
+                entry_widget = self._build_weak_entry(we)
+                entry_widget.setVisible(idx < 5)
+                entries_box.addWidget(entry_widget)
+                entry_widgets.append(entry_widget)
+
+            entries_scroll = QScrollArea()
+            entries_scroll.setObjectName("error_book_scroll")
+            entries_scroll.setWidgetResizable(True)
+            entries_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            entries_scroll.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+            entries_scroll.setWidget(entries_host)
+            eb_lay.addWidget(entries_scroll)
+
+            if len(weak_entries) > 5:
+                show_all = QPushButton(
+                    self._main._t("error_book_show_all", n=len(weak_entries))
                 )
-                row.addWidget(w_concept)
-                w_score = QLabel(f"{float(we.get('score', 0)):.0%}")
-                w_score.setStyleSheet(
-                    "background-color: #F44336; color: white; border-radius: 8px;"
-                    "padding: 1px 8px; font-size: 12px; font-weight: bold;"
-                )
-                row.addWidget(w_score)
-                w_fb = QLabel(str(we.get("feedback", ""))[:60])
-                w_fb.setStyleSheet("font-size: 13px; color: #546E7A;")
-                w_fb.setWordWrap(True)
-                row.addWidget(w_fb, 1)
-                # Retry button
-                w_retry = QPushButton(self._main._t("error_book_retry"))
-                w_retry.setStyleSheet(
-                    "QPushButton { background-color: #E65100; color: white; border: none;"
-                    "border-radius: 6px; padding: 3px 10px; font-size: 12px; }"
-                    "QPushButton:hover { background-color: #BF360C; }"
-                )
-                w_retry.clicked.connect(
-                    lambda checked, n=we.get("concept", ""): self.teach_requested.emit(
-                        n
+                show_all.setObjectName("error_book_show_all_btn")
+                show_all.setCursor(Qt.CursorShape.PointingHandCursor)
+                show_all.setStyleSheet(theme.secondary_button_style())
+                toggle_state = {"open": False}
+
+                def _toggle_entries(checked=False, _state=toggle_state):
+                    _state["open"] = not _state["open"]
+                    for i, w in enumerate(entry_widgets):
+                        w.setVisible(_state["open"] or i < 5)
+                    # Expanded list gets a bounded window + scrollbar; collapsed
+                    # shows the five entries at natural height.
+                    entries_scroll.setMaximumHeight(
+                        360 if _state["open"] else 16777215
                     )
-                )
-                row.addWidget(w_retry)
-                eb_lay.addLayout(row)
+                    show_all.setText(
+                        self._main._t("error_book_collapse")
+                        if _state["open"]
+                        else self._main._t(
+                            "error_book_show_all", n=len(weak_entries)
+                        )
+                    )
+
+                show_all.clicked.connect(_toggle_entries)
+                eb_lay.addWidget(show_all, 0, Qt.AlignmentFlag.AlignLeft)
 
             eb_lay2 = QHBoxLayout()
             eb_lay2.addStretch()
             review_all_weak = QPushButton(self._main._t("error_book_review_all"))
-            review_all_weak.setStyleSheet(
-                "QPushButton { background-color: #E65100; color: white; border: none;"
-                "border-radius: 6px; padding: 6px 14px; font-size: 14px; font-weight: bold; }"
-                "QPushButton:hover { background-color: #BF360C; }"
-            )
+            review_all_weak.setCursor(Qt.CursorShape.PointingHandCursor)
+            review_all_weak.setStyleSheet(theme.primary_button_style(compact=True))
             review_all_weak.clicked.connect(
                 lambda: self.review_all_requested.emit(
                     [we["concept"] for we in weak_entries]
@@ -1271,6 +1552,11 @@ class LearnerView(QWidget):
             eb_lay.addLayout(eb_lay2)
 
             layout.addWidget(eb_frame)
+
+        # My answers — replay what I wrote, not just what I got wrong.
+        my_answers = self._build_my_answers_card()
+        if my_answers is not None:
+            layout.addWidget(my_answers)
 
         table = QTableWidget()
         table.setColumnCount(4)
@@ -1336,15 +1622,54 @@ class LearnerView(QWidget):
         layout.addWidget(export_btn)
 
         export_html_btn = QPushButton(self._main._t("export_html"))
-        export_html_btn.setStyleSheet("""
-            QPushButton { background-color: #1565C0; color: white; border: none;
-                          border-radius: 6px; padding: 8px 16px; font-size: 15px; }
-            QPushButton:hover { background-color: #0D47A1; }
-        """)
+        export_html_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        export_html_btn.setStyleSheet(theme.primary_button_style())
         export_html_btn.clicked.connect(lambda: self.export_html.emit())
         layout.addWidget(export_html_btn)
         layout.addStretch()
         return widget
+
+    def _open_flashcards(self, due_items: list[dict]):
+        """Open the flashcard review dialog for due concepts.
+
+        Self-ratings are *review* evidence: they carry
+        ``meta={"channel": "flashcard", "review": True}`` so the learning trace
+        distinguishes consolidating something already learnt from first-time
+        teaching (AGENTS.md 6).  Without the review flag a forgotten card
+        masquerades as a failed teaching strategy — wrongly driving style
+        rotation and harness evolution — and the review-gain analytics never
+        see the attempt at all.
+        """
+        from expert_anything.ui.widgets.flashcard import FlashCardDialog
+
+        asset = self._main.get_asset()
+        dlg = FlashCardDialog(due_items, asset, self._main.learner, parent=self)
+        dlg.exec()
+        if not dlg._scores:
+            return
+        for concept_name, score in dlg._scores:
+            record_evaluation(
+                self._main.learner,
+                concept_name,
+                self._main.current_asset_id or "review",
+                score,
+                "",
+                _t_flashcard_feedback(score),
+                meta={"channel": "flashcard", "review": True},
+            )
+        self._main.save_learner_state()
+        self.refresh()
+
+
+def _t_flashcard_feedback(score: float) -> str:
+    from expert_anything.core.i18n import t
+
+    if score >= 0.9:
+        return t("flashcard_knew")
+    elif score >= 0.5:
+        return t("flashcard_half")
+    else:
+        return t("flashcard_forgot")
 
 
 from PySide6.QtCore import Signal

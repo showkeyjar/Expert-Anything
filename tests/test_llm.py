@@ -4,6 +4,7 @@ These require a configured LLM key (EXPERTANYTHING_LLM_API_KEY) and are
 skipped otherwise. They run against small inline texts (fast, cheap).
 """
 import sys
+import os
 import json
 import unittest
 from pathlib import Path
@@ -163,6 +164,102 @@ class TestLLMDomainPrompts(unittest.TestCase):
         self.assertIn(tm.status, ("done", "failed"))
         for note in tm.concept_notes:
             self.assertTrue(note.concept_id)
+
+
+# --------------------------------------------------------------------------- #
+# LLM response disk cache (no real network / no LLM key required)
+# --------------------------------------------------------------------------- #
+import shutil
+import tempfile
+import urllib.request as _urllib
+
+from expert_anything.core.llm import (
+    LLMClient,
+    Message,
+    configure_llm_cache,
+)
+
+
+class _FakeResponse:
+    """Minimal stand-in for urllib's context-managed HTTP response."""
+
+    def __init__(self, raw: bytes):
+        self._raw = raw
+
+    def read(self):
+        return self._raw
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestLLMCache(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        configure_llm_cache(self.tmp, enabled=True)
+        self.calls = []
+
+    def tearDown(self):
+        configure_llm_cache(None, enabled=True)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _client(self) -> LLMClient:
+        return LLMClient(api_key="test-key", base_url="http://example.invalid", model="m")
+
+    def _patch(self, payload: bytes):
+        orig = _urllib.urlopen
+
+        def fake(req, timeout=None):
+            self.calls.append(req)
+            return _FakeResponse(payload)
+
+        _urllib.urlopen = fake
+        return orig
+
+    def test_identical_call_hits_cache_not_network(self):
+        payload = json.dumps({"choices": [{"message": {"content": "cached answer"}}]}).encode()
+        orig = self._patch(payload)
+        try:
+            c = self._client()
+            msgs = [Message("user", "同一个问题")]
+            first = c.chat(msgs)
+            second = c.chat(msgs)
+        finally:
+            _urllib.urlopen = orig
+        self.assertEqual(first, "cached answer")
+        self.assertEqual(second, "cached answer")
+        self.assertEqual(len(self.calls), 1, "第二次相同调用应命中缓存，不再发起网络请求")
+
+    def test_different_temperature_misses_cache(self):
+        payload = json.dumps({"choices": [{"message": {"content": "x"}}]}).encode()
+        orig = self._patch(payload)
+        try:
+            c = self._client()
+            msgs = [Message("user", "q")]
+            c.chat(msgs, temperature=0.0)
+            c.chat(msgs, temperature=0.7)
+        finally:
+            _urllib.urlopen = orig
+        self.assertEqual(len(self.calls), 2, "不同 temperature 应视为不同请求，均走网络")
+
+    def test_cache_disabled_via_env(self):
+        os.environ["EXPERTANYTHING_LLM_CACHE"] = "0"
+        try:
+            payload = json.dumps({"choices": [{"message": {"content": "y"}}]}).encode()
+            orig = self._patch(payload)
+            try:
+                c = self._client()
+                msgs = [Message("user", "q")]
+                c.chat(msgs)
+                c.chat(msgs)
+            finally:
+                _urllib.urlopen = orig
+            self.assertEqual(len(self.calls), 2, "禁用缓存后每次都走网络")
+        finally:
+            os.environ.pop("EXPERTANYTHING_LLM_CACHE", None)
 
 
 if __name__ == "__main__":

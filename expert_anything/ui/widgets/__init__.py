@@ -31,6 +31,10 @@ from expert_anything.ui.widgets.trend_chart import (
 )
 from expert_anything.ui.widgets.map_widgets import MapLegend
 from expert_anything.ui.widgets.node_detail import NodeDetailCard
+from expert_anything.ui.widgets.guide_bar import GuideBar
+from expert_anything.ui.widgets.group_quiz import GroupQuizDialog
+from expert_anything.ui.widgets.glossary import GlossaryDialog
+from expert_anything.ui.widgets.feynman import FeynmanDialog
 from expert_anything.ui.widgets.shared import KnowledgeCard, StatCard
 
 # -- classes still in pyside_widgets (not yet extracted) --------------------
@@ -56,6 +60,10 @@ __all__ = [
     "MasteryDistributionBar",
     "MapLegend",
     "NodeDetailCard",
+    "GuideBar",
+    "GroupQuizDialog",
+    "GlossaryDialog",
+    "FeynmanDialog",
     "KnowledgeCard",
     "StatCard",
     # classes still in pyside_widgets

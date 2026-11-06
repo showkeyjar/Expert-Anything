@@ -139,11 +139,16 @@ def classify_relation(label: str, rel_type: str = "") -> str:
     text = (label or "").strip().lower()
     if not text:
         return "related"
+    # A label may contain patterns of several semantics ("属于…的一部分" also
+    # contains "属于"). Match the most specific (longest) pattern first so a
+    # longer phrase cannot be shadowed by a shorter one from another class.
+    best: tuple[str, int] | None = None
     for sem, patterns in _REL_PATTERNS.items():
         for pat in patterns:
-            if pat.lower() in text:
-                return sem
-    return "related"
+            candidate = pat.lower()
+            if candidate in text and (best is None or len(candidate) > best[1]):
+                best = (sem, len(candidate))
+    return best[0] if best else "related"
 
 
 def rel_semantic_color(label: str, rel_type: str = "") -> str:
@@ -495,7 +500,7 @@ def _edge_shapes(e: dict, s: dict, t: dict, lit: bool) -> str:
             f'width="{len(e["label"]) * 12 + 8:.0f}" height="17" rx="8" '
             f'fill="{label_bg}" stroke="{label_border}" stroke-width="1" opacity="0.96"/>'
             f'<text x="{mx:.0f}" y="{my:.0f}" text-anchor="middle" '
-            f'font-size="11" font-weight="600" fill="{label_text}">'
+            f'font-size="12" font-weight="600" fill="{label_text}">'
             + _esc(e["label"]) + "</text>")
     return "".join(parts)
 
@@ -515,7 +520,7 @@ def _node_shapes(n: dict) -> str:
         f'fill="url(#g_{kind})" stroke="{stroke}" stroke-width="1.6" '
         'filter="url(#soft)"/>',
         f'<circle cx="{x + 12}" cy="{y + 12}" r="8" fill="{stroke}" opacity="0.92"/>'
-        f'<text x="{x + 12}" y="{y + 15.5}" text-anchor="middle" font-size="9" '
+        f'<text x="{x + 12}" y="{y + 15.5}" text-anchor="middle" font-size="10" '
         'fill="#FFFFFF">' + _esc(KIND_BADGE.get(kind, "▪")) + "</text>",
     ]
     lines = _wrap_label(n["label"])
@@ -530,6 +535,33 @@ def _node_shapes(n: dict) -> str:
     return "".join(parts)
 
 
+def _ensure_geometry(spec: dict) -> dict:
+    """Guarantee every node carries x/y/w/h (and the canvas its size).
+
+    Scenes are normally laid out by ``check_scene``/``fallback_scene``, but the
+    renderer must never crash on a hand-built, cached or externally produced
+    spec: missing geometry is re-derived deterministically here instead of
+    raising ``KeyError: 'x'`` (which used to take down the whole teach view).
+    """
+    nodes = spec.get("nodes") or []
+    missing = any(
+        key not in n for n in nodes for key in ("x", "y", "w", "h")
+    )
+    if missing or "width" not in spec or "height" not in spec:
+        for i, n in enumerate(nodes):
+            n.setdefault("id", f"n{i}")
+            n.setdefault("label", "")
+            n.setdefault("kind", "box")
+        ids = {n.get("id") for n in nodes}
+        spec["edges"] = [
+            e for e in (spec.get("edges") or [])
+            if isinstance(e, dict)
+            and e.get("from") in ids and e.get("to") in ids
+        ]
+        _layout(spec)
+    return spec
+
+
 def render_svg(spec: dict, step: int | None = None) -> str:
     """Render the scene as SVG.
 
@@ -537,6 +569,7 @@ def render_svg(spec: dict, step: int | None = None) -> str:
     faded (opacity 0.12) and the step's active node gets a highlight halo.
     ``None`` renders the full static diagram.
     """
+    spec = _ensure_geometry(spec)
     w, h = spec.get("width", CANVAS_W), spec.get("height", CANVAS_H_MIN)
     visible: set[str] | None = None
     active = ""
@@ -588,6 +621,7 @@ def render_stage_svg(spec: dict) -> str:
     instead of swapping pre-rendered frames. Browsers only; the desktop
     step player keeps using render_step_svgs() frames (QtSvg).
     """
+    spec = _ensure_geometry(spec)
     w, h = spec.get("width", CANVAS_W), spec.get("height", CANVAS_H_MIN)
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" '
@@ -1234,16 +1268,23 @@ def fallback_scene(asset, concept) -> dict:
             "answer": answer,
         }
 
+    # check_scene admits at most MAX_STEPS frames. Layers 1-3 can push the
+    # deterministic timeline past that limit; without trimming we fell through
+    # to a coordinate-less placeholder spec and the renderer crashed with
+    # KeyError: 'x'. Keep the closing step, drop the middle overflow.
+    if len(steps) > MAX_STEPS:
+        steps = steps[:MAX_STEPS - 1] + [steps[-1]]
+
     verdict, spec = check_scene({
         "title": f"「{concept.name}」的知识结构",
         "nodes": nodes, "edges": edges, "steps": steps, "game": game,
     })
     if not verdict or spec is None:
         spec = {"title": concept.name, "nodes": nodes[:3], "edges": [],
-                "steps": steps[:2], "game": None,
-                "width": CANVAS_W, "height": CANVAS_H_MIN}
-        for n in spec["nodes"]:
-            n.setdefault("w", 160); n.setdefault("h", 52)
+                "steps": steps[:2], "game": None}
+        # Geometry is presentation and must always exist: a node without
+        # x/y/w/h used to reach the renderer and take the whole lesson down.
+        _layout(spec)
     return spec
 
 
@@ -1255,6 +1296,8 @@ def fallback_scene(asset, concept) -> dict:
 DOMAIN_DECODERS: dict[str, str] = {
     "electricity_trading": "expert_anything.core.decoder_electricity",
     "carbon_trading": "expert_anything.core.decoder_carbon",
+    "renewable_forecasting": "expert_anything.core.decoder_renewable",
+    "distributed_energy": "expert_anything.core.decoder_distributed_energy",
 }
 
 
@@ -1263,9 +1306,10 @@ def scene_for_concept(asset, concept, domain: str | None = None) -> dict:
 
     Single entry point for the teaching/reading pipeline, so every caller gets
     the same behaviour: when the asset belongs to a domain that ships curated
-    scenes (electricity trading, carbon trading) *and* the concept is one of
-    that domain's concepts, the domain scene is used; otherwise the
-    deterministic ``fallback_scene`` relation/definition graph is returned.
+    scenes (electricity trading, carbon trading, renewable forecasting) *and*
+    the concept is one of that domain's concepts, the domain scene is used;
+    otherwise the deterministic ``fallback_scene`` relation/definition graph is
+    returned.
 
     The domain module is looked up in ``DOMAIN_DECODERS`` (registry-driven:
     adding a domain is a one-line registration, not an edit to this function),

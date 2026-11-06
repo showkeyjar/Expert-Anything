@@ -35,6 +35,21 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "{title}\n{count} knowledge entities",
         "ja": "{title}\n{count}件のナレッジエンティティ",
     },
+    "asset_delete_tip": {
+        "zh-CN": "删除「{title}」及其教师模型与学习记录",
+        "en": "Delete \"{title}\" with its teacher model and learning records",
+        "ja": "「{title}」を教師モデル・学習記録ごと削除",
+    },
+    "asset_delete_title": {
+        "zh-CN": "删除知识资产",
+        "en": "Delete knowledge asset",
+        "ja": "ナレッジ資産の削除",
+    },
+    "asset_delete_confirm": {
+        "zh-CN": "确定删除「{title}」吗？\n该资产、其教师模型与相关学习记录将被永久移除。",
+        "en": "Delete \"{title}\"?\nThe asset, its teacher model and related learning records will be permanently removed.",
+        "ja": "「{title}」を削除しますか？\n資産・教師モデル・関連する学習記録は完全に削除されます。",
+    },
     "import_title": {
         "zh-CN": "导入知识资产",
         "en": "Import Knowledge",
@@ -110,14 +125,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "目標：{goal} ｜ 基礎：{baseline} ｜ 嗜好：{style}",
     },
     "profile_domain_item": {
-        "zh-CN": "领域：{domain} ｜ 判定：{level} ｜ 依据：{reason}",
-        "en": "Domain: {domain} ｜ Level: {level} ｜ Basis: {reason}",
-        "ja": "分野：{domain} ｜ 判定：{level} ｜ 根拠：{reason}",
+        "zh-CN": "领域：{domain} ｜ 水平：{level} ｜ 原因：{reason}",
+        "en": "Domain: {domain} ｜ Level: {level} ｜ Why: {reason}",
+        "ja": "分野：{domain} ｜ レベル：{level} ｜ 理由：{reason}",
     },
     "profile_domain_item_short": {
-        "zh-CN": "领域：{domain} ｜ 判定：{level}",
+        "zh-CN": "领域：{domain} ｜ 水平：{level}",
         "en": "Domain: {domain} ｜ Level: {level}",
-        "ja": "分野：{domain} ｜ 判定：{level}",
+        "ja": "分野：{domain} ｜ レベル：{level}",
     },
     "profile_level_novice": {
         "zh-CN": "零基础",
@@ -140,14 +155,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "不明",
     },
     "profile_reason_no_data": {
-        "zh-CN": "尚无学习记录，无法判定",
-        "en": "No learning activity yet — cannot be judged",
-        "ja": "学習記録がなく判定できません",
+        "zh-CN": "还没有学习记录，暂时看不出来",
+        "en": "No learning activity yet — can't tell yet",
+        "ja": "学習記録がまだないため、今はわかりません",
     },
     "profile_reason_no_template": {
-        "zh-CN": "领域 {domain} 无术语模板",
-        "en": "No template for domain {domain}",
-        "ja": "分野 {domain} の用語テンプレートがありません",
+        "zh-CN": "领域 {domain} 暂无专业知识包",
+        "en": "No knowledge pack for domain {domain} yet",
+        "ja": "分野 {domain} のナレッジパックはまだありません",
     },
     "profile_reason_no_match": {
         "zh-CN": "尚未接触该领域 {total} 个已登记概念中的任何一个",
@@ -190,9 +205,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "基礎を飛ばし、論点とモデリングへ",
     },
     "profile_hint_unknown": {
-        "zh-CN": "再做一次练习即可判定",
-        "en": "One more practice will settle the level",
-        "ja": "もう一度演習すると判定できます",
+        "zh-CN": "再做一次练习就知道了",
+        "en": "One more practice will tell",
+        "ja": "もう一度演習すればわかります",
     },
     "terminology": {
         "zh-CN": "术语对照",
@@ -225,8 +240,8 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "関連用語",
     },
     "terminology_matched": {
-        "zh-CN": "命中「{matched}」",
-        "en": 'matched "{matched}"',
+        "zh-CN": "对应「{matched}」",
+        "en": 'matches "{matched}"',
         "ja": "一致「{matched}」",
     },
     "terminology_none": {
@@ -235,14 +250,273 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "この概念は用語集に未登録です（内容は原文のみに基づきます）",
     },
     "terminology_source_note": {
-        "zh-CN": "术语与释义取自领域模板，未登记的术语不做推断",
-        "en": "Terms and definitions come from the domain template — nothing is inferred",
-        "ja": "用語と定義は分野テンプレートに基づきます（推測は行いません）",
+        "zh-CN": "术语与释义取自专业知识包，未登记的术语不做推断",
+        "en": "Terms and definitions come from the domain knowledge pack — nothing is inferred",
+        "ja": "用語と定義はナレッジパックに基づきます（推測は行いません）",
     },
     "terminology_count": {
         "zh-CN": "已登记术语 {count} 条 / {chapters} 章",
         "en": "{count} registered terms across {chapters} chapters",
         "ja": "登録用語 {count} 件 / {chapters} 章",
+    },
+    "glossary_title": {
+        "zh-CN": "🔤 术语对照表",
+        "en": "🔤 Terminology Glossary",
+        "ja": "🔤 用語対照表",
+    },
+    "glossary_btn": {
+        "zh-CN": "🔤 术语表",
+        "en": "🔤 Glossary",
+        "ja": "🔤 用語表",
+    },
+    "glossary_btn_tip": {
+        "zh-CN": "查看本资产所属领域的术语对照表（缩写 ↔ 全称 ↔ 释义）",
+        "en": "Open the domain term table (abbreviation ↔ full name ↔ definition)",
+        "ja": "この資産の分野の用語対照表を開く（略称 ↔ 正式名 ↔ 定義）",
+    },
+    "glossary_jump_tip": {
+        "zh-CN": "跳转到该概念",
+        "en": "Jump to this concept",
+        "ja": "この概念へ移動",
+    },
+    "glossary_empty": {
+        "zh-CN": "这份资料没有配套术语表——只有带专业知识包的资料（电力交易 / 碳市场 / 新能源等）才有已登记术语。",
+        "en": "No term table for this material — only materials with a domain knowledge pack "
+              "(electricity trading / carbon market / renewables…) carry registered terms.",
+        "ja": "この資料には用語表がありません。ナレッジパック付きの資料（電力取引／炭素市場／新エネ等）のみ登録用語を持ちます。",
+    },
+    "glossary_occ_summary": {
+        "zh-CN": "原文里提到：这份资料出现过 {hit}/{total} 个已登记术语",
+        "en": "In the source: {hit} of {total} registered terms appear",
+        "ja": "原文に登場：この資料では登録用語 {total} 語中 {hit} 語が出ています",
+    },
+    "glossary_occ_yes": {
+        "zh-CN": "原文出现",
+        "en": "In source",
+        "ja": "本文に登場",
+    },
+    "glossary_occ_yes_tip": {
+        "zh-CN": "该术语的已登记拼写在当前资产原文中逐字出现",
+        "en": "A registered spelling of this term occurs verbatim in this asset's source text",
+        "ja": "この用語の登録表記が教材の本文にそのまま出現します",
+    },
+    "glossary_occ_no": {
+        "zh-CN": "原文未出现",
+        "en": "Not in source",
+        "ja": "本文未登場",
+    },
+    "glossary_occ_no_tip": {
+        "zh-CN": "这份资料原文中未出现该术语（知识包条目，仅供参考）",
+        "en": "No registered spelling of this term occurs in this material (knowledge-pack entry, reference only)",
+        "ja": "この用語は資料の本文に出現しません（ナレッジパック項目・参考用）",
+    },
+    "recall_title": {
+        "zh-CN": "🗣 复述自检",
+        "en": "🗣 Explain-it-back check",
+        "ja": "🗣 復述セルフチェック",
+    },
+    "recall_btn": {
+        "zh-CN": "🗣 复述自检",
+        "en": "🗣 Explain back",
+        "ja": "🗣 復述チェック",
+    },
+    "recall_btn_tip": {
+        "zh-CN": "用自己的话复述，看看讲到了哪些要点和术语",
+        "en": "Restate it in your own words and check what you covered",
+        "ja": "自分の言葉で復述し、要点と用語のカバー率を確認",
+    },
+    "recall_hint": {
+        "zh-CN": "合上材料，用自己的话把「{name}」讲清楚——系统会看看你讲到了多少要点和术语。",
+        "en": "Close the material and explain \"{name}\" in your own words — "
+              "the system checks how many key points and terms you covered.",
+        "ja": "資料を閉じて「{name}」を自分の言葉で説明してください。"
+              "要点と用語のカバー率を確認します。",
+    },
+    "recall_placeholder": {
+        "zh-CN": "用你自己的话复述……",
+        "en": "Restate it in your own words…",
+        "ja": "自分の言葉で復述してください…",
+    },
+    "recall_check": {
+        "zh-CN": "看看讲得怎么样",
+        "en": "Check coverage",
+        "ja": "カバー率を確認",
+    },
+    "recall_empty": {
+        "zh-CN": "先写下你的复述，再点「看看讲得怎么样」。",
+        "en": "Write your explanation first, then press \"Check coverage\".",
+        "ja": "まず復述を書き、それから「カバー率を確認」を押してください。",
+    },
+    "recall_coverage": {
+        "zh-CN": "讲到了 {pct}% 的要点（{covered}/{total}）",
+        "en": "Key-point coverage {pct}% ({covered}/{total})",
+        "ja": "要点カバー率 {pct}%（{covered}/{total}）",
+    },
+    "recall_self_ok": {
+        "zh-CN": "已提到核心术语「{name}」",
+        "en": "Core term \"{name}\" mentioned",
+        "ja": "中心用語「{name}」に言及しました",
+    },
+    "recall_self_missing": {
+        "zh-CN": "还没提到核心术语「{name}」",
+        "en": "Core term \"{name}\" not mentioned yet",
+        "ja": "中心用語「{name}」にまだ言及していません",
+    },
+    "recall_missed_points": {
+        "zh-CN": "还没讲到的要点",
+        "en": "Key points you have not covered",
+        "ja": "まだ触れていない要点",
+    },
+    "recall_missed_terms": {
+        "zh-CN": "可以再提到的术语",
+        "en": "Terms you could also mention",
+        "ja": "併せて触れられる用語",
+    },
+    "recall_all_covered": {
+        "zh-CN": "所有要点都讲到了，讲得很好！",
+        "en": "All key points covered — well explained!",
+        "ja": "すべての要点をカバーしました。よく説明できています！",
+    },
+    "recall_store_note": {
+        "zh-CN": "存为笔记",
+        "en": "Save as note",
+        "ja": "ノートに保存",
+    },
+    "recall_clear": {
+        "zh-CN": "清空重来",
+        "en": "Clear and retry",
+        "ja": "消してやり直す",
+    },
+    "recall_record": {
+        "zh-CN": "记入学习轨迹",
+        "en": "Record in learning trace",
+        "ja": "学習記録に保存",
+    },
+    "recall_recorded": {
+        "zh-CN": "已记入 · 掌握度已更新",
+        "en": "Recorded · mastery updated",
+        "ja": "記録済み・習得度を更新",
+    },
+    "recall_record_tip": {
+        "zh-CN": "把这次复述的结果作为掌握度证据记入学习轨迹（可与教学得分一起参与复习调度）",
+        "en": "Count this coverage as mastery evidence in the learning trace "
+              "(it then joins review scheduling alongside teaching scores)",
+        "ja": "この復述のカバー率を習得度の証拠として学習記録に保存します"
+              "（復習スケジュールにも反映されます）",
+    },
+    "recall_status": {
+        "zh-CN": "最近一次复述讲到 {pct}% 的要点 · {missed} 个还没讲到",
+        "en": "Last recall coverage {pct}% · {missed} key point(s) missed",
+        "ja": "前回復述のカバー率 {pct}%・未カバー要点 {missed} 件",
+    },
+    "recall_again": {
+        "zh-CN": "再复述一次",
+        "en": "Explain again",
+        "ja": "もう一度復述",
+    },
+    "recall_trend": {
+        "zh-CN": "复述趋势（最近 {n} 次）：{s}",
+        "en": "Recall trend (last {n}): {s}",
+        "ja": "復述トレンド（直近 {n} 回）：{s}",
+    },
+    "recall_trend_tip": {
+        "zh-CN": "这个概念复述成绩的变化（旧→新）；一直没提升说明要换种讲法，而不是再讲一遍同样的话",
+        "en": "Coverage of this concept's self-explanations, oldest → newest; "
+              "a flat low line means change the approach, not repeat it",
+        "ja": "この概念の復述カバー率の推移（旧→新）。伸びない場合は言い方を変えましょう",
+    },
+    "recall_stagnant": {
+        "zh-CN": "连续复述没有提升 · 先列出全部要点，再逐条展开讲一次",
+        "en": "No improvement across recalls · list all key points first, "
+              "then explain them one by one",
+        "ja": "復述が伸びていません・要点をすべて列挙してから一つずつ説明しましょう",
+    },
+    "anomaly_view_concept": {
+        "zh-CN": "查看概念",
+        "en": "View concept",
+        "ja": "概念を見る",
+    },
+    "anomaly_teach": {
+        "zh-CN": "去学它",
+        "en": "Learn it",
+        "ja": "学びに行く",
+    },
+    "teacher_resolved_label": {
+        "zh-CN": "✅ 已消解 · {n} 条（教学已生效）",
+        "en": "✅ Resolved · {n} (teaching worked)",
+        "ja": "✅ 解消済み · {n}件（教学が効果を発揮）",
+    },
+    "teacher_resolved_badge": {
+        "zh-CN": "已消解",
+        "en": "resolved",
+        "ja": "解消済み",
+    },
+    "teacher_resolved_reason_mastery": {
+        "zh-CN": "掌握度已回升至 60% 以上",
+        "en": "Mastery rebounded to ≥60%",
+        "ja": "習得度が60%以上に回復",
+    },
+    "teacher_resolved_reason_anchor": {
+        "zh-CN": "证据出处已补齐",
+        "en": "Evidence located in the source",
+        "ja": "証拠の出所が補完されました",
+    },
+    "teacher_resolved_reason_generic": {
+        "zh-CN": "消解条件已满足",
+        "en": "Resolution condition met",
+        "ja": "解消条件を満たしました",
+    },
+    "error_book_your_answer": {
+        "zh-CN": "你的答案：{s}",
+        "en": "Your answer: {s}",
+        "ja": "あなたの回答：{s}",
+    },
+    "mastery_breakdown": {
+        "zh-CN": "掌握度构成",
+        "en": "Where mastery came from",
+        "ja": "習得度の内訳",
+    },
+    "mastery_breakdown_tip": {
+        "zh-CN": "掌握度从哪来的：答题 / 自测 / 实践 / 闪卡 / 复述各自的次数与均分——不是黑盒",
+        "en": "Split by channel: answers / quizzes / practice / flashcards / recall — "
+              "mastery is not a black box",
+        "ja": "チャネル別の内訳：回答／小テスト／実践／フラッシュカード／復述の回数と平均点",
+    },
+    "breakdown_answer": {"zh-CN": "答题", "en": "Answers", "ja": "回答"},
+    "breakdown_quiz": {"zh-CN": "自测", "en": "Quiz", "ja": "小テスト"},
+    "breakdown_practice": {"zh-CN": "实践", "en": "Practice", "ja": "実践"},
+    "breakdown_flashcard": {"zh-CN": "闪卡", "en": "Flashcards", "ja": "カード"},
+    "breakdown_recall": {"zh-CN": "复述", "en": "Recall", "ja": "復述"},
+    "breakdown_harness": {"zh-CN": "教学方式", "en": "Teaching style", "ja": "講義スタイル"},
+    "detail_system_note": {
+        "zh-CN": "系统理解：{s}…",
+        "en": "System understanding: {s}…",
+        "ja": "システムの理解：{s}…",
+    },
+    "external_source_tag": {
+        "zh-CN": "来源：材料之外 · 系统补充",
+        "en": "Source: outside the material · system addition",
+        "ja": "出典：資料外・システム補足",
+    },
+    "learner_signals_title": {
+        "zh-CN": "系统记住的你的困惑",
+        "en": "Your confusions the system remembered",
+        "ja": "システムが覚えているあなたのつまずき",
+    },
+    "external_notes_title": {
+        "zh-CN": "材料之外的补充",
+        "en": "Additions beyond the material",
+        "ja": "資料外の補足",
+    },
+    "notes_signal_n": {
+        "zh-CN": "· {n} 条学习者信号",
+        "en": "· {n} learner signal(s)",
+        "ja": "・学習者シグナル {n} 件",
+    },
+    "detail_terminology": {
+        "zh-CN": "领域术语",
+        "en": "Domain term",
+        "ja": "分野用語",
     },
     "mastery": {
         "zh-CN": "概念掌握度",
@@ -288,10 +562,10 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "← {label} · {name}",
     },
     "rel_default": {"zh-CN": "关联", "en": "linked", "ja": "関連"},
-    "recommend_next": {
-        "zh-CN": "推荐下一步",
-        "en": "Recommended next",
-        "ja": "次の推奨",
+    "recent_taught_title": {
+        "zh-CN": "最近教学",
+        "en": "Recently taught",
+        "ja": "最近学習",
     },
     "legend_partial": {"zh-CN": "部分掌握", "en": "Partial", "ja": "一部習得"},
     "legend_current": {"zh-CN": "当前概念", "en": "Current", "ja": "現在の概念"},
@@ -306,14 +580,39 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "学習境界",
     },
     "legend_unanchored": {
-        "zh-CN": "无原文锚点",
-        "en": "No source anchor",
-        "ja": "原文アンカーなし",
+        "zh-CN": "无原文出处",
+        "en": "No source location",
+        "ja": "原文の出所なし",
     },
     "unanchored_tip": {
-        "zh-CN": "此概念暂无原文锚点：由领域模板补全，或其证据未能在原文中定位。",
-        "en": "This concept has no source anchor: filled in by a domain template, or its evidence could not be located in the source text.",
-        "ja": "この概念には原文アンカーがありません。ドメインテンプレートで補完されたか、証拠を原文中に定位できませんでした。",
+        "zh-CN": "此概念暂无原文出处：可能由专业知识包补全，或其证据未能在原文中逐字定位。",
+        "en": "This concept has no verbatim source location: it was filled in by a domain knowledge pack, or its evidence could not be located in the source text.",
+        "ja": "この概念には原文の出所がありません。ナレッジパックで補完されたか、証拠を原文中に特定できませんでした。",
+    },
+    "nav_advanced": {
+        "zh-CN": "进阶功能",
+        "en": "Advanced",
+        "ja": "上級機能",
+    },
+    "cm_onboard_step1": {
+        "zh-CN": "🔍 顶部搜索概念名快速定位",
+        "en": "🔍 Search a concept up top",
+        "ja": "🔍 上部の検索で概念を探す",
+    },
+    "cm_onboard_step2": {
+        "zh-CN": "🖱️ 单击看详情 · 双击深入子图",
+        "en": "🖱️ Click for details · double-click to drill in",
+        "ja": "🖱️ クリックで詳細 · ダブルクリックで下層へ",
+    },
+    "cm_onboard_step3": {
+        "zh-CN": "▶ 选中节点后点「开教」开始学习",
+        "en": "▶ Select a node, then Start Teaching",
+        "ja": "▶ ノード選択後に「学習開始」",
+    },
+    "cm_onboard_dismiss": {
+        "zh-CN": "关闭提示",
+        "en": "Dismiss",
+        "ja": "閉じる",
     },
     "nav_import": {
         "zh-CN": "📥 导入知识资产",
@@ -321,9 +620,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "📥 インポート",
     },
     "nav_knowledge": {
-        "zh-CN": "🌳 知识模型",
-        "en": "🌳 Knowledge",
-        "ja": "🌳 知識モデル",
+        "zh-CN": "🌳 目录大纲",
+        "en": "🌳 Outline",
+        "ja": "🌳 目次",
     },
     "nav_map": {"zh-CN": "🗺️ 认知地图", "en": "🗺️ Cognitive Map", "ja": "🗺️ 認知マップ"},
     "nav_source": {"zh-CN": "📖 阅读原文", "en": "📖 Source", "ja": "📖 原文を読む"},
@@ -335,8 +634,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "ExpertAnything",
         "ja": "ExpertAnything",
     },
-    "btn_teach": {"zh-CN": "教学", "en": "Teach", "ja": "教学"},
-    "btn_map": {"zh-CN": "概念地图", "en": "Map", "ja": "概念マップ"},
     "btn_source": {"zh-CN": "阅读原文", "en": "Source", "ja": "原文"},
     "nav_learner": {
         "zh-CN": "🧠 学习者模型",
@@ -347,6 +644,140 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh-CN": "👨‍🏫 教师模型",
         "en": "👨‍🏫 Teacher",
         "ja": "👨‍🏫 教師モデル",
+    },
+    "nav_panorama": {
+        "zh-CN": "🧭 项目全景",
+        "en": "🧭 Project",
+        "ja": "🧭 プロジェクト全景",
+    },
+    "panorama_subtitle": {
+        "zh-CN": "跨材料汇总：目标 · 已知 · 关键未知 · 断点",
+        "en": "Across materials: goals · knowns · unknowns · gaps",
+        "ja": "全資料の集約：目標・既知・未知・断点",
+    },
+    "panorama_explain_title": {
+        "zh-CN": "为什么要看这一页",
+        "en": "Why this page",
+        "ja": "このページの目的",
+    },
+    "panorama_explain_body": {
+        "zh-CN": "单看一份材料只能知道它讲了什么；把多份材料放在一起，才能看出这个项目由哪些部分组成、瓶颈在哪、哪些说法还没被验证。这一页只是现有数据的汇总投影——概念、关系、教师模型的存疑异常、证据锚定率、掌握度，不含任何新推断。",
+        "en": "One material tells you what it says; many together reveal what the project is made of, where it stalls, and which claims remain unverified. This page is a projection of existing data only — concepts, relations, teacher anomalies, anchor coverage, mastery.",
+        "ja": "資料1件だけでは「何を書いているか」しか分かりません。複数を並べると、プロジェクトの構成・停滞点・未検証の主張が見えてきます。このページは既存データの集約投影にすぎません。",
+    },
+    "panorama_scale_title": {
+        "zh-CN": "认知规模",
+        "en": "Knowledge scale",
+        "ja": "認知の規模",
+    },
+    "stat_assets": {"zh-CN": "材料", "en": "Materials", "ja": "資料"},
+    "stat_concepts_total": {
+        "zh-CN": "概念（去重）",
+        "en": "Concepts (unique)",
+        "ja": "概念（重複除去）",
+    },
+    "stat_relations_total": {"zh-CN": "关系", "en": "Relations", "ja": "関係"},
+    "stat_shared_concepts": {
+        "zh-CN": "跨材料共享",
+        "en": "Shared across materials",
+        "ja": "資料間で共有",
+    },
+    "stat_unknowns": {"zh-CN": "关键未知", "en": "Open unknowns", "ja": "未解決の未知"},
+    "panorama_chip_tip_assets": {
+        "zh-CN": "点击跳到材料清单",
+        "en": "Click to jump to the material list",
+        "ja": "クリックで資料リストへ",
+    },
+    "panorama_chip_tip_graph": {
+        "zh-CN": "点击打开概念网络（看这些概念与关系的实际结构）",
+        "en": "Click to open the concept network (see the actual structure)",
+        "ja": "クリックで概念ネットワークを開く（実際の構造を見る）",
+    },
+    "panorama_chip_tip_shared": {
+        "zh-CN": "点击查看是哪些概念跨材料共享",
+        "en": "Click to see which concepts span materials",
+        "ja": "クリックで資料間で共有される概念を見る",
+    },
+    "panorama_chip_tip_unknowns": {
+        "zh-CN": "点击跳到关键未知清单",
+        "en": "Click to jump to the open-unknowns list",
+        "ja": "クリックで未解決の未知リストへ",
+    },
+    "panorama_shared_title": {
+        "zh-CN": "跨材料共享概念",
+        "en": "Concepts shared across materials",
+        "ja": "資料間で共有される概念",
+    },
+    "panorama_shared_intro": {
+        "zh-CN": "这 {n} 个概念在多份材料中同时出现——它们是项目级的连接点，通常也最值得先学透。",
+        "en": "These {n} concepts appear in more than one material — project-level junctions, usually worth learning first.",
+        "ja": "この {n} 概念は複数の資料に現れます — プロジェクト級の接続点で、先に学ぶ価値が高いものです。",
+    },
+    "panorama_shared_empty": {
+        "zh-CN": "暂无跨材料共享的概念（各材料的概念名称尚未出现重叠）。",
+        "en": "No shared concepts yet — material concept names do not overlap.",
+        "ja": "資料間で共有される概念はまだありません（名称の重複なし）。",
+    },
+    "panorama_shared_in": {
+        "zh-CN": "出现于：{titles}",
+        "en": "Appears in: {titles}",
+        "ja": "出現先：{titles}",
+    },
+    "panorama_materials_title": {
+        "zh-CN": "材料清单",
+        "en": "Materials",
+        "ja": "資料リスト",
+    },
+    "panorama_anchor_rate": {
+        "zh-CN": "证据锚定 {pct}",
+        "en": "Anchored {pct}",
+        "ja": "証拠アンカー {pct}",
+    },
+    "panorama_no_teacher": {
+        "zh-CN": "尚未构建教师模型",
+        "en": "No teacher model yet",
+        "ja": "教師モデル未構築",
+    },
+    "panorama_view_asset": {"zh-CN": "查看", "en": "Open", "ja": "開く"},
+    "panorama_unknowns_title": {
+        "zh-CN": "关键未知（{n}）",
+        "en": "Open unknowns ({n})",
+        "ja": "未解決の未知（{n}）",
+    },
+    "panorama_unknowns_none": {
+        "zh-CN": "暂无未解决的存疑——教师模型没有发现矛盾 / 未定义 / 逻辑断点。",
+        "en": "No open doubts — the teacher model found no contradiction, undefined term or logical gap.",
+        "ja": "未解決の疑義はありません — 矛盾・未定義・論理断点は見つかっていません。",
+    },
+    "panorama_jump_concept": {
+        "zh-CN": "→ 定位「{name}」",
+        "en": "→ Go to “{name}”",
+        "ja": "→「{name}」へ",
+    },
+    "panorama_frontier_title": {
+        "zh-CN": "断点前沿",
+        "en": "Frontier / gaps",
+        "ja": "断点フロンティア",
+    },
+    "panorama_frontier_unanchored": {
+        "zh-CN": "◌ 无原文出处（{n}）",
+        "en": "◌ no source location ({n})",
+        "ja": "◌ 出所なし（{n}）",
+    },
+    "panorama_frontier_weak": {
+        "zh-CN": "薄弱掌握（{n}）",
+        "en": "Weak mastery ({n})",
+        "ja": "定着が弱い（{n}）",
+    },
+    "panorama_frontier_none": {
+        "zh-CN": "未发现明显断点：所有概念都有原文出处，且没有薄弱项。",
+        "en": "No clear gaps: every concept has a source location and none is weak.",
+        "ja": "明確な断点はありません：全概念に出所があり、弱点もありません。",
+    },
+    "panorama_weak_item": {
+        "zh-CN": "{name} · {pct}",
+        "en": "{name} · {pct}",
+        "ja": "{name} · {pct}",
     },
     "topbar_progress": {
         "zh-CN": "已掌握 {m}/{t} · 学习中 {l} · 待复习 {r}",
@@ -373,15 +804,9 @@ _STRINGS: dict[str, dict[str, str]] = {
     "diff_hard": {"zh-CN": "难", "en": "Hard", "ja": "難"},
     "diff_label": {"zh-CN": "难度", "en": "Difficulty", "ja": "難易度"},
     "method_llm_chunked": {
-        "zh-CN": "LLM 多分块并行抽取",
-        "en": "LLM parallel chunk extraction",
-        "ja": "LLM 並列チャンク抽出",
-    },
-    "method_llm": {"zh-CN": "LLM 抽取", "en": "LLM extraction", "ja": "LLM 抽出"},
-    "method_fallback": {
-        "zh-CN": "确定性降级",
-        "en": "Deterministic fallback",
-        "ja": "決定論的フォールバック",
+        "zh-CN": "智能分析（分段处理）",
+        "en": "AI analysis by sections",
+        "ja": "AI 分析（分割抽出）",
     },
     "read_failed": {
         "zh-CN": "读取文件失败: {e}",
@@ -392,11 +817,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh-CN": "内容为空，请提供学习材料",
         "en": "Content is empty — provide material first",
         "ja": "内容が空です。教材を提供してください",
-    },
-    "import_done": {
-        "zh-CN": "知识资产《{title}》导入完成！\n概念数: {c}\n关系数: {r}",
-        "en": "Asset \u201c{title}\u201d imported!\nConcepts: {c}\nRelations: {r}",
-        "ja": "資産「{title}」のインポートが完了しました！\n概念: {c} / 関係: {r}",
     },
     "section_recommend": {
         "zh-CN": "推荐下一步",
@@ -441,26 +861,61 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Go back one drill level",
         "ja": "1つ上の階層に戻る",
     },
-    "drill_hint": {
-        "zh-CN": "点击节点查看其上下位概念",
-        "en": "Click a node to see its broader/narrower concepts",
-        "ja": "ノードをクリックすると上位・下位概念を表示",
-    },
-    "drill_current_prefix": {
-        "zh-CN": "当前位置：",
-        "en": "Current: ",
-        "ja": "現在位置: ",
-    },
     "drill_all": {"zh-CN": "全部知识", "en": "All knowledge", "ja": "全知識"},
-    "drill_continue": {
-        "zh-CN": "（点击节点继续钻取）",
-        "en": "(click a node to keep drilling)",
-        "ja": "（ノードをクリックして続ける）",
+    "drill_tooltip_hint": {
+        "zh-CN": "双击节点进入子图",
+        "en": "Double-click to drill into this subgraph",
+        "ja": "ダブルクリックでサブグラフへ",
+    },
+    "drill_btn_label": {
+        "zh-CN": "▾ 展开子图",
+        "en": "▾ Drill in",
+        "ja": "▾ サブグラフへ",
+    },
+    "drill_btn_tip": {
+        "zh-CN": "进入该概念的局部子图（与双击节点等效）",
+        "en": "Enter this concept's subgraph (same as double-click)",
+        "ja": "その概念のサブグラフへ（ダブルクリックと同じ）",
     },
     "svg_unsupported": {
         "zh-CN": "（当前环境不支持内嵌 SVG，请点击右上角打开互动演示。）",
         "en": "(Inline SVG is not supported here. Click the top-right button to open the interactive demo.)",
         "ja": "（この環境ではインラインSVGはサポートされていません。右上のボタンからインタラクティブデモを開いてください。）",
+    },
+    "svg_zoom_tip": {
+        "zh-CN": "点击放大，查看清晰原图",
+        "en": "Click to zoom in and read the full-size diagram",
+        "ja": "クリックで拡大し、クリアな原図を表示",
+    },
+    "more_section": {
+        "zh-CN": "更多内容",
+        "en": "More",
+        "ja": "その他の内容",
+    },
+    "more_tools": {
+        "zh-CN": "更多视图工具",
+        "en": "More view tools",
+        "ja": "その他の表示ツール",
+    },
+    "more_tools_hint": {
+        "zh-CN": "语义筛选、骨架/热力图、路径播放、导出等",
+        "en": "Semantic filters, skeleton/heat views, path playback, export…",
+        "ja": "意味フィルタ、骨格/ヒート表示、パス再生、エクスポートなど",
+    },
+    "svg_zoom_title": {
+        "zh-CN": "知识图解（原尺寸）",
+        "en": "Knowledge diagram (full size)",
+        "ja": "知識図解（原寸大）",
+    },
+    "quick_def_title": {
+        "zh-CN": "核心定义",
+        "en": "Core definition",
+        "ja": "中核定義",
+    },
+    "deep_dive_toggle": {
+        "zh-CN": "想深入：完整讲解 · 术语 · 测验 · 练习",
+        "en": "Go deeper: full lesson · terms · quiz · practice",
+        "ja": "もっと深く：詳しい解説・用語・クイズ・練習",
     },
     "zoom_fit": {"zh-CN": "适应", "en": "Fit", "ja": "フィット"},
     "zoom_in_tip": {"zh-CN": "放大", "en": "Zoom in", "ja": "拡大"},
@@ -688,15 +1143,40 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Trend?",
         "ja": "傾向?",
     },
-    "edge_teach_title": {
-        "zh-CN": "关系教学",
-        "en": "Relation Teaching",
-        "ja": "関係教育",
+    "rel_edge_title": {
+        "zh-CN": "这条线为什么存在",
+        "en": "Why this line exists",
+        "ja": "この線が存在する理由",
     },
-    "edge_teach_msg": {
-        "zh-CN": "检测到「{src}」与「{tgt}」之间的{rel}。\n是否开始学习「{src}」？",
-        "en": 'Detected {rel} between "{src}" and "{tgt}".\nStart learning "{src}"?',
-        "ja": "「{src}」と「{tgt}」の間に{rel}があります。\n「{src}」の学習を開始しますか？",
+    "rel_edge_line": {
+        "zh-CN": "原文第 {line} 行",
+        "en": "Source line {line}",
+        "ja": "原文 {line} 行目",
+    },
+    "rel_edge_model_note": {
+        "zh-CN": "系统说明（非原文片段）",
+        "en": "System note (not a source span)",
+        "ja": "システムの説明（原文ではない）",
+    },
+    "rel_edge_no_evidence": {
+        "zh-CN": "系统没有找到可定位的原文片段——这条关系是模型归纳的，可信度较低。",
+        "en": "No locatable source span — this relation is a model inference and less trustworthy.",
+        "ja": "原文の該当箇所が見つかりません。この関係はモデルの推定で、信頼度は低めです。",
+    },
+    "rel_edge_path_only": {
+        "zh-CN": "这是学习路径的先后顺序，不是原文中写明的关系。",
+        "en": "This is learning-path order, not a relation stated in the source.",
+        "ja": "これは学習パスの順序で、原文に書かれた関係ではありません。",
+    },
+    "rel_edge_jump": {
+        "zh-CN": "在原文里确认",
+        "en": "Confirm in the source",
+        "ja": "原文で確認",
+    },
+    "rel_edge_teach": {
+        "zh-CN": "教 · {name}",
+        "en": "Teach · {name}",
+        "ja": "教える · {name}",
     },
     "dep_chain": {
         "zh-CN": "🔗 依赖链",
@@ -813,6 +1293,102 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Study path order",
         "ja": "学習パス順",
     },
+    # -- coach: the single proactive主张 (AGENTS.md §49) -------------------
+    "coach_now": {
+        "zh-CN": "现在",
+        "en": "Now",
+        "ja": "今",
+    },
+    "coach_go": {
+        "zh-CN": "开始",
+        "en": "Start",
+        "ja": "開始",
+    },
+    "coach_swap": {
+        "zh-CN": "换一个",
+        "en": "Another",
+        "ja": "別の",
+    },
+    "coach_dismiss": {
+        "zh-CN": "✕ 先跳过",
+        "en": "✕ Skip for now",
+        "ja": "✕ 今はスキップ",
+    },
+    "coach_dismiss_tip": {
+        "zh-CN": "跳过这条建议；连续跳过同类建议后系统会先说别的",
+        "en": "Pass on this suggestion — after several similar skips the coach leads elsewhere",
+        "ja": "この提案をスキップ。同種を繰り返すと別の一歩を案内します",
+    },
+    "coach_more": {
+        "zh-CN": "📊 更多分析",
+        "en": "📊 More analysis",
+        "ja": "📊 詳細分析",
+    },
+    "coach_more_hint": {
+        "zh-CN": "教学效果、复习巩固、掌握预测等分析",
+        "en": "Teaching effect, retention and mastery forecast",
+        "ja": "教学効果・保持度・習熟予測",
+    },
+    "coach_fatigue_note": {
+        "zh-CN": "（已连续跳过 {n} 次同类建议，先说别的）",
+        "en": "({n} similar suggestions skipped — a different step instead)",
+        "ja": "（同種の提案を {n} 回スキップ。別の一歩を）",
+    },
+    "coach_why_import": {
+        "zh-CN": "还没有学习材料，先导入一份开始",
+        "en": "No material yet — import one to begin",
+        "ja": "教材がまだありません。まずインポート",
+    },
+    "coach_why_anomaly": {
+        "zh-CN": "系统在此处存疑，值得先澄清",
+        "en": "The system doubts this one — clarify it first",
+        "ja": "ここに疑問あり。先に明確に",
+    },
+    "coach_why_stuck": {
+        "zh-CN": "这里反复没通过，换个角度重讲",
+        "en": "Repeatedly failed — re-teach from a new angle",
+        "ja": "繰り返し未達。別角度で再講義",
+    },
+    "coach_why_review": {
+        "zh-CN": "已 {days} 天未复习，趁遗忘前巩固",
+        "en": "{days} days since last review — consolidate it now",
+        "ja": "未復習 {days} 日。忘れる前に復習",
+    },
+    "coach_why_focus_unlock": {
+        "zh-CN": "学完它可解锁 {n} 个下游概念",
+        "en": "Mastering it unlocks {n} downstream concepts",
+        "ja": "習得で下流 {n} 概念が解放",
+    },
+    "coach_why_prereq": {
+        "zh-CN": "要学「{name}」得先补前置，当前只有 {pct}%",
+        "en": "Before \"{name}\" — shore up its prerequisite (now {pct}%)",
+        "ja": "「{name}」の前に前提を補強（現在 {pct}%）",
+    },
+    "coach_unlocks_names": {
+        "zh-CN": "（如 {names}）",
+        "en": " (e.g. {names})",
+        "ja": "（例：{names}）",
+    },
+    "coach_why_focus": {
+        "zh-CN": "高杠杆概念，趁热拿下",
+        "en": "High-leverage concept — the best next move",
+        "ja": "高レバレッジ概念。次はこれ",
+    },
+    "coach_why_weak": {
+        "zh-CN": "掌握度偏低，先补上它",
+        "en": "Low mastery — shore it up first",
+        "ja": "習熟度が低い。まず補強",
+    },
+    "coach_why_path": {
+        "zh-CN": "按学习路径，下一站是它",
+        "en": "Next stop on the learning path",
+        "ja": "学習パスの次の一歩",
+    },
+    "coach_why_explore": {
+        "zh-CN": "本篇已全部掌握——去概念网络温故知新",
+        "en": "All mastered — roam the concept map",
+        "ja": "全て習得済み。概念マップを探索しよう",
+    },
     "rec_toast": {
         "zh-CN": "🎯 推荐学习「{name}」—— {reason}",
         "en": '🎯 Recommended: "{name}" — {reason}',
@@ -839,121 +1415,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Pick a concept to begin",
         "ja": "概念を選んで学習を開始",
     },
-    "harness_suggest_title": {
-        "zh-CN": "Harness 演化建议",
-        "en": "Harness Evolution Suggestion",
-        "ja": "ハーネス進化の提案",
-    },
-    "harness_regress_title": {
-        "zh-CN": "疑似误伤：建议裁守卫",
-        "en": "Possible Collateral: Trim Guard",
-        "ja": "誤傷の疑い：ガード削減を提案",
-    },
-    "harness_regress_body": {
-        "zh-CN": "概念「{concept}」近期表现回退（平均 {before} → {after}，连续 {attempts} 次未达标）。预算守卫可能卡住了讲解深度，系统建议裁掉 budget_ok 守卫重新教学。",
-        "en": "\u201c{concept}\u201d regressed recently ({before} → {after}, {attempts} straight fails). The budget guard may be throttling explanations; the system suggests trimming budget_ok and re-teaching.",
-        "ja": "「{concept}」の成績が後退しています（{before} → {after}、{attempts} 回連続未達）。予算ガードが説明の深さを制限している可能性があるため、budget_ok を削減して再講義することを提案します。",
-    },
-    "harness_adopt_regress": {
-        "zh-CN": "采纳并裁守卫",
-        "en": "Trim & Adopt",
-        "ja": "削減して採用",
-    },
-    "harness_reason_regression": {
-        "zh-CN": "误伤裁守卫（回归驱动）",
-        "en": "Regression-driven guard trim",
-        "ja": "誤傷ガード削減（後退駆動）",
-    },
-    "harness_joint_title": {
-        "zh-CN": "联合演化：多信号融合建议",
-        "en": "Joint Evolution: Multi-Signal Plan",
-        "ja": "統合進化：複数シグナルの提案",
-    },
-    "harness_joint_body": {
-        "zh-CN": "概念「{concept}」触发多信号（{reason}），系统融合判定后设计新 Harness：{summary}。诊断：{diag}。启用后将立即以新讲解风格重讲本概念。",
-        "en": "\u201c{concept}\u201d triggered multiple signals ({reason}); the system fused them into one decision. New harness: {summary}. Diagnosis: {diag}. Adopting re-teaches this concept right away.",
-        "ja": "「{concept}」が複数シグナル（{reason}）を発火、統合判定で新ハーネスを設計しました：{summary}。診断：{diag}。採用すると新しいスタイルで即座に再講義します。",
-    },
-    "harness_adopt_joint": {
-        "zh-CN": "启用联合方案",
-        "en": "Adopt Joint Plan",
-        "ja": "統合案を採用",
-    },
-    "harness_reason_joint": {
-        "zh-CN": "联合演化（多信号融合）",
-        "en": "Joint evolution (multi-signal)",
-        "ja": "統合進化（複数シグナル）",
-    },
-    "harness_reason_sessions": {
-        "zh-CN": "会话统计驱动",
-        "en": "Session-stats driven",
-        "ja": "セッション統計駆動",
-    },
-    "harness_suggest_body": {
-        "zh-CN": "概念「{concept}」连续 {attempts} 次未达标，当前教学策略已失效。系统自动设计了新 Harness：{summary}。启用后将立即以新讲解风格重讲本概念。",
-        "en": "\u201c{concept}\u201d failed {attempts} times in a row, so the current teaching strategy is stale. A new harness was designed automatically: {summary}. Adopting it re-teaches this concept with the new style right away.",
-        "ja": "概念「{concept}」が {attempts} 回連続で未達のため、現在の戦略は失効しています。新ハーネスを自動設計しました：{summary}。採用すると、新しいスタイルで即座に再講義します。",
-    },
-    "harness_adopt": {
-        "zh-CN": "启用新 Harness",
-        "en": "Adopt New Harness",
-        "ja": "新ハーネスを採用",
-    },
-    "harness_adopted": {
-        "zh-CN": "已启用新 Harness：{name}，正在以新讲解风格重讲「{concept}」。",
-        "en": "Adopted harness: {name}. Re-teaching \u201c{concept}\u201d with the new style.",
-        "ja": "ハーネスを採用しました：{name}。新しいスタイルで「{concept}」を再講義します。",
-    },
-    "harness_none": {
-        "zh-CN": "当前教学由默认 Harness 驱动（teach + quiz）",
-        "en": "Teaching runs on the default harness (teach + quiz)",
-        "ja": "現在はデフォルトハーネスで駆動中（teach + quiz）",
-    },
-    "harness_history": {
-        "zh-CN": "演化历史（审计链）",
-        "en": "Evolution History (audit trail)",
-        "ja": "進化履歴（監査記録）",
-    },
-    "harness_reason_stuck": {
-        "zh-CN": "卡壳自动演化",
-        "en": "Stuck-driven evolution",
-        "ja": "行き詰まり自動進化",
-    },
-    "harness_reason_manual": {
-        "zh-CN": "手动采纳",
-        "en": "Manual adoption",
-        "ja": "手動採用",
-    },
-    "harness_reason_steady": {
-        "zh-CN": "稳态复核",
-        "en": "Steady-state check",
-        "ja": "安定状態の確認",
-    },
-    "harness_reason_transfer": {
-        "zh-CN": "跨资产迁移",
-        "en": "Cross-asset transfer",
-        "ja": "アセット間移行",
-    },
-    "harness_transfer_title": {
-        "zh-CN": "跨资产 Harness 迁移建议",
-        "en": "Cross-Asset Harness Migration",
-        "ja": "アセット間ハーネス移行の提案",
-    },
-    "harness_transfer_body": {
-        "zh-CN": "资产「{source}」的 Harness「{name}」在本资产上差分收益 +{gain}（成本差分 {cost}）。启用后将以新讲解风格重讲当前概念。",
-        "en": "Harness \u201c{name}\u201d from \u201c{source}\u201d gains {gain} on this asset (cost diff {cost}). Adopting it re-teaches the current concept with the new style.",
-        "ja": "「{source}」のハーネス「{name}」は本アセットで差分 {gain}（コスト差分 {cost}）。採用すると新しいスタイルで即座に再講義します。",
-    },
-    "harness_transfer_adopt": {
-        "zh-CN": "迁移启用",
-        "en": "Migrate",
-        "ja": "移行して採用",
-    },
-    "harness_transfer_adopted": {
-        "zh-CN": "已迁移启用 Harness：{name}（来自「{source}」），正在以新讲解风格重讲「{concept}」。",
-        "en": "Migrated harness: {name} (from \u201c{source}\u201d). Re-teaching \u201c{concept}\u201d with the new style.",
-        "ja": "ハーネスを移行しました：{name}（「{source}」より）。新しいスタイルで「{concept}」を再講義します。",
-    },
     "explanation": {"zh-CN": "讲解", "en": "Explanation", "ja": "解説"},
     "example": {"zh-CN": "示例", "en": "Example", "ja": "例"},
     "steps_title": {"zh-CN": "学习步骤", "en": "Steps", "ja": "ステップ"},
@@ -964,11 +1425,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "自分の言葉で答えてください…",
     },
     "submit_answer": {"zh-CN": "提交答案", "en": "Submit", "ja": "回答を送信"},
-    "evidence_label": {
-        "zh-CN": "原文证据（来源约束）",
-        "en": "Source evidence",
-        "ja": "原文の根拠",
-    },
     "source_provenance": {
         "zh-CN": "📚 本讲解基于以下原文证据",
         "en": "📚 This lesson is grounded in the following evidence",
@@ -1016,11 +1472,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "次の概念",
     },
     "eval_result": {"zh-CN": "评估结果", "en": "Evaluation", "ja": "評価結果"},
-    "learn_next": {
-        "zh-CN": "接下来学习",
-        "en": "Learn next",
-        "ja": "次を学ぶ",
-    },
     "learn_retry": {
         "zh-CN": "再讲一次",
         "en": "Explain again",
@@ -1173,9 +1624,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "復習で定着済み（間隔延長）",
     },
     "due_unanchored": {
-        "zh-CN": "无原文锚点，间隔减半",
-        "en": "no source anchor — halved interval",
-        "ja": "原文アンカーなし（間隔半減）",
+        "zh-CN": "无原文出处，提前复习",
+        "en": "no source location — review sooner",
+        "ja": "出所なし（早めに復習）",
     },
     "due_tier_overdue": {
         "zh-CN": "已逾期",
@@ -1247,6 +1698,31 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Review All Errors",
         "ja": "全エラーを復習",
     },
+    "error_book_show_all": {
+        "zh-CN": "查看全部 {n} 条",
+        "en": "Show all {n}",
+        "ja": "全{n}件を表示",
+    },
+    "error_book_collapse": {
+        "zh-CN": "收起",
+        "en": "Collapse",
+        "ja": "折りたたむ",
+    },
+    "my_answers_title": {
+        "zh-CN": "🗣 我的作答",
+        "en": "🗣 My answers",
+        "ja": "🗣 自分の解答",
+    },
+    "my_answers_hint": {
+        "zh-CN": "这里是你亲口写下的答案与实践输出，可随时回看并重学。",
+        "en": "Your own answers and practice outputs — revisit or relearn anytime.",
+        "ja": "自分が書いた解答と実践の記録。いつでも見返して学び直せます。",
+    },
+    "my_answers_open": {
+        "zh-CN": "再答",
+        "en": "Answer again",
+        "ja": "もう一度",
+    },
     "history_col_time": {"zh-CN": "时间", "en": "Time", "ja": "日時"},
     "history_col_concept": {"zh-CN": "概念", "en": "Concept", "ja": "概念"},
     "history_col_score": {"zh-CN": "得分", "en": "Score", "ja": "スコア"},
@@ -1272,9 +1748,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "このビューとは？",
     },
     "teacher_explain_body": {
-        "zh-CN": "教师模型 = 系统对这本书自己的理解（不是你的学习记录）。它深读材料后，为每个概念标注「为什么重要 / 前置知识 / 常见误解 / 外部连接」，并标出材料中矛盾、未定义、逻辑断点等可疑点（待解项）。「重新自检」= 让系统再深读一遍材料并更新理解（需要 LLM）。下方「概念笔记」逐条对应书中的概念，点击笔记可查看概念详情并开始学习。",
-        "en": "The Teacher Model is the system's own understanding of this book (not your study record). It reads deeply and marks each concept with \u201cwhy it matters / prerequisites / misconceptions / connections\u201d, plus suspicious points in the material (anomalies). \u201cRe-check\u201d = re-read the material and update the model (needs LLM). The concept notes below map one-to-one to the book's concepts — click one to see details and start learning.",
-        "ja": "教師モデルは、この本に対するシステム自身の理解です（あなたの学習記録ではありません）。各概念に「なぜ重要か/前提知識/よくある誤解/関連」を付け、資料の矛盾や未定義用語などの疑義（未解決項目）も示します。「再チェック」= 資料を読み直して理解を更新（LLMが必要）。下の「概念ノート」は本の概念に対応しており、クリックで詳細と学習を開始できます。",
+        "zh-CN": "教师模型 = 系统对这本书自己的理解（不是你的学习记录）。它深读材料后，为每个概念标注「为什么重要 / 前置知识 / 常见误解 / 外部连接」，并标出材料中矛盾、未定义、逻辑断点等可疑点（待解项）。「重新自检」= 让系统再深读一遍材料并更新理解（需要开启智能分析）。下方「概念笔记」逐条对应书中的概念，点击笔记可查看概念详情并开始学习。",
+        "en": "The Teacher Model is the system's own understanding of this book (not your study record). It reads deeply and marks each concept with \u201cwhy it matters / prerequisites / misconceptions / connections\u201d, plus suspicious points in the material (anomalies). \u201cRe-check\u201d = re-read the material and update the model (needs AI analysis). The concept notes below map one-to-one to the book's concepts — click one to see details and start learning.",
+        "ja": "教師モデルは、この本に対するシステム自身の理解です（あなたの学習記録ではありません）。各概念に「なぜ重要か/前提知識/よくある誤解/関連」を付け、資料の矛盾や未定義用語などの疑義（未解決項目）も示します。「再チェック」= 資料を読み直して理解を更新（AI分析が必要）。下の「概念ノート」は本の概念に対応しており、クリックで詳細と学習を開始できます。",
     },
     "teacher_status_done": {
         "zh-CN": "状态: 完成",
@@ -1282,14 +1758,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "状態: 完了",
     },
     "teacher_status_fallback": {
-        "zh-CN": "状态: 降级（未配置 LLM）",
-        "en": "Status: fallback (no LLM)",
-        "ja": "状態: フォールバック（LLM未設定）",
+        "zh-CN": "状态: 基础模式（未开启智能分析）",
+        "en": "Status: basic mode (AI analysis off)",
+        "ja": "状態: 基本モード（AI分析オフ）",
     },
     "teacher_status_failed": {
-        "zh-CN": "状态: 自检失败（已降级）",
-        "en": "Status: failed (degraded)",
-        "ja": "状態: 失敗（縮退）",
+        "zh-CN": "状态: 自检失败（已切基础模式）",
+        "en": "Status: failed (switched to basic mode)",
+        "ja": "状態: 失敗（基本モードに切替）",
     },
     "teacher_method": {"zh-CN": "方法: {m}", "en": "Method: {m}", "ja": "方法: {m}"},
     "teacher_time": {
@@ -1298,35 +1774,35 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "生成: {t}",
     },
     "teacher_anchor_rate": {
-        "zh-CN": "证据锚定率: {pct}（{n}/{total}）",
-        "en": "Evidence anchored: {pct} ({n}/{total})",
-        "ja": "証拠アンカー率: {pct}（{n}/{total}）",
+        "zh-CN": "证据定位率: {pct}（{n}/{total}）",
+        "en": "Evidence located: {pct} ({n}/{total})",
+        "ja": "証拠の特定率: {pct}（{n}/{total}）",
     },
     "teacher_unanchored_list": {
-        "zh-CN": "无锚点: {names}",
-        "en": "No anchor: {names}",
-        "ja": "アンカーなし: {names}",
+        "zh-CN": "无原文出处: {names}",
+        "en": "No source location: {names}",
+        "ja": "出所なし: {names}",
     },
     "teacher_unanchored_anomaly": {
-        "zh-CN": "概念「{name}」的证据未在原文中定位（模板补全或证据未锚定），讲解时注意甄别。",
-        "en": "Concept \"{name}\" has no located evidence in the source (template-enriched or unanchored); teach with care.",
-        "ja": "概念「{name}」の証拠は原文中に位置していません（テンプレート補完または未アンカー）。注意して教えてください。",
+        "zh-CN": "概念「{name}」的证据未在原文中定位（可能由专业知识包补全），讲解时注意甄别。",
+        "en": "Concept \"{name}\" has no located evidence in the source (possibly filled in by a knowledge pack); teach with care.",
+        "ja": "概念「{name}」の証拠は原文中に位置していません（ナレッジパック補完の可能性）。注意して教えてください。",
     },
     "teach_unanchored_warn": {
-        "zh-CN": "此概念无原文锚点：讲解基于关系网络与模板骨架，非逐字源自当前资产——遇到与原文冲突处，以原文为准。",
-        "en": "No source anchor for this concept: the lesson is built from the relation network and template skeleton, not verbatim from this asset — where it conflicts with the source, trust the source.",
-        "ja": "この概念には原文アンカーがありません：説明は関係ネットワークとテンプレート骨格に基づきます。原文と矛盾する場合は原文を優先してください。",
+        "zh-CN": "这段讲解没有逐字原文出处：内容依据概念关系和专业知识包推断——若与原文冲突，请以原文为准。",
+        "en": "This explanation has no verbatim source location: it is inferred from concept relations and the domain knowledge pack — where it conflicts with the source, trust the source.",
+        "ja": "この説明には逐字の出所がありません：概念関係とナレッジパックに基づく内容です。原文と矛盾する場合は原文を優先してください。",
     },
     "kind_unanchored_source": {
-        "zh-CN": "无原文锚点",
-        "en": "Unanchored",
-        "ja": "原文アンカーなし",
+        "zh-CN": "无原文出处",
+        "en": "No source location",
+        "ja": "原文の出所なし",
     },
     "recheck": {"zh-CN": "重新自检", "en": "Re-check", "ja": "再チェック"},
     "recheck_needs_llm": {
-        "zh-CN": "（需要配置 LLM 才能重新自检）",
-        "en": "(configure an LLM key to re-check)",
-        "ja": "（再チェックにはLLMキーが必要）",
+        "zh-CN": "（开启智能分析后才能重新自检）",
+        "en": "(enable AI analysis to re-check)",
+        "ja": "（再チェックにはAI分析の有効化が必要）",
     },
     "anomaly_label": {
         "zh-CN": "待解项（{n} 条）— 系统对材料的怀疑点：",
@@ -1350,7 +1826,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Learner signal",
         "ja": "学習者シグナル",
     },
-    "kind_needs_llm": {"zh-CN": "需要 LLM", "en": "Needs LLM", "ja": "LLMが必要"},
+    "kind_needs_llm": {"zh-CN": "需要智能分析", "en": "Needs AI analysis", "ja": "AI 分析が必要"},
     "sev_high": {"zh-CN": "高", "en": "high", "ja": "高"},
     "sev_medium": {"zh-CN": "中", "en": "medium", "ja": "中"},
     "sev_low": {"zh-CN": "低", "en": "low", "ja": "低"},
@@ -1425,6 +1901,21 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh-CN": "点击左侧节点 - 查看它的定义、关系与教师理解",
         "en": "Click a node to see its definition, relations and teacher notes",
         "ja": "ノードをクリックして定義・関係・教師ノートを表示",
+    },
+    "detail_fold_structure": {
+        "zh-CN": "关系与认知位置",
+        "en": "Relations & position",
+        "ja": "関係と位置",
+    },
+    "detail_fold_progress": {
+        "zh-CN": "学习进展",
+        "en": "Learning progress",
+        "ja": "学習の進捗",
+    },
+    "detail_fold_reference": {
+        "zh-CN": "参考资料",
+        "en": "References",
+        "ja": "参考資料",
     },
     "detail_relations": {
         "zh-CN": "关系 · 点击继续游走",
@@ -1591,9 +2082,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "教師モデルに反映",
     },
     "compare_incorporated": {
-        "zh-CN": "✓ 已沉淀：共享锚点与掌握度差距将参与教学排序",
-        "en": "✓ Sunk in: anchors & mastery gap now shape teaching order",
-        "ja": "✓ 反映済み：共有アンカーと習得度差が授業順に反映",
+        "zh-CN": "✓ 已沉淀：共享关联点与掌握度差距将参与教学排序",
+        "en": "✓ Sunk in: shared links & mastery gap now shape teaching order",
+        "ja": "✓ 反映済み：共通のつながりと習得度差が授業順に反映",
     },
     "compare_suggest_prereq": {
         "zh-CN": "💡 先夯实「{name}」——它是理解另一概念的前提",
@@ -1778,7 +2269,7 @@ _STRINGS: dict[str, dict[str, str]] = {
     "graph_path_edge": {"zh-CN": "路径相邻", "en": "path", "ja": "経路"},
     "stat_total": {"zh-CN": "总概念", "en": "Concepts", "ja": "総概念"},
     "stat_unstudied": {"zh-CN": "未学习", "en": "Unstudied", "ja": "未学習"},
-    "stat_anomaly": {"zh-CN": "异常", "en": "Anomalies", "ja": "疑義"},
+    "stat_anomaly": {"zh-CN": "待澄清疑点", "en": "Open questions", "ja": "要確認の疑点"},
     "tab_concepts": {"zh-CN": "概念掌握度", "en": "Concepts", "ja": "概念の習得度"},
     "tab_history": {"zh-CN": "学习历史", "en": "History", "ja": "履歴"},
     "dash_subtitle": {
@@ -1786,17 +2277,22 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Source: {title} | Concepts: {concepts} | Method: {method}",
         "ja": "出典: {title} | 概念: {concepts} | 方法: {method}",
     },
-    "method_llm": {"zh-CN": "LLM 抽取", "en": "LLM extraction", "ja": "LLM抽出"},
+    "method_llm": {"zh-CN": "智能分析", "en": "AI analysis", "ja": "AI分析"},
     "method_fallback": {
-        "zh-CN": "确定性模式（未深度加工）",
-        "en": "Deterministic mode (not deep-processed)",
-        "ja": "決定論モード（未深処理）",
+        "zh-CN": "基础模式（未深度加工）",
+        "en": "Basic mode (not deep-processed)",
+        "ja": "基本モード（未深処理）",
     },
     "method_unknown": {"zh-CN": "未知方法", "en": "Unknown method", "ja": "不明な方法"},
     "dash_fallback_warn": {
-        "zh-CN": "⚠ 该资产未经 LLM 深加工（{method}）：概念定义与关系可能不完整。配置 LLM Key 后重新导入可得带证据的定义、关系与异常检测。",
-        "en": "⚠ This asset was not deep-processed by the LLM ({method}): concept definitions and relations may be incomplete. Re-import after configuring an LLM key to get evidence-backed definitions, relations and anomaly detection.",
-        "ja": "⚠ この資産はLLMで深処理されていません（{method}）：概念定義と関係が不完全な可能性があります。LLMキー設定後に再インポートすると、証拠付き定義・関係・異常検出が得られます。",
+        "zh-CN": "⚠ 这份资料未经过智能分析深加工（{method}）：概念定义与关系可能不完整。开启智能分析后重新导入，可获得带原文出处的定义、关系与疑点检测。",
+        "en": "⚠ This material was not deep-processed by AI analysis ({method}): concept definitions and relations may be incomplete. Re-import with AI analysis enabled to get evidence-backed definitions, relations and doubt detection.",
+        "ja": "⚠ この資料はAI分析で深処理されていません（{method}）：概念定義と関係が不完全な可能性があります。AI分析を有効にして再インポートすると、出所付き定義・関係・疑義検出が得られます。",
+    },
+    "dash_fallback_reason": {
+        "zh-CN": "降级原因：{reason}",
+        "en": "Degradation reason: {reason}",
+        "ja": "縮退理由：{reason}",
     },
     "dash_loading": {
         "zh-CN": "加载知识数据...",
@@ -1869,6 +2365,41 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "related",
         "ja": "関連",
     },
+    "rel_gloss_prereq": {
+        "zh-CN": "先弄懂「{a}」，才看得懂「{b}」。",
+        "en": 'Understand "{a}" first, then "{b}" makes sense.',
+        "ja": "まず「{a}」を理解すると、「{b}」がわかります。",
+    },
+    "rel_gloss_causes": {
+        "zh-CN": "「{a}」发生变化，会带动「{b}」。",
+        "en": 'When "{a}" changes, it drives "{b}".',
+        "ja": "「{a}」が変わると「{b}」も動きます。",
+    },
+    "rel_gloss_part_of": {
+        "zh-CN": "「{a}」是「{b}」的组成部分。",
+        "en": '"{a}" is a part of "{b}".',
+        "ja": "「{a}」は「{b}」の構成要素です。",
+    },
+    "rel_gloss_is_a": {
+        "zh-CN": "「{a}」是「{b}」的一种。",
+        "en": '"{a}" is a kind of "{b}".',
+        "ja": "「{a}」は「{b}」の一種です。",
+    },
+    "rel_gloss_contrast": {
+        "zh-CN": "「{a}」和「{b}」放在一起对照，差别才看得清。",
+        "en": 'Compare "{a}" with "{b}" to see the difference.',
+        "ja": "「{a}」と「{b}」を並べて比べると違いが見えます。",
+    },
+    "rel_gloss_related": {
+        "zh-CN": "「{a}」和「{b}」相关，但原文没说明是哪一种关系。",
+        "en": '"{a}" relates to "{b}", but the source does not say how.',
+        "ja": "「{a}」と「{b}」は関連しますが、原文は関係の種類を明示していません。",
+    },
+    "legend_direction": {
+        "zh-CN": "箭头指向关系方向 · ◇ 贴在整体一端 · 虚线 = 对比",
+        "en": "Arrow = direction · ◇ sits on the whole · dashed = contrast",
+        "ja": "矢印 = 関係の向き · ◇ は全体側 · 破線 = 対比",
+    },
     "legend_edges_title": {
         "zh-CN": "关系类型",
         "en": "Relation types",
@@ -1914,6 +2445,46 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Mastery heatmap: red=weak, green=mastered — see global gaps at a glance",
         "ja": "習熟度ヒートマップ：赤=苦手、緑=習熟、全体の弱点が一目で分かる",
     },
+    "map_mastery_filter_tip": {
+        "zh-CN": "按掌握度隔离概念（仅全图模式生效）：聚焦未学、薄弱或已掌握",
+        "en": "Isolate concepts by mastery (full network only): unstudied, weak, or mastered",
+        "ja": "習熟度で概念を絞り込み（全体図のみ）：未学習・苦手・習得済みを集中表示",
+    },
+    "legend_heat_low": {
+        "zh-CN": "薄弱 / 未学",
+        "en": "Weak / unstudied",
+        "ja": "苦手・未学習",
+    },
+    "legend_heat_high": {
+        "zh-CN": "已掌握",
+        "en": "Mastered",
+        "ja": "習得済み",
+    },
+    "legend_density_low": {
+        "zh-CN": "低学习价值",
+        "en": "Low learning value",
+        "ja": "学習価値 低",
+    },
+    "legend_density_high": {
+        "zh-CN": "高学习价值（重要×未学）",
+        "en": "High value (important × unlearned)",
+        "ja": "学習価値 高（重要×未学習）",
+    },
+    "legend_hop2_node": {
+        "zh-CN": "二跳邻域",
+        "en": "2-hop neighbor",
+        "ja": "2次隣接ノード",
+    },
+    "pan_feedback_full": {
+        "zh-CN": "✓ 结构排序全部正确——全景已理解。建议趁热继续学透：",
+        "en": "✓ Perfect order — panorama understood. Keep the momentum, learn next:",
+        "ja": "✓ 並びは完璧——全体像を理解しました。勢いに乗って次へ：",
+    },
+    "pan_feedback_partial": {
+        "zh-CN": "排序 {score}% 正确。重看分步动画，或从路径首位开始学透：",
+        "en": "Order {score}% correct. Replay the animation, or start with the first path concept:",
+        "ja": "並びは {score}% 正解。アニメを再生し直すか、パスの最初から学びましょう：",
+    },
     "concept_search_ph": {
         "zh-CN": "搜索概念名称或定义…",
         "en": "Search concept name or definition…",
@@ -1943,6 +2514,286 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh-CN": "已掌握",
         "en": "Mastered",
         "ja": "習得済み",
+    },
+    "filter_favorite": {
+        "zh-CN": "★ 收藏",
+        "en": "★ Favorites",
+        "ja": "★ お気に入り",
+    },
+    "filter_note": {
+        "zh-CN": "📝 有笔记",
+        "en": "📝 With notes",
+        "ja": "📝 ノートあり",
+    },
+    "fav_toggle_tip": {
+        "zh-CN": "收藏此概念，之后可在知识模型页按「收藏」快速筛选",
+        "en": "Bookmark this concept; filter by Favorites in the Knowledge view",
+        "ja": "この概念をブックマーク（知識モデルで「お気に入り」絞り込み）",
+    },
+    "note_title": {
+        "zh-CN": "我的笔记",
+        "en": "My note",
+        "ja": "マイノート",
+    },
+    "note_empty": {
+        "zh-CN": "还没有笔记——用自己的话写下理解，比再看一遍更记得牢",
+        "en": "No note yet — write it in your own words; writing beats re-reading",
+        "ja": "ノートはまだありません—自分の言葉で書く方が記憶に残ります",
+    },
+    "note_edit": {
+        "zh-CN": "✏️ 写笔记",
+        "en": "✏️ Write note",
+        "ja": "✏️ ノートを書く",
+    },
+    "note_dialog_title": {
+        "zh-CN": "我的笔记 · {name}",
+        "en": "My note · {name}",
+        "ja": "マイノート · {name}",
+    },
+    "note_hint": {
+        "zh-CN": "用自己的话总结：它是什么、为什么重要、和别的概念怎么连。写比看更记得住。",
+        "en": "Summarize in your own words: what it is, why it matters, how it connects.",
+        "ja": "自分の言葉で要約：それは何か・なぜ大事か・他の概念とどう繋がるか。",
+    },
+    "replay_section": {
+        "zh-CN": "上次讲解",
+        "en": "Last lesson",
+        "ja": "前回の講義",
+    },
+    "replay_meta": {
+        "zh-CN": "{date} · 风格：{style}",
+        "en": "{date} · Style: {style}",
+        "ja": "{date} · スタイル：{style}",
+    },
+    "replay_btn": {
+        "zh-CN": "↺ 重看讲解",
+        "en": "↺ Re-read lesson",
+        "ja": "↺ 講義を再読",
+    },
+    "replay_dialog_title": {
+        "zh-CN": "上次讲解 · {name}",
+        "en": "Last lesson · {name}",
+        "ja": "前回の講義 · {name}",
+    },
+    "replay_steps": {
+        "zh-CN": "拆解步骤",
+        "en": "Step breakdown",
+        "ja": "ステップ分解",
+    },
+    "score_trail": {
+        "zh-CN": "近 {n} 次：{scores}",
+        "en": "Last {n}: {scores}",
+        "ja": "直近{n}回：{scores}",
+    },
+    "score_trail_tip": {
+        "zh-CN": "历次成绩（↺ = 复习那次），看趋势比看单个点更有用",
+        "en": "Evaluation scores over time (↺ = review); the trend beats any single point",
+        "ja": "評価スコアの推移（↺ = 復習）—単点より傾向が大事",
+    },
+    "stat_avg_mastery": {
+        "zh-CN": "平均掌握度",
+        "en": "Avg mastery",
+        "ja": "平均習熟度",
+    },
+    "stat_unanchored": {
+        "zh-CN": "无原文出处",
+        "en": "No source",
+        "ja": "出典なし",
+    },
+    "map_path_mode": {
+        "zh-CN": "路径模式",
+        "en": "Path mode",
+        "ja": "パスモード",
+    },
+    "map_path_mode_tip": {
+        "zh-CN": "按学习路径顺序高亮全书概念，用 ◀ ▶ 沿路径逐一步进",
+        "en": "Highlight every concept on the learning path; step through with ◀ ▶",
+        "ja": "学習パス上の全概念をハイライトし、◀ ▶ で順にたどる",
+    },
+    "map_path_prev_tip": {
+        "zh-CN": "路径中的上一个概念",
+        "en": "Previous concept on the path",
+        "ja": "パス上の前の概念",
+    },
+    "map_path_next_tip": {
+        "zh-CN": "路径中的下一个概念",
+        "en": "Next concept on the path",
+        "ja": "パス上の次の概念",
+    },
+    "map_path_pos": {
+        "zh-CN": "路径 {i} / {n} · {name}",
+        "en": "Path {i} / {n} · {name}",
+        "ja": "パス {i} / {n} · {name}",
+    },
+    "flashcard_title": {
+        "zh-CN": "闪卡复习",
+        "en": "Flashcard Review",
+        "ja": "フラッシュカード復習",
+    },
+    "flashcard_btn": {
+        "zh-CN": "🃏 闪卡复习",
+        "en": "🃏 Flashcards",
+        "ja": "🃏 フラッシュカード",
+    },
+    "flashcard_btn_tip": {
+        "zh-CN": "闪卡模式快速复习到期概念，自评打分记入掌握度",
+        "en": "Flashcard mode for rapid review of due concepts; self-rates feed mastery",
+        "ja": "期日概念のフラッシュカード復習、自己評価が習熟度に反映",
+    },
+    "flashcard_progress": {
+        "zh-CN": "第 {n} / {total} 张",
+        "en": "Card {n} / {total}",
+        "ja": "{n} / {total} 枚目",
+    },
+    "flashcard_front_hint": {
+        "zh-CN": "你能想起这个概念的定义吗？",
+        "en": "Can you recall the definition?",
+        "ja": "この定義を思い出せますか？",
+    },
+    "flashcard_reveal": {
+        "zh-CN": "翻面看答案",
+        "en": "Reveal answer",
+        "ja": "答えを見る",
+    },
+    "flashcard_skip": {
+        "zh-CN": "跳过",
+        "en": "Skip",
+        "ja": "スキップ",
+    },
+    "flashcard_no_info": {
+        "zh-CN": "无可用定义或证据",
+        "en": "No definition or evidence available",
+        "ja": "定義・証拠なし",
+    },
+    "flashcard_rate_hint": {
+        "zh-CN": "自我评估：你记得多少？",
+        "en": "Rate yourself: how well did you recall?",
+        "ja": "自己評価：どれくらい思い出せた？",
+    },
+    "flashcard_knew": {
+        "zh-CN": "记住了",
+        "en": "Knew it",
+        "ja": "覚えてた",
+    },
+    "flashcard_half": {
+        "zh-CN": "部分",
+        "en": "Partial",
+        "ja": "一部",
+    },
+    "flashcard_forgot": {
+        "zh-CN": "忘了",
+        "en": "Forgot",
+        "ja": "忘れた",
+    },
+    "flashcard_done": {
+        "zh-CN": "复习完成",
+        "en": "Review complete",
+        "ja": "復習完了",
+    },
+    "flashcard_summary": {
+        "zh-CN": "共 {total} 张，自评 {rated} 张，记住 {known} 张，忘记 {forgot} 张",
+        "en": "{total} cards, rated {rated}, known {known}, forgot {forgot}",
+        "ja": "全{total}枚、評価{rated}枚、覚えた{known}枚、忘れた{forgot}枚",
+    },
+    "flashcard_close": {
+        "zh-CN": "关闭",
+        "en": "Close",
+        "ja": "閉じる",
+    },
+    "timeline_title": {
+        "zh-CN": "📅 学习轨迹",
+        "en": "📅 Learning Timeline",
+        "ja": "📅 学習タイムライン",
+    },
+    "timeline_hint": {
+        "zh-CN": "每行一个概念，圆点=评估（绿=通过 橙=部分 红=未过），按时间排列",
+        "en": "Each row = a concept, dots = evaluations (green=pass, amber=partial, red=fail)",
+        "ja": "各行=概念、ドット=評価（緑=合格、橙=一部、赤=不合格）",
+    },
+    "timeline_empty": {
+        "zh-CN": "尚无学习记录，开始学习后这里会显示轨迹",
+        "en": "No learning records yet — start learning to see your trajectory",
+        "ja": "学習記録なし — 学習を始めると軌跡が表示されます",
+    },
+    "prereq_context_title": {
+        "zh-CN": "🧱 前置知识",
+        "en": "🧱 Prerequisites",
+        "ja": "🧱 前提知識",
+    },
+    "prereq_context_warn": {
+        "zh-CN": "⚠ 存在薄弱前置概念，建议先复习后再学本概念",
+        "en": "⚠ Weak prerequisites detected — review them first",
+        "ja": "⚠ 弱い前提知識あり — 先に復習を推奨",
+    },
+    "unlock_title": {
+        "zh-CN": "🔓 学会它，解锁什么",
+        "en": "🔓 What it unlocks",
+        "ja": "🔓 これを学ぶと開けるもの",
+    },
+    "unlock_intro": {
+        "zh-CN": "下游 {n} 个概念以它为前置/因果上游——它是通路，不只是知识点：",
+        "en": "{n} downstream concept(s) depend on it as prerequisite or causal upstream — it is a passage, not just a fact:",
+        "ja": "下流 {n} 概念が前提・因果上流として依存 — 単なる知識ではなく通路です：",
+    },
+    "streak_label": {
+        "zh-CN": "连续学习",
+        "en": "Streak",
+        "ja": "連続学習",
+    },
+    "streak_detail": {
+        "zh-CN": "🔥 当前 {current} 天连续 · 历史最长 {best} 天 · 累计学习 {total_days} 天",
+        "en": "🔥 {current}-day current streak · best {best} days · {total_days} total days",
+        "ja": "🔥 現在{current}日連続 · 最長{best}日 · 累計{total_days}日",
+    },
+    "misconception_section": {
+        "zh-CN": "⚠ 常见误解",
+        "en": "⚠ Common Misconceptions",
+        "ja": "⚠ よくある誤解",
+    },
+    "misconception_hint": {
+        "zh-CN": "答题前请检查自己是否存在以下误解",
+        "en": "Check your understanding against these pitfalls before answering",
+        "ja": "回答前に以下の誤解がないか確認してください",
+    },
+    "coverage_label": {
+        "zh-CN": "概念覆盖",
+        "en": "Concept coverage",
+        "ja": "概念カバレッジ",
+    },
+    "struct_complexity": {
+        "zh-CN": "结构复杂度",
+        "en": "Structural complexity",
+        "ja": "構造複雑度",
+    },
+    "struct_complex_high": {
+        "zh-CN": "核心枢纽",
+        "en": "Key hub",
+        "ja": "中核ハブ",
+    },
+    "struct_complex_med": {
+        "zh-CN": "中等连接",
+        "en": "Medium hub",
+        "ja": "中程度ハブ",
+    },
+    "struct_complex_low": {
+        "zh-CN": "叶节点",
+        "en": "Leaf node",
+        "ja": "リーフノード",
+    },
+    "struct_complexity_tip": {
+        "zh-CN": "基于图中心性：多少概念依赖此概念，值越高越关键",
+        "en": "Graph centrality: how many concepts depend on this one; higher = more critical",
+        "ja": "グラフ中心性：この概念に依存する概念の数、高いほど重要",
+    },
+    "hop2_view": {
+        "zh-CN": "🔍 2跳探索",
+        "en": "🔍 2-Hop",
+        "ja": "🔍 2ホップ",
+    },
+    "hop2_tip": {
+        "zh-CN": "聚焦概念时扩展显示第二环邻居（浅色节点），看清知识的辐射范围",
+        "en": "When focused, extend to second-ring neighbors (dimmed) to see the concept's reach",
+        "ja": "フォーカス時、第2リングの隣接概念も表示（薄色）、知識の広がりを見える化",
     },
     "ctx_teach": {
         "zh-CN": "进入教学",
@@ -2045,7 +2896,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "{ok}/{n} positions right — green ones are correct, adjust the rest",
         "ja": "{ok}/{n} が正位置（緑が正解）、残りを調整しよう",
     },
-    "audit_title": {"zh-CN": "轨迹审计", "en": "Trace Audit", "ja": "軌跡監査"},
+    "audit_title": {"zh-CN": "学习轨迹明细", "en": "Learning trace details", "ja": "学習軌跡の明細"},
     "audit_hint": {
         "zh-CN": "每个掌握度数字都能追到下方记录的学习轨迹行——记录即事实源，不采信叙述性文本。",
         "en": "Every mastery number traces to the recorded attempt rows below — the record, not narrative text, is the source of truth.",
@@ -2054,10 +2905,11 @@ _STRINGS: dict[str, dict[str, str]] = {
     "audit_col_attempts": {"zh-CN": "作答次数", "en": "Attempts", "ja": "回答回数"},
     "audit_col_avg": {"zh-CN": "平均分", "en": "Avg score", "ja": "平均スコア"},
     "audit_col_mastery": {"zh-CN": "掌握度", "en": "Mastery", "ja": "習得度"},
-    "audit_col_channels": {"zh-CN": "学习通道", "en": "Channels", "ja": "チャネル"},
+    "audit_col_channels": {"zh-CN": "学习方式", "en": "Channels", "ja": "チャネル"},
     "audit_channel_answer": {"zh-CN": "答题", "en": "Answer", "ja": "回答"},
     "audit_channel_quiz": {"zh-CN": "自测", "en": "Self-test", "ja": "自己テスト"},
     "audit_channel_practice": {"zh-CN": "实践", "en": "Practice", "ja": "実践"},
+    "audit_channel_flashcard": {"zh-CN": "闪卡复习", "en": "Flashcard", "ja": "フラッシュカード"},
     "audit_rotated_n": {
         "zh-CN": "策略轮换 {n} 次",
         "en": "{n} style rotations",
@@ -2106,14 +2958,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "ここに学習教材を貼り付け…",
     },
     "llm_ready": {
-        "zh-CN": "✓ LLM 已配置",
-        "en": "✓ LLM configured",
-        "ja": "✓ LLM 設定済み",
+        "zh-CN": "✓ 智能分析已开启",
+        "en": "✓ AI analysis on",
+        "ja": "✓ AI 分析オン",
     },
     "llm_not_ready_detail": {
-        "zh-CN": "未配置模型服务；当前将使用确定性回退，仍可导入和建立基础知识图谱，但定义、关系和教师自检会较简化。配置模型服务后重新导入可获得完整体验。",
-        "en": "No model service is configured; deterministic fallback is active. You can still import material and build a basic knowledge map, but definitions, relations and teacher checks will be simpler. Configure a model service and re-import for the full experience.",
-        "ja": "モデルサービスが設定されていないため、決定論的フォールバックを使用します。資料のインポートと基本的な知識マップの作成はできますが、定義・関係・教師モデルのチェックは簡略化されます。完全な体験にはモデルサービスを設定して再インポートしてください。",
+        "zh-CN": "未开启智能分析；仍可导入资料并搭好知识地图，只是概念解释、概念间关系与疑点检查会比较简单。开启后重新导入即可获得完整体验。",
+        "en": "AI analysis is off. You can still import material and build a knowledge map — concept explanations, relations and doubt checks will simply be simpler. Turn it on and re-import for the full experience.",
+        "ja": "AI 分析はオフです。資料のインポートと知識マップの作成はできますが、概念の解説・関係・疑義検出は簡略化されます。オンにして再インポートすると完全な体験が得られます。",
     },
     "filter_supported": {
         "zh-CN": "支持的文件",
@@ -2146,9 +2998,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "再チェック完了: 未解決 {n} 件",
     },
     "build_needs_llm": {
-        "zh-CN": "需要配置 LLM 才能生成教师模型",
-        "en": "An LLM key is required to build the teacher model",
-        "ja": "教師モデルの生成にはLLMキーが必要です",
+        "zh-CN": "需要开启智能分析才能生成教师模型",
+        "en": "AI analysis is required to build the teacher model",
+        "ja": "教師モデルの生成にはAI分析が必要です",
     },
     "building_teacher": {
         "zh-CN": "正在生成教师模型，请稍候...",
@@ -2239,12 +3091,6 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "priority {s:.2f}",
         "ja": "優先度 {s:.2f}",
     },
-    "focus_title": {
-        "zh-CN": "聚焦：{name}（概念结构图）",
-        "en": "Focus: {name} (concept map)",
-        "ja": "フォーカス: {name}（概念図）",
-    },
-    "concept_structure": {"zh-CN": "概念结构图", "en": "Concept Map", "ja": "概念図"},
     "import_failed": {
         "zh-CN": "处理失败: {msg}",
         "en": "Processing failed: {msg}",
@@ -2252,49 +3098,49 @@ _STRINGS: dict[str, dict[str, str]] = {
     },
     # -- domain template (领域模板) -----------------------------------------
     "domain_template_title": {
-        "zh-CN": "领域模板",
-        "en": "Domain template",
-        "ja": "ドメインテンプレート",
+        "zh-CN": "专业知识包",
+        "en": "Domain knowledge pack",
+        "ja": "分野ナレッジパック",
     },
     "domain_template_ask": {
-        "zh-CN": "检测到本资料可套用领域模板《{template}》：命中 {matched}/{total} 个模板概念（覆盖率 {pct}）。套用后将为命中的概念补充模板释义，并可能把学习路径更新为领域推荐顺序。是否套用？",
-        "en": "A domain template matches this material: \u201c{template}\u201d — {matched}/{total} template concepts matched (coverage {pct}). Applying it fills in template definitions for matched concepts and may rewrite the learning path into the domain-recommended order. Apply it?",
-        "ja": "この資料に適用できるドメインテンプレート「{template}」を検出しました（{matched}/{total} 概念が一致、カバレッジ {pct}）。適用すると一致した概念の定義を補完し、学習パスを領域推奨の順序に更新する場合があります。適用しますか？",
+        "zh-CN": "发现一份适合本资料的专业知识包《{template}》：它收录了该领域 {total} 个标准概念，可为你文中的概念补充专业释义，学习路径也会更贴合这一领域。要套用吗？",
+        "en": "A domain knowledge pack fits this material: \u201c{template}\u201d. It covers {total} standard concepts in this field — applying it adds professional definitions to your concepts and aligns the learning path with the field. Apply it?",
+        "ja": "この資料に合う分野ナレッジパック「{template}」が見つかりました。この分野の標準概念を {total} 件収録しており、適用すると概念に専門的な定義を補い、学習パスもこの分野に合わせて整えます。適用しますか？",
     },
     "domain_template_applied": {
-        "zh-CN": "已套用领域模板《{template}》：命中 {matched}/{total} 个概念（覆盖率 {pct}），补充 {enriched} 个概念的释义，学习路径已更新为领域推荐顺序。",
-        "en": "Domain template \u201c{template}\u201d applied: {matched}/{total} concepts matched (coverage {pct}), {enriched} concept(s) enriched, learning path rewritten into the domain order.",
-        "ja": "ドメインテンプレート「{template}」を適用しました：{matched}/{total} 概念が一致（カバレッジ {pct}）、{enriched} 概念の定義を補完し、学習パスを領域推奨の順序に更新しました。",
+        "zh-CN": "已套用《{template}》：为 {enriched} 个概念补充了专业释义，学习路径已按这一领域的推荐顺序重排。",
+        "en": "Applied \u201c{template}\u201d: {enriched} concept(s) now carry professional definitions, and the learning path follows the field's recommended order.",
+        "ja": "「{template}」を適用しました：{enriched} 件の概念に専門的な定義を補い、学習パスをこの分野の推奨順に整えました。",
     },
     "domain_template_applied_degraded": {
-        "zh-CN": "已套用领域模板《{template}》：命中 {matched}/{total} 个概念（覆盖率 {pct}），补充 {enriched} 个概念的释义；学习路径保持原顺序（{reason}）。",
-        "en": "Domain template \u201c{template}\u201d applied: {matched}/{total} concepts matched (coverage {pct}), {enriched} concept(s) enriched; the learning path was left untouched ({reason}).",
-        "ja": "ドメインテンプレート「{template}」を適用しました：{matched}/{total} 概念が一致（カバレッジ {pct}）、{enriched} 概念の定義を補完。学習パスは元の順序のままです（{reason}）。",
+        "zh-CN": "已套用《{template}》：为 {enriched} 个概念补充了专业释义；学习路径暂时保持原顺序（{reason}）。",
+        "en": "Applied \u201c{template}\u201d: {enriched} concept(s) now carry professional definitions; the learning path stays in its original order ({reason}).",
+        "ja": "「{template}」を適用しました：{enriched} 件の概念に専門的な定義を補いました。学習パスはしばらく元の順序のままです（{reason}）。",
     },
     "domain_template_reason_degraded_no_mapping": {
-        "zh-CN": "模板概念未能与本文概念对应",
-        "en": "no template concept matched this asset",
-        "ja": "テンプレート概念が本資料の概念と一致しませんでした",
+        "zh-CN": "这份资料里的概念和知识包对不上",
+        "en": "the pack's concepts don't line up with this material",
+        "ja": "この資料の概念とパックが対応しませんでした",
     },
     "domain_template_reason_degraded_low_coverage": {
-        "zh-CN": "覆盖率低于阈值",
-        "en": "coverage below the required threshold",
-        "ja": "カバレッジが閾値未満",
+        "zh-CN": "对得上的概念太少，暂不调整学习顺序",
+        "en": "too few concepts line up, so the order stays as is",
+        "ja": "対応する概念が少なすぎるため、順序は変更しませんでした",
     },
     "domain_template_reason_unknown_domain": {
-        "zh-CN": "该领域暂无可用模板",
-        "en": "no template registered for this domain",
-        "ja": "この領域のテンプレートは未登録です",
+        "zh-CN": "这个领域还没有对应的知识包",
+        "en": "no knowledge pack exists for this field yet",
+        "ja": "この分野のパックはまだありません",
     },
     "domain_template_reason_other": {
-        "zh-CN": "未满足套用条件",
-        "en": "apply conditions not met",
-        "ja": "適用条件を満たしていません",
+        "zh-CN": "暂时还不满足套用条件",
+        "en": "the conditions for applying it aren't met yet",
+        "ja": "適用条件をまだ満たしていません",
     },
     "domain_template_failed": {
-        "zh-CN": "套用领域模板失败：{e}。本次导入将按原流程继续。",
-        "en": "Applying the domain template failed: {e}. The import continues unchanged.",
-        "ja": "ドメインテンプレートの適用に失敗しました：{e}。インポートはそのまま続行します。",
+        "zh-CN": "套用专业知识包失败：{e}。本次导入将按原流程继续。",
+        "en": "Applying the domain knowledge pack failed: {e}. The import continues unchanged.",
+        "ja": "分野ナレッジパックの適用に失敗しました：{e}。インポートはそのまま続行します。",
     },
     "selflearning_done": {
         "zh-CN": "自我学习完成: {n} 条待解项",
@@ -2334,6 +3180,26 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "Correct order",
         "ja": "正しい順序",
     },
+    "quiz_miss_title": {
+        "zh-CN": "最近一次自测错题对照",
+        "en": "Last self-test miss",
+        "ja": "前回のセルフテストの誤答",
+    },
+    "quiz_miss_question": {
+        "zh-CN": "题目：{q}",
+        "en": "Question: {q}",
+        "ja": "問題：{q}",
+    },
+    "quiz_miss_yours": {
+        "zh-CN": "你的作答：{s}",
+        "en": "Your answer: {s}",
+        "ja": "あなたの解答：{s}",
+    },
+    "quiz_miss_expected": {
+        "zh-CN": "正确答案：{s}",
+        "en": "Correct answer: {s}",
+        "ja": "正解：{s}",
+    },
     "search_in_source": {
         "zh-CN": "🔍 搜索原文（回车定位）",
         "en": "🔍 Search the source (Enter)",
@@ -2345,9 +3211,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "en": "{n} matches",
         "ja": "{n} 件見つかりました",
     },
-    "topics_title": {"zh-CN": "🧩 主题聚合", "en": "🧩 Topics", "ja": "🧩 トピック"},
+    "topics_title": {"zh-CN": "🧩 主题分组", "en": "🧩 Topics", "ja": "🧩 トピック"},
     "topics_hint": {
-        "zh-CN": "概念按知识关系自动聚类——每个主题是一组互相联系的概念，点击「学习主题」从头学起",
+        "zh-CN": "概念按知识关系自动分组——每个主题是一组互相联系的概念，点击「学习主题」从头学起",
         "en": "Concepts cluster automatically by relation — each topic is a group of linked ideas; click to learn it from the start",
         "ja": "概念は関係性で自動クラスタリングされます。トピックをクリックして最初から学べます",
     },
@@ -2399,9 +3265,9 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "外部概念 · ",
     },
     "external_no_llm": {
-        "zh-CN": "「{name}」是外部概念（来自大模型知识，不在本书中）。配置 LLM 后可点击查看解释。",
-        "en": "\u201c{name}\u201d is an external concept (from the model's knowledge, not in this book). Configure an LLM to see its explanation.",
-        "ja": "「{name}」は外部概念です（本にはなく、モデルの知識に由来）。LLMを設定すると説明を表示できます。",
+        "zh-CN": "「{name}」是外部概念（来自大模型知识，不在本书中）。开启智能分析后可点击查看解释。",
+        "en": "\u201c{name}\u201d is an external concept (from the model's knowledge, not in this book). Enable AI analysis to see its explanation.",
+        "ja": "「{name}」は外部概念です（本にはなく、モデルの知識に由来）。AI分析を有効にすると説明を表示できます。",
     },
     "badge_hot": {
         "zh-CN": "高价值·未学",
@@ -2437,6 +3303,11 @@ _STRINGS: dict[str, dict[str, str]] = {
         "zh-CN": "其他/未标注章节",
         "en": "Other / unassigned",
         "ja": "その他/未割当",
+    },
+    "toc_row_tip": {
+        "zh-CN": "单击：在概念图中打开　·　双击：跳到原文证据",
+        "en": "Click: open in concept map  ·  Double-click: jump to source evidence",
+        "ja": "クリック：概念マップで開く　·　ダブルクリック：原文の根拠へ",
     },
     "chapter_label": {
         "zh-CN": "所属章节：{ch}",
@@ -2545,7 +3416,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "ステップ {cur} / 3：{msg}",
     },
     "import_stage_parse": {
-        "zh-CN": "正在解析资料并抽取知识…",
+        "zh-CN": "正在解析资料并整理知识…",
         "en": "Parsing the material and extracting knowledge…",
         "ja": "資料を解析して知識を抽出中…",
     },
@@ -2555,7 +3426,7 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "教師モデルを構築し知識のギャップを確認中…",
     },
     "import_extracted_concepts": {
-        "zh-CN": "已抽取 {n} 个概念，正在构建教师模型…",
+        "zh-CN": "已提取 {n} 个概念，正在构建教师模型…",
         "en": "{n} concepts extracted — building the teacher model…",
         "ja": "{n} 個の概念を抽出しました。教師モデルを構築中…",
     },
@@ -2580,17 +3451,17 @@ _STRINGS: dict[str, dict[str, str]] = {
     "style_diagram": {"zh-CN": "图示", "en": "Diagram", "ja": "図解"},
     "style_steps": {"zh-CN": "拆解步骤", "en": "Step breakdown", "ja": "ステップ分解"},
     "ext_analyzing": {
-        "zh-CN": "正在分析文本，抽取概念、关系与学习路径…",
+        "zh-CN": "正在分析文本，提取概念、关系与学习路径…",
         "en": "Analyzing text, extracting concepts, relations and learning path…",
         "ja": "テキストを分析中、概念・関係・学習経路を抽出…",
     },
     "ext_llm_failed": {
-        "zh-CN": "LLM 返回无法解析为 JSON",
-        "en": "LLM returned unparseable JSON",
-        "ja": "LLMの応答がJSONとして解析できません",
+        "zh-CN": "智能分析返回了无法识别的内容",
+        "en": "AI analysis returned unrecognizable content",
+        "ja": "AI 分析が認識できない内容を返しました",
     },
     "ext_done": {
-        "zh-CN": "已抽取 {n} 个概念、{r} 条关系",
+        "zh-CN": "已提取 {n} 个概念、{r} 条关系",
         "en": "Extracted {n} concepts, {r} relations",
         "ja": "{n}個の概念、{r}個の関係抽出完了",
     },
@@ -2605,14 +3476,14 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "{d}/{t}チャンク分析済み、{n}個の概念…",
     },
     "teacher_no_llm_skip": {
-        "zh-CN": "未配置 LLM，跳过自我学习（可在认知导航页重新自检）",
-        "en": "No LLM configured — skipping self-learning (re-run from the cognitive map)",
-        "ja": "LLM未設定—自己学習をスキップ（認知マップから再実行可）",
+        "zh-CN": "未开启智能分析，跳过自我学习（可在认知导航页重新自检）",
+        "en": "AI analysis off — skipping self-learning (re-run from the cognitive map)",
+        "ja": "AI 分析オフ — 自己学習をスキップ（認知マップから再実行可）",
     },
     "teacher_no_llm_anomaly": {
-        "zh-CN": "未配置 LLM（EXPERTANYTHING_LLM_API_KEY）。自我学习层（概念深加工与异常检测）无法运行。配置 key 后点击「重新自检」即可生成。",
-        "en": "No LLM configured (EXPERTANYTHING_LLM_API_KEY). The self-learning layer (concept enrichment & anomaly detection) cannot run. Set the key and click 'Re-check' to generate it.",
-        "ja": "LLM未設定（EXPERTANYTHING_LLM_API_KEY）。自己学習層（概念深加工・異常検出）が実行できません。key設定後「再チェック」をクリックで生成されます。",
+        "zh-CN": "未开启智能分析，自我学习层（概念深加工与疑点检测）暂时无法运行。开启后点击「重新自检」即可生成。",
+        "en": "AI analysis is off, so the self-learning pass (concept enrichment & doubt detection) cannot run. Turn it on and click 'Re-check' to generate.",
+        "ja": "AI 分析がオフのため、自己学習層（概念の深掘りと疑義検出）を実行できません。オンにして「再チェック」をクリックすると生成されます。",
     },
     "teacher_self_learning": {
         "zh-CN": "正在自我学习：深加工每个概念、扫描矛盾/未定义/反常…",
@@ -2630,17 +3501,17 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "自己学習バッチ {b}/{t}",
     },
     "teacher_self_learn_fail": {
-        "zh-CN": "自我学习出错，已降级为确定性模式",
-        "en": "Self-learning failed — falling back to deterministic mode",
-        "ja": "自己学習エラー—決定的モードにフォールバック",
+        "zh-CN": "自我学习出错，已切换为基础模式",
+        "en": "Self-learning failed — switched to basic mode",
+        "ja": "自己学習エラー—基本モードに切替",
     },
     "ext_chunks_failed": {
-        "zh-CN": "所有分块都未能解析为 JSON",
-        "en": "All chunks failed to parse as JSON",
-        "ja": "全チャンクがJSON解析に失敗しました",
+        "zh-CN": "所有分段的内容都无法识别",
+        "en": "All sections returned unrecognizable content",
+        "ja": "全セクションが認識できない内容でした",
     },
     "ext_chunks_done": {
-        "zh-CN": "已完成抽取：{n} 个概念、{r} 条关系",
+        "zh-CN": "已完成整理：{n} 个概念、{r} 条关系",
         "en": "Extraction complete: {n} concepts, {r} relations",
         "ja": "抽出完了：{n}個の概念、{r}個の関係",
     },
@@ -2650,32 +3521,146 @@ _STRINGS: dict[str, dict[str, str]] = {
         "ja": "分析する内容を入力してください",
     },
     "ext_llm_fallback": {
-        "zh-CN": "LLM 抽取失败，已降级为确定性结构索引",
-        "en": "LLM extraction failed — falling back to deterministic indexing",
-        "ja": "LLM抽出失敗、決定論的インデックスにフォールバック",
+        "zh-CN": "智能分析没有成功，已改用基础结构索引",
+        "en": "AI analysis failed — using basic structural indexing",
+        "ja": "AI 分析に失敗—基本インデックスに切替",
     },
     "ext_no_llm": {
-        "zh-CN": "未配置 LLM，使用确定性结构索引（无需联网）",
-        "en": "No LLM configured — using deterministic indexing (no network required)",
-        "ja": "LLM未設定—決定論的インデックスを使用（ネットワーク不要）",
+        "zh-CN": "未开启智能分析，使用基础结构索引（无需联网）",
+        "en": "AI analysis off — using basic structural indexing (no network required)",
+        "ja": "AI 分析オフ—基本インデックスを使用（ネットワーク不要）",
+    },
+    # -- capture at the learning site: ★ bookmark + 📝 own-words note ---------
+    "note_edit_has": {
+        "zh-CN": "📝 我的笔记 ✓",
+        "en": "📝 My note ✓",
+        "ja": "📝 マイノート ✓",
+    },
+    # -- focused reading (deterministic projection of source text) -----------
+    "reader_toolbar": {
+        "zh-CN": "概念阅读工具：",
+        "en": "Concept tools:",
+        "ja": "概念ツール：",
+    },
+    "reader_pick_concept": {
+        "zh-CN": "选择概念…",
+        "en": "Pick a concept…",
+        "ja": "概念を選択…",
+    },
+    "reader_note_summary": {
+        "zh-CN": "📝 我的笔记：{s}",
+        "en": "📝 My note: {s}",
+        "ja": "📝 マイノート：{s}",
+    },
+    "reader_note_more": {
+        "zh-CN": "展开",
+        "en": "Expand",
+        "ja": "展開",
+    },
+    "reader_note_less": {
+        "zh-CN": "收起",
+        "en": "Collapse",
+        "ja": "折りたたむ",
+    },
+    "reader_focus_on": {
+        "zh-CN": "🔍 聚焦阅读",
+        "en": "🔍 Focus reading",
+        "ja": "🔍 フォーカス読解",
+    },
+    "reader_focus_off": {
+        "zh-CN": "↩ 回全文",
+        "en": "↩ Full text",
+        "ja": "↩ 全文に戻る",
+    },
+    "reader_focus_hint": {
+        "zh-CN": "只显示该概念出现及其证据出处所在的原文行（忠实呈现，不改写原文）",
+        "en": "Show only the source lines mentioning it or locating its evidence (verbatim, never rewritten)",
+        "ja": "その概念の出現行と証拠の出所行のみを表示（原文は改変しません）",
+    },
+    "focus_badge": {
+        "zh-CN": "找到 {n} 行 · 原文出处 {a} 处",
+        "en": "{n} mentioning lines · {a} evidence locations",
+        "ja": "{n}行に出現 · 証拠の出所{a}件",
+    },
+    "focus_no_match": {
+        "zh-CN": "该概念在原文中没有直接出现（可能来自专业知识包）——已回退全文",
+        "en": "This concept never appears verbatim in the source (possibly from the knowledge pack) — showing the full text",
+        "ja": "この概念は原文に直接現れません（ナレッジパック由来の可能性）—全文を表示します",
+    },
+    "focus_teach_btn": {
+        "zh-CN": "开始教学",
+        "en": "Teach",
+        "ja": "教える",
+    },
+    "focus_decode_btn": {
+        "zh-CN": "看解码",
+        "en": "Decoded view",
+        "ja": "デコード表示",
+    },
+    "focus_exit_btn": {
+        "zh-CN": "回全文",
+        "en": "Full text",
+        "ja": "全文に戻る",
+    },
+    # -- chapter / topic comprehensive quiz -----------------------------------
+    "group_quiz_start": {
+        "zh-CN": "📚 综合测验",
+        "en": "📚 Group quiz",
+        "ja": "📚 総合クイズ",
+    },
+    "group_quiz_hint": {
+        "zh-CN": "本章/主题多概念混合测验，得分逐概念记入掌握度",
+        "en": "Mixed quiz across this chapter/topic — each score updates that concept's mastery",
+        "ja": "章/トピックの複数概念を混合したクイズ。各得点は概念ごとに掌握度へ記録",
+    },
+    "group_quiz_title": {
+        "zh-CN": "综合测验 · {name}",
+        "en": "Group quiz · {name}",
+        "ja": "総合クイズ · {name}",
+    },
+    "group_quiz_generating": {
+        "zh-CN": "正在为 {n} 个概念生成题目…",
+        "en": "Generating questions for {n} concepts…",
+        "ja": "{n}個の概念の問題を生成中…",
+    },
+    "group_quiz_failed": {
+        "zh-CN": "题目生成失败，请稍后重试",
+        "en": "Could not generate questions — please retry",
+        "ja": "問題生成に失敗しました。後でもう一度お試しください",
+    },
+    "group_quiz_progress": {
+        "zh-CN": "第 {i}/{n} 题 · {name}",
+        "en": "Question {i}/{n} · {name}",
+        "ja": "第{i}/{n}問 · {name}",
+    },
+    "group_quiz_next": {
+        "zh-CN": "下一题 ▶",
+        "en": "Next ▶",
+        "ja": "次の問題 ▶",
+    },
+    "group_quiz_summary_title": {
+        "zh-CN": "综合测验小结",
+        "en": "Group quiz summary",
+        "ja": "総合クイズのまとめ",
+    },
+    "group_quiz_summary_avg": {
+        "zh-CN": "组内平均得分：{avg}（{n} 题）",
+        "en": "Group average: {avg} ({n} questions)",
+        "ja": "グループ平均：{avg}（{n}問）",
+    },
+    "group_quiz_summary_hint": {
+        "zh-CN": "每题已按概念记入掌握度，薄弱概念会在概念网络中提示复习",
+        "en": "Each score was recorded per concept; weak concepts surface for review on the map",
+        "ja": "各問は概念ごとに掌握度へ記録され、弱点概念はマップで復習対象になります",
+    },
+    "group_quiz_no_concepts": {
+        "zh-CN": "该组暂无可测概念",
+        "en": "No quizzable concepts in this group",
+        "ja": "このグループにクイズ可能な概念がありません",
     },
 }
 
 _lang = DEFAULT_LANG
-
-
-def init_lang() -> str:
-    """Load the persisted language choice (if any) into the active language."""
-    global _lang
-    try:
-        if _LANG_FILE.exists():
-            data = json.loads(_LANG_FILE.read_text(encoding="utf-8"))
-            code = data.get("lang")
-            if code in LANGS:
-                _lang = code
-    except Exception:
-        pass
-    return _lang
 
 
 def get_lang() -> str:
@@ -2710,19 +3695,3 @@ def t(key: str, **kwargs) -> str:
             return s
     return s
 
-
-def translate_option(kind: str, code: str) -> str:
-    """Translate a canonical option code (baseline_*/style_*) to display text."""
-    if kind == "baseline":
-        key = {
-            "novice": "baseline_novice",
-            "some": "baseline_some",
-            "practiced": "baseline_practiced",
-        }.get(code)
-    else:
-        key = {
-            "example": "style_example",
-            "diagram": "style_diagram",
-            "steps": "style_steps",
-        }.get(code)
-    return t(key) if key else code

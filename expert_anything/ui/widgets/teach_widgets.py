@@ -29,7 +29,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from expert_anything.core.i18n import t as _t
-from expert_anything.ui.widgets._helpers import mastery_color, tag_chip, _sec_title
+from expert_anything.core.teacher import kind_label
+from expert_anything.ui.widgets._helpers import (
+    mastery_color,
+    open_feynman_check,
+    open_note_editor,
+    tag_chip,
+    _sec_title,
+)
 
 
 class DecoderSceneCard(QWidget):
@@ -103,10 +110,12 @@ class DecoderSceneCard(QWidget):
         self._fade: QGraphicsOpacityEffect | None = None
         self._fade_anim = None
         try:
-            from PySide6.QtSvgWidgets import QSvgWidget
+            from expert_anything.ui.widgets._helpers import _HAS_SVG, SvgScenePreview
 
-            self._svg_widget = QSvgWidget()
-            self._svg_widget.setMinimumHeight(240)
+            if not _HAS_SVG:
+                raise RuntimeError("QtSvg unavailable")
+            self._svg_widget = SvgScenePreview()
+            self._svg_widget.setMinimumHeight(260)
             self._svg_widget.setStyleSheet(
                 "background: qlineargradient(x1:0, y1:0, x2:1, y2:1,"
                 " stop:0 #FBFDFF, stop:1 #F0F5FA);"
@@ -311,16 +320,16 @@ class DecoderSceneCard(QWidget):
 
     def _load_frame(self, svg: str) -> None:
         """Swap the frame SVG with a gentle fade-in (keeps steps feeling
-        animated even though QtSvg ignores SMIL)."""
+        animated even though QtSvg ignores SMIL).  Routes through
+        ``load_svg`` so the preview keeps the scene's aspect ratio and
+        offers click-to-zoom for the current frame."""
         if self._svg_widget is None:
             return
-        data = svg.encode("utf-8")
         try:
-            from PySide6.QtCore import QByteArray
-
-            self._svg_widget.load(QByteArray(data))
+            name = getattr(self._concept, "name", "") or ""
+            self._svg_widget.load_svg(svg, zoom_title=name)
         except Exception:
-            self._svg_widget.load(data)
+            self._svg_widget.load(svg.encode("utf-8"))
         if self._fade is not None:
             try:
                 from PySide6.QtCore import QEasingCurve, QPropertyAnimation
@@ -457,10 +466,6 @@ class TeachResultView(QWidget):
     next_requested = Signal()
     retry_requested = Signal()
     vary_requested = Signal()
-    harness_adopt_requested = Signal(dict)  # learner adopts an evolved HarnessSpec
-    harness_transfer_requested = Signal(
-        dict
-    )  # learner migrates a harness from another asset
 
     def __init__(self, result: dict, parent=None):
         super().__init__(parent)
@@ -486,6 +491,98 @@ class TeachResultView(QWidget):
             return asset.concept_by_name(concept_name)
         except Exception:
             return None
+
+    # -- capture the insight where it happens (★ + 📝 on the lesson) ----------
+    def _main_ref(self):
+        """The enclosing MainWindow (owns the live learner state), or None."""
+        p = self.parent()
+        return getattr(p, "_main", None) if p is not None else None
+
+    def _append_study_tools(self, head, concept_name: str) -> None:
+        """Bookmark + own-words note on the lesson header.
+
+        Learning-site capture: the moment the learner understands (or fails to)
+        is inside the lesson, so ★/📝 live here instead of only on the map card.
+        Both persist immediately via the core learner state (local-first).
+        """
+        main = self._main_ref()
+        state = getattr(main, "learner", None) if main is not None else None
+        if state is None or not concept_name:
+            return
+        from expert_anything.core.learner import (
+            get_note,
+            is_favorite,
+            save as save_learner,
+            toggle_favorite,
+        )
+
+        fav = is_favorite(state, concept_name)
+        star = QPushButton("★" if fav else "☆")
+        star.setObjectName("teach_fav_btn")
+        star.setToolTip(_t("fav_toggle_tip"))
+        star.setStyleSheet(
+            "QPushButton { background-color: white; color: #F59E0B;"
+            "border: 1px solid #FCD34D; border-radius: 9px;"
+            "padding: 1px 7px; font-size: 15px; }"
+            "QPushButton:hover { background-color: #FFFBEB; }"
+        )
+
+        def _toggle(checked=False, n=concept_name, b=star):
+            now = toggle_favorite(state, n)
+            save_learner(state)
+            b.setText("★" if now else "☆")
+
+        star.clicked.connect(_toggle)
+        head.addWidget(star)
+
+        note_btn = QPushButton(
+            _t("note_edit_has") if get_note(state, concept_name) else _t("note_edit")
+        )
+        note_btn.setObjectName("teach_note_btn")
+        note_btn.setToolTip(_t("note_hint"))
+        note_btn.setStyleSheet(
+            "QPushButton { background-color: white; color: #B45309;"
+            "border: 1px solid #FCD34D; border-radius: 9px;"
+            "padding: 3px 9px; font-size: 13px; }"
+            "QPushButton:hover { background-color: #FFFBEB; }"
+        )
+        note_btn.clicked.connect(
+            lambda checked=False, n=concept_name: self._edit_note(n)
+        )
+        head.addWidget(note_btn)
+
+        recall_btn = QPushButton(_t("recall_btn"))
+        recall_btn.setObjectName("teach_recall_btn")
+        recall_btn.setToolTip(_t("recall_btn_tip"))
+        recall_btn.setStyleSheet(
+            "QPushButton { background-color: white; color: #1565C0;"
+            "border: 1px solid #BBDEFB; border-radius: 9px;"
+            "padding: 3px 9px; font-size: 13px; }"
+            "QPushButton:hover { background-color: #E3F2FD; }"
+        )
+
+        def _recall(checked=False, n=concept_name):
+            concept = self._provenance_concept(n)
+            asset = None
+            if main is not None:
+                asset = main.get_asset()
+            open_feynman_check(self, state, asset, concept)
+
+        recall_btn.clicked.connect(_recall)
+        head.addWidget(recall_btn)
+
+    def _edit_note(self, concept_name: str) -> None:
+        """Own-words editor; refreshes the button label to show note presence."""
+        main = self._main_ref()
+        state = getattr(main, "learner", None) if main is not None else None
+        if state is None or not concept_name:
+            return
+        text = open_note_editor(self, state, concept_name)
+        if text is None:  # cancelled
+            return
+        btn = self.findChild(QPushButton, "teach_note_btn")
+        if btn is not None:
+            btn.setText(_t("note_edit_has") if text else _t("note_edit"))
 
     def _card(
         self, title: str, body: str, bg: str, border: str, title_color: str
@@ -531,6 +628,7 @@ class TeachResultView(QWidget):
             if hint_text and hint_text != "profile_hint_" + hint:
                 head.addWidget(tag_chip(hint_text, "#7B5A9E"))
         head.addStretch()
+        self._append_study_tools(head, str(result.get("concept", "") or ""))
         root.addLayout(head)
 
         def _txt(v):
@@ -543,10 +641,50 @@ class TeachResultView(QWidget):
                 return [s.strip() for s in v.splitlines() if s.strip()]
             return []
 
-        # explanation
+        # ---- 30 秒一页卡：核心定义 + 一个例子 -------------------------------
+        # 本工具定位是「快速读懂」，不是课程。一页卡先给结论和例证，读完即可
+        # 判断要不要继续；讲解、术语、类比、步骤、测验、练习统一收进
+        # 「想深入」折叠区（折叠非删除，一次点击展开）。
+        root.addWidget(self._build_quick_card(result, _txt))
+
+        # ---- 一张图：知识图解（保持宽高比、可点击放大） ---------------------
+        scene = result.get("scene")
+        if isinstance(scene, dict) and scene.get("nodes"):
+            dec_card = DecoderSceneCard(
+                scene,
+                _txt(result.get("concept")),
+                definition=_txt(result.get("definition", "")),
+                evidence=result.get("evidence") or [],
+            )
+            dec_card.game_scored.connect(self.quiz_result)
+            root.addWidget(dec_card)
+
+        # ---- 想深入：完整讲解 / 术语 / 类比 / 步骤 / 测验 / 练习 ------------
+        self._deep_host = QWidget()
+        self._deep_layout = QVBoxLayout(self._deep_host)
+        self._deep_layout.setContentsMargins(0, 0, 0, 0)
+        self._deep_layout.setSpacing(12)
+        deep = self._deep_layout
+
+        self._deep_btn = QPushButton("▸ " + _t("deep_dive_toggle"))
+        self._deep_btn.setCheckable(True)
+        self._deep_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._deep_btn.setStyleSheet(
+            "QPushButton { background-color: white; color: #1565C0;"
+            "border: 1px solid #BBDEFB; border-radius: 8px; padding: 7px 12px;"
+            "font-size: 14px; text-align: left; }"
+            "QPushButton:hover { background-color: #E3F2FD; }"
+            "QPushButton:checked { background-color: #E3F2FD; }"
+        )
+        self._deep_btn.clicked.connect(self._on_toggle_deep)
+        root.addWidget(self._deep_btn)
+        root.addWidget(self._deep_host)
+        self._deep_host.setVisible(False)
+
+        # 完整讲解（折叠区内；一页卡只给摘要，全文仍可在这里读到）
         explanation = _txt(result.get("explanation"))
         if explanation:
-            root.addWidget(
+            deep.addWidget(
                 self._card(
                     _t("explanation"), explanation, "#E3F2FD", "#90CAF9", "#1565C0"
                 )
@@ -571,7 +709,7 @@ class TeachResultView(QWidget):
                     "font-size: 13px; color: #E65100; line-height: 1.4;"
                 )
                 w_lay.addWidget(w_lbl)
-                root.addWidget(warn)
+                deep.addWidget(warn)
 
             # source provenance — show which evidence the explanation is based on,
             # each entry badged with its page/line anchor (SourceLocation) and
@@ -630,28 +768,9 @@ class TeachResultView(QWidget):
                         )
                         row.addWidget(badge)
                     prov_lay.addLayout(row)
-                root.addWidget(prov)
+                deep.addWidget(prov)
 
-        # knowledge decoding card (SceneSpec → step animation + sort game)
-        # Placed right after explanation so the learner sees the visual
-        # deconstruction before reading examples and steps — visual-first.
-        scene = result.get("scene")
-        if isinstance(scene, dict) and scene.get("nodes"):
-            dec_card = DecoderSceneCard(
-                scene,
-                _txt(result.get("concept")),
-                definition=_txt(result.get("definition", "")),
-                evidence=result.get("evidence") or [],
-            )
-            dec_card.game_scored.connect(self.quiz_result)
-            root.addWidget(dec_card)
-
-        # example
-        example = _txt(result.get("example"))
-        if example:
-            root.addWidget(
-                self._card(_t("example"), example, "#FFF8E1", "#FFE082", "#B45309")
-            )
+        # 图解与例子已上移到一页卡（首屏 30 秒读完），此处不再重复渲染。
 
         # terminology (Phase 4 — registered domain glossary, template-sourced;
         # the block is produced by core.terminology via Tutor.enrich, so this
@@ -688,7 +807,7 @@ class TeachResultView(QWidget):
                 if matched and matched != term["name"]:
                     label += f" ({_t('terminology_matched', matched=matched)})"
                 lines.append(label)
-            root.addWidget(
+            deep.addWidget(
                 self._card(
                     _t("terminology"),
                     "\n".join(lines),
@@ -701,7 +820,7 @@ class TeachResultView(QWidget):
         # analogy bridge (LLM compressed-knowledge layer)
         analogy = _txt(result.get("analogy"))
         if analogy:
-            root.addWidget(
+            deep.addWidget(
                 self._card(
                     _t("analogy_title"), analogy, "#E0F2F1", "#80CBC4", "#00695C"
                 )
@@ -710,7 +829,7 @@ class TeachResultView(QWidget):
         # cross-book anchor (personalised link to a previously learned concept)
         cross = result.get("cross_link")
         if isinstance(cross, dict) and cross.get("name"):
-            root.addWidget(
+            deep.addWidget(
                 self._card(
                     _t("crosslink_title").format(
                         name=cross.get("name", ""), asset=cross.get("asset", "") or ""
@@ -725,7 +844,7 @@ class TeachResultView(QWidget):
         # connected (semantic relation summary — the "where it sits" block)
         connected = _txt(result.get("connected"))
         if connected:
-            root.addWidget(
+            deep.addWidget(
                 self._card(
                     _t("connected_title"),
                     connected,
@@ -742,7 +861,7 @@ class TeachResultView(QWidget):
             steps_title.setStyleSheet(
                 "font-size: 14px; font-weight: bold; color: #37474F;"
             )
-            root.addWidget(steps_title)
+            deep.addWidget(steps_title)
             for i, s in enumerate(steps, 1):
                 row = QHBoxLayout()
                 row.setSpacing(8)
@@ -758,7 +877,7 @@ class TeachResultView(QWidget):
                 txt.setWordWrap(True)
                 txt.setStyleSheet("font-size: 15px; color: #37474F;")
                 row.addWidget(txt, 1)
-                root.addLayout(row)
+                deep.addLayout(row)
 
         # practice
         practice = _txt(result.get("practice"))
@@ -796,12 +915,12 @@ class TeachResultView(QWidget):
             )
             submit_btn.clicked.connect(self.submit_requested)
             prac_lay.addWidget(submit_btn, 0, Qt.AlignmentFlag.AlignRight)
-            root.addWidget(prac_card)
+            deep.addWidget(prac_card)
 
         # evidence
         evidence = [str(e) for e in (result.get("evidence") or []) if str(e).strip()]
         if evidence:
-            root.addWidget(
+            deep.addWidget(
                 self._card(
                     _t("evidence_label"),
                     "\n".join(f"• {e}" for e in evidence[:3]),
@@ -811,17 +930,97 @@ class TeachResultView(QWidget):
                 )
             )
 
+        deep.addStretch()
         root.addStretch()
         self._build_followup()
         self._build_quiz_area()
         self._build_practice_area()
+
+    def _build_quick_card(self, result: dict, _txt) -> QWidget:
+        """首屏一页卡：核心定义 + 一个例子（30 秒读完）。
+
+        工具定位是快速阅读与理解，不是课程。结论和例证先给到，用户自己决定
+        是否点「想深入」；测验、练习、步骤、术语等重流程全部放进折叠区。
+        """
+        definition = _txt(result.get("definition"))
+        explanation = _txt(result.get("explanation"))
+        example = _txt(result.get("example"))
+        if not (definition or explanation or example):
+            return QWidget()  # 无正文可读时不摆空卡片
+
+        card = QFrame()
+        card.setObjectName("teach_quick_card")
+        card.setStyleSheet(
+            "QFrame#teach_quick_card { background-color: #F8FBFF;"
+            "border: 1px solid #BBDEFB; border-radius: 10px; }"
+        )
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setSpacing(8)
+
+        core = definition or explanation
+        if core:
+            title = QLabel(_t("quick_def_title") if definition else _t("explanation"))
+            title.setStyleSheet(
+                "font-size: 13px; font-weight: bold; color: #1565C0;"
+            )
+            lay.addWidget(title)
+            if not definition and len(core) > 180:
+                core = core[:180].rstrip() + "…"
+            body = QLabel(core)
+            body.setWordWrap(True)
+            body.setStyleSheet("font-size: 16px; color: #1F2933;")
+            lay.addWidget(body)
+
+        if example:
+            sep = QFrame()
+            sep.setFrameShape(QFrame.Shape.HLine)
+            sep.setStyleSheet("color: #E3F2FD;")
+            lay.addWidget(sep)
+            ex_title = QLabel(_t("example"))
+            ex_title.setStyleSheet(
+                "font-size: 13px; font-weight: bold; color: #B45309;"
+            )
+            lay.addWidget(ex_title)
+            ex_body = QLabel(example)
+            ex_body.setWordWrap(True)
+            ex_body.setStyleSheet("font-size: 15px; color: #37474F;")
+            lay.addWidget(ex_body)
+
+        return card
+
+    def _on_toggle_deep(self, checked: bool) -> None:
+        """展开 / 收起「想深入」区（折叠非删除）。"""
+        self._deep_host.setVisible(bool(checked))
+        self._deep_btn.setText(
+            ("▾ " if checked else "▸ ") + _t("deep_dive_toggle")
+        )
+
+    def _insert_block(self, widget) -> None:
+        """把后到的块插进「想深入」折叠区末尾（stretch 之前）。
+
+        append_evaluation / 测验 / 练习等结果块只在用户已经展开深入区时才会
+        出现，因此落在折叠区内也不会被藏起来；极端情况下（程序化触发）它们
+        仍可通过展开按钮看到。
+        """
+        self._deep_layout.insertWidget(self._deep_layout.count() - 1, widget)
+
+    def _expand_deep(self) -> None:
+        """用户主动要测验 / 练习 / 反馈时，确保深入区是展开的。
+
+        这些块渲染在折叠区内；若用户是从地图卡直接发起「快速自测」，深入区
+        仍是收起的，自动展开才不会让人对着空白结果区发愣。
+        """
+        if getattr(self, "_deep_host", None) is not None and self._deep_host.isHidden():
+            self._deep_btn.setChecked(True)
+            self._on_toggle_deep(True)
 
     # -- evaluation feedback ---------------------------------------------------
     def append_evaluation(
         self, score: float, feedback: str, reference: str = "", gap: str = ""
     ) -> None:
         """Append an evaluation card (score + feedback + reference answer)."""
-        root = self.layout()
+        self._expand_deep()
         card = QFrame()
         card.setStyleSheet(
             "QFrame { background-color: #F3E5F5; border: 1px solid #CE93D8;"
@@ -914,142 +1113,7 @@ class TeachResultView(QWidget):
         actions.addStretch()
         lay.addLayout(actions)
 
-        root.insertWidget(root.count() - 1, card)
-
-    # -- AutoHarness evolution suggestion --------------------------------------
-    def append_harness_suggestion(
-        self,
-        title: str,
-        body: str,
-        candidate: dict,
-        source: str = "stuck",
-        extra: dict | None = None,
-    ) -> None:
-        """Append an AutoHarness evolution suggestion card with an adopt button.
-
-        The candidate (a normalized HarnessSpec) was produced by the stuck
-        loop's ``evolve_for_stuck`` (source="stuck", amber card), by
-        ``evolve_for_regression`` (source="regression", violet card — the
-        regression signal points to a guard that may be backfiring, e.g.
-        budget_ok throttling explanations), or by ``evolve_joint`` when
-        multiple signal families fire together (source="joint", cyan card —
-        the fusion decision with its diagnosis; ``extra`` carries metadata
-        for the audit chain, e.g. {"_joint_reason": "stuck+regression"}).
-        Adopting any of them fires ``harness_adopt_requested`` so the window
-        can persist the spec and re-teach with its style.
-        """
-        if source == "joint":
-            bg, border, title_c, text_c, btn_bg, btn_hover = (
-                "#E0F7FA",
-                "#4DD0E1",
-                "#006064",
-                "#00363D",
-                "#00838F",
-                "#006064",
-            )
-            btn_text = _t("harness_adopt_joint")
-        elif source == "regression":
-            bg, border, title_c, text_c, btn_bg, btn_hover = (
-                "#F3E5F5",
-                "#CE93D8",
-                "#4A148C",
-                "#311B3A",
-                "#6A1B9A",
-                "#4A148C",
-            )
-            btn_text = _t("harness_adopt_regress")
-        else:
-            bg, border, title_c, text_c, btn_bg, btn_hover = (
-                "#FFF8E1",
-                "#FFE082",
-                "#E65100",
-                "#4E342E",
-                "#E65100",
-                "#BF360C",
-            )
-            btn_text = _t("harness_adopt")
-        root = self.layout()
-        card = QFrame()
-        card.setStyleSheet(
-            f"QFrame {{ background-color: {bg}; border: 1px solid {border};"
-            "border-radius: 8px; }"
-        )
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(6)
-
-        lay.addWidget(_sec_title(title, title_c))
-        b = QLabel(body)
-        b.setWordWrap(True)
-        b.setStyleSheet(f"font-size: 14.5px; color: {text_c};")
-        lay.addWidget(b)
-
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        btn = QPushButton(btn_text)
-        btn.setStyleSheet(
-            f"QPushButton {{ background-color: {btn_bg}; color: white;"
-            "border: none; border-radius: 6px; padding: 7px 16px;"
-            "font-size: 14.5px; font-weight: bold; }"
-            f"QPushButton:hover {{ background-color: {btn_hover}; }}"
-        )
-        btn.clicked.connect(
-            lambda checked=False, c=candidate, s=source, x=extra or {}: (
-                self.harness_adopt_requested.emit(dict(c, _source=s, **x))
-            )
-        )
-        row.addWidget(btn)
-        row.addStretch()
-        lay.addLayout(row)
-
-        root.insertWidget(root.count() - 1, card)
-
-    def append_transfer_suggestion(self, title: str, body: str, payload: dict) -> None:
-        """Append a cross-asset harness migration suggestion card.
-
-        Unlike the amber evolution card (``append_harness_suggestion``), this
-        light-blue card carries a *transfer payload* built by the window's
-        ``_find_transfer_candidates``::
-
-            {"source_asset_id", "source_title", "spec", "evaluation", "gain"}
-
-        Adopting it fires ``harness_transfer_requested`` with the whole payload
-        so the window can persist via ``adopt_harness_for_asset`` (audit trail
-        reason="transfer") and re-teach with the migrated style.
-        """
-        root = self.layout()
-        card = QFrame()
-        card.setStyleSheet(
-            "QFrame { background-color: #E3F2FD; border: 1px solid #90CAF9;"
-            "border-radius: 8px; }"
-        )
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(6)
-
-        lay.addWidget(_sec_title(title, "#0D47A1"))
-        b = QLabel(body)
-        b.setWordWrap(True)
-        b.setStyleSheet("font-size: 14.5px; color: #0D2B45;")
-        lay.addWidget(b)
-
-        row = QHBoxLayout()
-        row.setSpacing(8)
-        btn = QPushButton(_t("harness_transfer_adopt"))
-        btn.setStyleSheet(
-            "QPushButton { background-color: #1565C0; color: white; border: none;"
-            "border-radius: 6px; padding: 7px 16px; font-size: 14.5px;"
-            "font-weight: bold; }"
-            "QPushButton:hover { background-color: #0D47A1; }"
-        )
-        btn.clicked.connect(
-            lambda checked=False, p=payload: self.harness_transfer_requested.emit(p)
-        )
-        row.addWidget(btn)
-        row.addStretch()
-        lay.addLayout(row)
-
-        root.insertWidget(root.count() - 1, card)
+        self._insert_block(card)
 
     def append_doubt_strip(
         self, concept_anoms: list, open_count: int = 0
@@ -1064,7 +1128,6 @@ class TeachResultView(QWidget):
         concept_anoms = list(concept_anoms or [])
         if not concept_anoms and open_count <= 0:
             return False
-        root = self.layout()
         card = QFrame()
         card.setStyleSheet(
             "QFrame { background-color: #FFF8E1; border-left: 3px solid "
@@ -1078,12 +1141,7 @@ class TeachResultView(QWidget):
 
         if concept_anoms:
             for an in concept_anoms:
-                # t() falls back to the raw key when missing: strip the
-                # prefix so an unknown kind still reads as its own code
-                kind_key = f"kind_{an.kind}"
-                kind = _t(kind_key)
-                if kind == kind_key:
-                    kind = str(getattr(an, "kind", "") or "")
+                kind = kind_label(str(getattr(an, "kind", "") or ""))
                 desc = str(getattr(an, "description", "") or "")[:80]
                 line = QLabel(_t("doubt_matched", kind=kind, desc=desc))
                 line.setWordWrap(True)
@@ -1095,70 +1153,43 @@ class TeachResultView(QWidget):
             line.setStyleSheet("font-size: 13.5px; color: #6B4E0E;")
             lay.addWidget(line)
 
-        root.insertWidget(root.count() - 1, card)
+        self._insert_block(card)
         return True
 
-    def append_harness_history(self, events: list[dict], limit: int = 5) -> None:
-        """Append an evolution history block (audit trail) to the teach area.
+    def append_misconceptions(self, misconceptions: list[str]) -> bool:
+        """Render the teacher model's common misconceptions for this concept.
 
-        Events come from ``auto_harness.load_harness_history`` (append-only
-        audit chain). Only *new* events since the last call on this view are
-        rendered (dedup by count), capped at ``limit``, so repeated calls
-        (e.g. stuck branch + fresh teaching view) never duplicate lines.
+        Shown as a warning card with each misconception as a bullet, so the
+        learner can proactively check their understanding against known pitfalls
+        before attempting the quiz. Teacher model walks ahead (AGENTS.md §2).
         """
-        if not events:
-            return
-        shown = getattr(self, "_harness_shown_count", 0)
-        new_events = events[shown:]
-        if not new_events:
-            return
-        self._harness_shown_count = len(events)
-
-        root = self.layout()
+        misconceptions = [m for m in (misconceptions or []) if str(m).strip()]
+        if not misconceptions:
+            return False
         card = QFrame()
         card.setStyleSheet(
-            "QFrame { background-color: #F5F5F5; border: 1px solid #E0E0E0;"
-            "border-radius: 8px; }"
+            "QFrame { background-color: #FFEBEE; border-left: 3px solid "
+            "#E53935; border-radius: 4px; }"
         )
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(12, 10, 12, 10)
-        lay.setSpacing(6)
-        lay.addWidget(_sec_title(_t("harness_history"), "#455A64"))
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(4)
 
-        _reason_labels = {
-            "stuck": _t("harness_reason_stuck"),
-            "manual": _t("harness_reason_manual"),
-            "steady": _t("harness_reason_steady"),
-            "transfer": _t("harness_reason_transfer"),
-            "regression": _t("harness_reason_regression"),
-            "joint": _t("harness_reason_joint"),
-            "sessions": _t("harness_reason_sessions"),
-        }
+        lay.addWidget(_sec_title(_t("misconception_section"), "#C62828"))
 
-        def _fmt(reason: str) -> str:
-            # 联合演化 reason 是触发家族串（如 stuck+regression+sessions），
-            # 逐个家族本地化后拼接，保证审计链可读。
-            if reason in _reason_labels:
-                return _reason_labels[reason]
-            return "+".join(_reason_labels.get(p, p) for p in str(reason).split("+"))
+        for mc in misconceptions:
+            line = QLabel(f"⚠  {str(mc)}")
+            line.setWordWrap(True)
+            line.setStyleSheet("font-size: 13.5px; color: #B71C1C;")
+            lay.addWidget(line)
 
-        for ev in new_events[-limit:]:
-            ts = ev.get("ts", "")
-            ts_show = ts[:16].replace("T", " ") if isinstance(ts, str) else ""
-            reason = _fmt(ev.get("reason", ""))
-            old = ev.get("old", "")
-            new = ev.get("new", "")
-            line = (
-                f"{ts_show}  {reason}\n  {old}  →  {new}"
-                if ts_show
-                else f"{reason}\n  {old}  →  {new}"
-            )
-            b = QLabel(line)
-            b.setWordWrap(True)
-            b.setStyleSheet("font-size: 13.5px; color: #37474F;")
-            lay.addWidget(b)
+        hint = QLabel(_t("misconception_hint"))
+        hint.setStyleSheet("font-size: 11.5px; color: #E57373; font-style: italic;")
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
 
-        root.insertWidget(root.count() - 1, card)
+        self._insert_block(card)
+        return True
 
     # -- related concepts --------------------------------------------------------
     def set_neighbors(
@@ -1195,10 +1226,9 @@ class TeachResultView(QWidget):
 
         from expert_anything.core.decoder import classify_relation, REL_SEMANTICS
 
-        root = self.layout()
         t = QLabel(_t("related_concepts"))
         t.setStyleSheet("font-size: 14px; font-weight: bold; color: #0c4a6e;")
-        root.insertWidget(root.count() - 1, t)
+        self._insert_block(t)
 
         # Build the mini-graph SVG
         svg = self._build_minigraph_svg(neighbors)
@@ -1212,7 +1242,7 @@ class TeachResultView(QWidget):
                 "QSvgWidget { background-color: #FAFBFC; border: 1px solid #E0E0E0;"
                 "border-radius: 8px; }"
             )
-            root.insertWidget(root.count() - 1, graph_widget)
+            self._insert_block(graph_widget)
         except ImportError:
             # Fallback: skip graph if QtSvg isn't available
             pass
@@ -1237,7 +1267,7 @@ class TeachResultView(QWidget):
             chip.clicked.connect(lambda checked, n=name: self.neighbor_clicked.emit(n))
             chips_lay2.addWidget(chip)
         chips_lay2.addStretch()
-        root.insertWidget(root.count() - 1, chips_row)
+        self._insert_block(chips_row)
 
     def _build_minigraph_svg(self, neighbors: list) -> str:
         """Generate an SVG mini-graph: central concept + radial neighbours.
@@ -1400,14 +1430,15 @@ class TeachResultView(QWidget):
         )
         self._quiz_btn.clicked.connect(self.quiz_requested)
         lay.addWidget(self._quiz_btn, 0, Qt.AlignmentFlag.AlignRight)
-        self.layout().insertWidget(self.layout().count() - 1, card)
+        self._insert_block(card)
 
     def show_quiz(self, quiz: dict | None) -> None:
         """Render a generated quiz (or a hint when generation failed)."""
+        self._expand_deep()
         if quiz is None:
             t = QLabel(_t("quiz_failed"))
             t.setStyleSheet("font-size: 14px; color: #9E9E9E; padding: 6px;")
-            self.layout().insertWidget(self.layout().count() - 1, t)
+            self._insert_block(t)
             return
         qtype = quiz.get("type")
         card = QFrame()
@@ -1476,7 +1507,7 @@ class TeachResultView(QWidget):
             check.clicked.connect(lambda: self._check_quiz(self._quiz_answer))
             lay.addWidget(check, 0, Qt.AlignmentFlag.AlignRight)
 
-        self.layout().insertWidget(self.layout().count() - 1, card)
+        self._insert_block(card)
 
     def _pick_order(self, idx: int) -> None:
         if idx not in self._quiz_answer:
@@ -1490,6 +1521,7 @@ class TeachResultView(QWidget):
         quiz = getattr(self, "_quiz_data", None)
         if quiz is None:
             return
+        self._expand_deep()
         # local scoring: true_false exact; ordering fraction of correct positions
         qtype = quiz.get("type")
         if qtype == "true_false":
@@ -1502,6 +1534,21 @@ class TeachResultView(QWidget):
             else:
                 hits = sum(1 for a, c in zip(answer, correct) if a == c)
                 score = round(hits / len(correct), 2)
+
+        # Trace for the learning record: a score alone cannot tell the learner
+        # *what* they got wrong later.  Codes stay language-neutral ("true"/
+        # "false", 1-based option numbers) so a later language switch never
+        # rewrites history.
+        self._quiz_last = {
+            "kind": qtype or "",
+            "question": str(quiz.get("question", "") or ""),
+            "given": self._quiz_answer_code(qtype, answer),
+            "expected": self._quiz_answer_code(
+                qtype,
+                quiz.get("correct") if qtype == "true_false"
+                else quiz.get("correct_order", []),
+            ),
+        }
 
         result = QFrame()
         result.setStyleSheet(
@@ -1530,8 +1577,17 @@ class TeachResultView(QWidget):
             e.setWordWrap(True)
             e.setStyleSheet("font-size: 14px; color: #37474F;")
             rl.addWidget(e)
-        self.layout().insertWidget(self.layout().count() - 1, result)
+        self._insert_block(result)
         self.quiz_result.emit(float(score))
+
+    @staticmethod
+    def _quiz_answer_code(qtype, answer) -> str:
+        """Normalise a quiz answer into a language-neutral trace string."""
+        if qtype == "true_false":
+            return "true" if bool(answer) else "false"
+        if not isinstance(answer, (list, tuple)):
+            return str(answer or "")
+        return " → ".join(str(int(i) + 1) for i in answer)
 
     # -- hands-on practice -------------------------------------------------------
     def _build_practice_area(self) -> None:
@@ -1559,14 +1615,15 @@ class TeachResultView(QWidget):
         )
         self._practice_btn.clicked.connect(self.practice_requested)
         lay.addWidget(self._practice_btn, 0, Qt.AlignmentFlag.AlignRight)
-        self.layout().insertWidget(self.layout().count() - 1, card)
+        self._insert_block(card)
 
     def show_practice(self, task: dict | None) -> None:
         """Render the hands-on task with an answer box."""
+        self._expand_deep()
         if task is None:
             t = QLabel(_t("practice_failed"))
             t.setStyleSheet("font-size: 14px; color: #9E9E9E; padding: 6px;")
-            self.layout().insertWidget(self.layout().count() - 1, t)
+            self._insert_block(t)
             return
         card = QFrame()
         card.setStyleSheet(
@@ -1617,10 +1674,11 @@ class TeachResultView(QWidget):
         lay.addWidget(submit, 0, Qt.AlignmentFlag.AlignRight)
 
         self._practice_data = task
-        self.layout().insertWidget(self.layout().count() - 1, card)
+        self._insert_block(card)
 
     def show_practice_result(self, result: dict) -> None:
         """Verdict card for a practice submission (score/feedback/reference)."""
+        self._expand_deep()
         score = float(result.get("score", 0.0))
         card = QFrame()
         card.setStyleSheet(
@@ -1657,7 +1715,7 @@ class TeachResultView(QWidget):
                 "border-radius: 6px; padding: 8px;"
             )
             lay.addWidget(r)
-        self.layout().insertWidget(self.layout().count() - 1, card)
+        self._insert_block(card)
 
     # -- follow-up conversation -------------------------------------------------
     def _build_followup(self) -> None:
@@ -1697,7 +1755,7 @@ class TeachResultView(QWidget):
         btn_row.addWidget(ask_btn)
         lay.addLayout(btn_row)
 
-        self.layout().insertWidget(self.layout().count() - 1, card)
+        self._insert_block(card)
 
     def _ask(self) -> None:
         q = self._followup_input.toPlainText().strip()
@@ -1708,7 +1766,7 @@ class TeachResultView(QWidget):
 
     def append_exchange(self, question: str, answer: str) -> None:
         """Append a Q&A bubble pair to the conversation."""
-        root = self.layout()
+        root = self._deep_layout
         q_lbl = QLabel(question)
         q_lbl.setWordWrap(True)
         q_lbl.setStyleSheet(

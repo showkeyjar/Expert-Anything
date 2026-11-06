@@ -16,11 +16,20 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QFont,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPolygonF,
+)
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsLineItem,
     QGraphicsPathItem,
+    QGraphicsPolygonItem,
     QGraphicsScene,
     QGraphicsSimpleTextItem,
     QGraphicsView,
@@ -77,6 +86,53 @@ def _hex_with_alpha(color: str, alpha: int) -> QColor:
     c = QColor(color)
     c.setAlpha(max(0, min(255, alpha)))
     return c
+
+
+def _place_edge_head(
+    head: QGraphicsPolygonItem,
+    b1: tuple[float, float],
+    b2: tuple[float, float],
+    arrow: str,
+    color: QColor,
+) -> None:
+    """Draw the direction marker for one edge at its target end.
+
+    ``arrow`` comes from ``REL_SEMANTICS``: ``normal`` = triangle pointing at
+    the target, ``diamond`` = UML-style composition diamond on the whole end,
+    ``none`` = undirected (contrast). Keeping it in one helper means colour and
+    direction can never drift apart.
+    """
+    if arrow == "none":
+        head.setVisible(False)
+        return
+    dx, dy = b2[0] - b1[0], b2[1] - b1[1]
+    length = math.hypot(dx, dy)
+    if length < 6:
+        head.setVisible(False)
+        return
+    ux, uy = dx / length, dy / length
+    nx, ny = -uy, ux
+    if arrow == "diamond":
+        # Composition diamond sits at the "whole" end (the target).
+        cx, cy = b2[0] - ux * 8.0, b2[1] - uy * 8.0
+        points = [
+            QPointF(cx + ux * 7.0, cy + uy * 7.0),
+            QPointF(cx + nx * 4.2, cy + ny * 4.2),
+            QPointF(cx - ux * 7.0, cy - uy * 7.0),
+            QPointF(cx - nx * 4.2, cy - ny * 4.2),
+        ]
+    else:
+        tip_x, tip_y = b2[0] - ux * 1.5, b2[1] - uy * 1.5
+        back_x, back_y = tip_x - ux * 10.0, tip_y - uy * 10.0
+        points = [
+            QPointF(tip_x, tip_y),
+            QPointF(back_x + nx * 4.2, back_y + ny * 4.2),
+            QPointF(back_x - nx * 4.2, back_y - ny * 4.2),
+        ]
+    head.setPolygon(QPolygonF(points))
+    head.setBrush(QBrush(color))
+    head.setPen(QPen(color, 0.8))
+    head.setVisible(True)
 
 
 def _mastery_fill(m: float) -> QColor:
@@ -315,6 +371,13 @@ _PHYS = {
 }
 _FLOAT_AMP = 0.15          # barely-perceptible drift (structure readability > motion)
 
+# Scale guard: a living force map over a very large node set would pin the CPU
+# (O(n²) repulsion per tick) and rarely settle, so the perpetual floating timer
+# never stops. Above this many *visible* physics nodes we settle faster and
+# skip the floating drift entirely — the map still reads as a structure, but it
+# no longer burns the machine. Small maps keep the original lively behaviour.
+_LIVELY_GUARD_NODES = 60
+
 
 class KnowledgeGraphView(QGraphicsView):
     """Interactive, living knowledge graph."""
@@ -325,11 +388,11 @@ class KnowledgeGraphView(QGraphicsView):
     # render a legible learning map.
     _SKELETON_DEFAULT_THRESHOLD = 24
 
-    concept_clicked = Signal(str)          # double-click -> teach (concept name)
-    concept_drilldown = Signal(str)       # single-click -> focus and drill into children
+    concept_clicked = Signal(str)          # context-menu "teach" (concept name)
     node_single_clicked = Signal(str)      # single-click on a node (concept id)
+    node_drilled = Signal(str)             # double-click drill-down (concept id)
+    evidence_requested = Signal(str)       # context menu -> jump to evidence (concept id)
     edge_clicked = Signal(str, str, str)  # source_id, target_id, relation_label -> teach relation
-    view_changed = Signal()                # focus/full mode changed
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -346,11 +409,18 @@ class KnowledgeGraphView(QGraphicsView):
         self._current_id: str | None = None
         self._focus_id: str | None = None
         self._drill_path: list[str] = []
+        # Double-click semantics are opt-in per surface: the main concept map
+        # drills down (subgraph + breadcrumb); small embedded graphs keep the
+        # legacy "double-click teaches" behaviour.
+        self._drill_on_double_click = False
         self._nodes: list[tuple[str, str, str]] = []
         self._edges: list[tuple[str, str, str, str]] = []
         self._edge_type_map: dict[tuple[str, str, str], str] = {}
         self._node_items: dict[str, QGraphicsPathItem] = {}
         self._edge_items: dict[tuple[str, str, str], QGraphicsLineItem] = {}
+        # Direction markers: an arrow tip (or a composition diamond) per edge so
+        # the six semantics are readable as direction, not only as colour.
+        self._edge_heads: dict[tuple[str, str, str], QGraphicsPolygonItem] = {}
         self._hover_cid: str | None = None
 
         # dependency chain highlight state
@@ -360,6 +430,8 @@ class KnowledgeGraphView(QGraphicsView):
 
         # physics state: cid -> [x, y, vx, vy]
         self._physics: dict[str, list[float]] = {}
+        self._phys_params = _PHYS          # active tuning (scale guard may override)
+        self._float_enabled = True         # scale guard may disable for huge maps
         self._phys_timer = QTimer(self)
         self._phys_timer.setInterval(33)   # 30fps — calmer, less CPU
         self._phys_timer.timeout.connect(self._physics_step)
@@ -390,6 +462,13 @@ class KnowledgeGraphView(QGraphicsView):
         self._path_ids: list[str] = []
         self._path_rank: dict[str, int] = {}  # cid -> 1-based rank
 
+        # path playback mode: walk the *full* curated learning path step by
+        # step (normal mode only badges the adaptive top-6 queue)
+        self._path_ids_adaptive: list[str] = []
+        self._path_playback: bool = False
+        self._path_cursor: str | None = None
+        self._path_cursor_item = None
+
         # teaching context: the concept currently being taught + its neighbourhood
         self._teach_context_id: str | None = None
         self._teach_prereq_ids: set[str] = set()   # concepts you need to know first
@@ -402,6 +481,16 @@ class KnowledgeGraphView(QGraphicsView):
         # mastery heatmap mode: node colour shows mastery as a heat gradient
         # (red=weak → yellow → green=mastered), making global gaps visible at a glance
         self._mastery_heat_mode: bool = False
+
+        # 2-hop breadth exploration: when focused, extend the ego network to
+        # the second ring (dimmed "hop2" nodes) so the learner sees what lies
+        # beyond immediate neighbors
+        self._hop2_mode: bool = False
+
+        # mastery band filter (full network only): all / unstudied / weak /
+        # mastered — isolates "what's left to learn" instead of just painting
+        # mastery as a heat colour. Focus mode ignores it (see render_graph).
+        self._mastery_filter: str = "all"
 
         # dragging
         self._drag_cid: str | None = None
@@ -430,17 +519,39 @@ class KnowledgeGraphView(QGraphicsView):
         if len(asset.concepts) > self._SKELETON_DEFAULT_THRESHOLD:
             self._skeleton_mode = True
         self._drill_path = []
-        # Learning path highlight: top 6 items from adaptive path
-        self._path_ids = list(path_ids or [])[:6]
+        # Learning path highlight: top 6 items from adaptive path. In playback
+        # mode the badge/trail machinery runs on the full curated path instead.
+        self._path_ids_adaptive = list(path_ids or [])[:6]
+        if self._path_playback:
+            self._path_ids = [
+                cid
+                for cid in (asset.learning_path or [])
+                if asset.concept_by_id(cid)
+            ]
+        else:
+            self._path_ids = list(self._path_ids_adaptive)
         self._path_rank = {cid: i + 1 for i, cid in enumerate(self._path_ids)}
         self.render_graph()
 
+    def enable_drill_down(self) -> None:
+        """Opt this surface into double-click drill-down (main concept map).
+
+        Embedded mini-graphs keep the legacy double-click-to-teach behaviour;
+        the big map uses double-click to *enter* a concept's subgraph and
+        grows the breadcrumb trail instead.
+        """
+        self._drill_on_double_click = True
+
     def drill_down(self, concept_id: str) -> bool:
-        """Move one level down, returning whether child concepts exist."""
-        if self._asset is None:
-            return False
-        _, children = hierarchy_neighbors(self._asset, concept_id)
-        if not children:
+        """Enter the subgraph rooted at ``concept_id`` (always succeeds).
+
+        Earlier versions refused to drill when the concept had no decoded
+        hierarchy children, which made most nodes feel like dead ends ("只能
+        看到相邻节点").  Drilling now re-centres on the node and renders its
+        2-hop subgraph — relation neighbours plus their neighbours — so every
+        double-click visibly goes deeper, hierarchy or not.
+        """
+        if self._asset is None or self._asset.concept_by_id(concept_id) is None:
             return False
         if not self._drill_path or self._drill_path[-1] != concept_id:
             self._drill_path.append(concept_id)
@@ -455,6 +566,17 @@ class KnowledgeGraphView(QGraphicsView):
         self.render_graph(self._drill_path[-1] if self._drill_path else None)
         return True
 
+    def drill_to(self, level: int) -> None:
+        """Breadcrumb navigation: 0 = full network, k = focus ``path[k-1]``."""
+        if self._asset is None:
+            return
+        if level <= 0:
+            self._drill_path = []
+            self.render_graph(None)
+            return
+        self._drill_path = self._drill_path[:level]
+        self.render_graph(self._drill_path[-1] if self._drill_path else None)
+
     def drill_path(self) -> list[str]:
         return list(self._drill_path)
 
@@ -466,7 +588,14 @@ class KnowledgeGraphView(QGraphicsView):
         self._float_timer.stop()
         self._drag_cid = None
         self._focus_id = focus_id
-        nodes, edges = _select_nodes(self._asset, focus_id)
+        # A drilled view is a *subgraph*, not a bare ego network: always pull
+        # in the 2-hop ring while a drill trail is active so going deeper
+        # visibly reveals more of the map.
+        nodes, edges = _select_nodes(
+            self._asset,
+            focus_id,
+            include_2hop=self._hop2_mode or bool(self._drill_path),
+        )
         self._nodes = nodes
         self._edges = edges
 
@@ -482,6 +611,28 @@ class KnowledgeGraphView(QGraphicsView):
         # chapters and make the map feel arbitrary.
         if self._skeleton_mode and focus_id is None and len(nodes) > 8 and not structural_only:
             nodes, edges = self._skeleton_subset(nodes, edges)
+            self._nodes = nodes
+            self._edges = edges
+
+        # Mastery band filter — full network only. In focus mode the learner
+        # drilled in to see THIS concept's neighbourhood, so stripping nodes
+        # by mastery would delete the very context they came for.
+        if self._mastery_filter != "all" and focus_id is None and nodes:
+            band = self._mastery_filter
+
+            def _in_band(cid: str) -> bool:
+                m = float(self._mastery.get(cid, 0.0))
+                if band == "unstudied":
+                    return m <= 0.0
+                if band == "weak":
+                    return 0.0 < m < 0.6
+                if band == "mastered":
+                    return m >= 0.6
+                return True
+
+            kept_ids = {cid for cid, _n, _r in nodes if _in_band(cid)}
+            nodes = [n for n in nodes if n[0] in kept_ids]
+            edges = [e for e in edges if e[0] in kept_ids and e[1] in kept_ids]
             self._nodes = nodes
             self._edges = edges
 
@@ -522,12 +673,118 @@ class KnowledgeGraphView(QGraphicsView):
             self._start_physics()
 
     def focus_concept(self, concept_id: str) -> None:
-        """Radial ego-network centred on ``concept_id`` (motion sleeps)."""
+        """Radial ego-network centred on ``concept_id`` (motion sleeps).
+
+        Peeking at a concept leaves any drill trail: the breadcrumb describes
+        where you *entered*, and a plain single-click focus is a look, not an
+        entry — so the trail is cleared to stay truthful.
+        """
+        self._drill_path = []
         self.render_graph(focus_id=concept_id)
 
     def reset_focus(self) -> None:
         """Back to the full living network."""
+        self._drill_path = []
         self.render_graph(focus_id=None)
+
+    def set_mastery_filter(self, band: str) -> None:
+        """Isolate the full network to one mastery band.
+
+        ``band`` ∈ {``all``, ``unstudied``, ``weak``, ``mastered``}.
+        Re-renders the network; the filter is intentionally ignored in focus
+        mode (an ego-network must keep its surrounding context).
+        """
+        if band not in ("all", "unstudied", "weak", "mastered"):
+            band = "all"
+        if band == self._mastery_filter:
+            return
+        self._mastery_filter = band
+        self.render_graph(focus_id=self._focus_id)
+
+    def path_playback_available(self) -> bool:
+        """Whether the current asset has a walkable curated learning path."""
+        if self._asset is None:
+            return False
+        return any(
+            self._asset.concept_by_id(cid)
+            for cid in (self._asset.learning_path or [])
+        )
+
+    def set_path_playback(self, enabled: bool) -> bool:
+        """Toggle learning-path playback: full-path badges + dimmed context.
+
+        Normal mode badges only the adaptive top-6 queue; playback mode lays
+        the *entire* curated learning path over the network so the learner can
+        walk the intended sequence with :meth:`path_step`. Returns the
+        resulting state (False when no walkable path exists).
+        """
+        if self._asset is None:
+            return False
+        enabled = bool(enabled) and self.path_playback_available()
+        if enabled == self._path_playback:
+            return self._path_playback
+        self._path_playback = enabled
+        if enabled:
+            self._path_ids = [
+                cid
+                for cid in (self._asset.learning_path or [])
+                if self._asset.concept_by_id(cid)
+            ]
+        else:
+            self._path_ids = list(self._path_ids_adaptive)
+        self._path_rank = {cid: i + 1 for i, cid in enumerate(self._path_ids)}
+        if not enabled:
+            self._path_cursor = None
+        self.render_graph(focus_id=self._focus_id)
+        return self._path_playback
+
+    def path_step(self, delta: int) -> tuple[str, int, int] | None:
+        """Move the playback cursor by ``delta`` (±1) and centre on that node.
+
+        Returns ``(concept_id, position_1_based, total)`` or ``None`` when
+        playback is off or no path node is currently rendered.
+        """
+        if not self._path_playback:
+            return None
+        visible = [cid for cid in self._path_ids if cid in self._node_items]
+        if not visible:
+            return None
+        if self._path_cursor not in visible:
+            idx = 0 if delta >= 0 else len(visible) - 1
+        else:
+            idx = (visible.index(self._path_cursor) + delta) % len(visible)
+        cid = visible[idx]
+        self._path_cursor = cid
+        self._show_path_cursor(cid)
+        self.centerOn(self._node_items[cid])
+        return cid, idx + 1, len(visible)
+
+    def _show_path_cursor(self, cid: str) -> None:
+        """Solid gold ring on the current playback node.
+
+        Parented to the node item so it follows dragging/drift. The solid gold
+        ring is its own visual channel — distinct from the frontier's dashed
+        orange ring and the unanchored hollow dot (three-semantics rule).
+        """
+        self._hide_path_cursor()
+        item = self._node_items.get(cid)
+        if item is None:
+            return
+        r = item.boundingRect()
+        rad = max(r.width(), r.height()) / 2 + 9
+        ring = QGraphicsEllipseItem(QRectF(-rad, -rad, rad * 2, rad * 2))
+        ring.setPen(QPen(QColor("#FF8F00"), 3.2))
+        ring.setBrush(QBrush(Qt.BrushStyle.NoBrush))
+        ring.setZValue(item.zValue() + 3)
+        ring.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        ring.setParentItem(item)
+        self._path_cursor_item = ring
+
+    def _hide_path_cursor(self) -> None:
+        ring = self._path_cursor_item
+        self._path_cursor_item = None
+        if ring is not None and ring.scene() is not None:
+            ring.scene().removeItem(ring)
 
     def set_semantic_filter(self, sem_types: set[str]) -> None:
         """Filter/highlight edges by semantic relation type.
@@ -654,6 +911,20 @@ class KnowledgeGraphView(QGraphicsView):
             self._density_map = {}
         self.render_graph(focus_id=self._focus_id)
         return self._mastery_heat_mode
+
+    def toggle_hop2_mode(self, enabled: bool | None = None) -> bool:
+        """Toggle 2-hop breadth exploration.
+
+        When on, the focused ego network extends to the second ring: nodes
+        two relations away appear dimmed, keeping their real edges. Returns
+        the new state.
+        """
+        if enabled is None:
+            self._hop2_mode = not self._hop2_mode
+        else:
+            self._hop2_mode = bool(enabled)
+        self.render_graph(focus_id=self._focus_id)
+        return self._hop2_mode
 
     def _compute_density(self) -> None:
         """Compute density = importance × novelty for each visible node."""
@@ -796,15 +1067,17 @@ class KnowledgeGraphView(QGraphicsView):
         scene.clear()
         self._node_items = {}
         self._edge_items = {}
+        self._edge_heads = {}
         self._physics = {}
         self._phases = {}
         self._freqs = {}
+        self._path_cursor_item = None  # ring dies with the scene; re-added below
 
         def _box_of(cid: str) -> tuple[float, float]:
             role = next((r for cc, _n, r in self._nodes if cc == cid), "normal")
             if role == "focus":
                 return FBOX_W, FBOX_H
-            if role == "context":
+            if role in ("context", "hop2"):
                 return CBOX_W, CBOX_H
             f = self._centrality.get(cid, 1.0)
             return BOX_W * f, BOX_H * f
@@ -858,6 +1131,14 @@ class KnowledgeGraphView(QGraphicsView):
             scene.addItem(line)
             self._edge_items[key] = line
 
+            # Direction marker, fed by the same semantic table as the colour.
+            head = QGraphicsPolygonItem()
+            head.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            head.setZValue(0.5)
+            head.setVisible(False)
+            scene.addItem(head)
+            self._edge_heads[key] = head
+
         # nodes -------------------------------------------------------------
         unanchored_ids: set[str] = set()
         if getattr(self, "_show_unanchored_marks", True):
@@ -882,6 +1163,11 @@ class KnowledgeGraphView(QGraphicsView):
                 border, bwidth = _hex(_BORDER_ANOMALY), 2
             elif role == "context":
                 fill = _hex(_FILL_CONTEXT)
+                border, bwidth = _hex(_BORDER_CONTEXT), 1
+            elif role == "hop2":
+                # second-ring node: dimmed fill, thin border — visually
+                # distinct from solid direct neighbors
+                fill = "#EDF0F3"
                 border, bwidth = _hex(_BORDER_CONTEXT), 1
             else:
                 if cid in self._grey_ids:
@@ -916,6 +1202,8 @@ class KnowledgeGraphView(QGraphicsView):
             tip = name
             if definition:
                 tip += "\n\n" + definition[:120]
+            # 显式提示下钻手势——否则"双击"是隐藏功能
+            tip += "\n\n🔍 " + _t("drill_tooltip_hint")
             # frontier nodes get an explicit affordance — the legend explains
             # the orange dashed ring, but the tooltip removes any guesswork
             if cid in self._frontier_ids:
@@ -925,6 +1213,10 @@ class KnowledgeGraphView(QGraphicsView):
             item.setToolTip(tip)
             scene.addItem(item)
             self._node_items[cid] = item
+            if self._path_playback and cid not in self._path_rank:
+                # Playback mode: fade everything off-path so the curated
+                # sequence reads as one continuous trail.
+                item.setOpacity(0.35)
 
             # provenance mark: concepts without a source anchor (template
             # enrichment or unmatched evidence) get a small hollow ring at
@@ -1043,7 +1335,10 @@ class KnowledgeGraphView(QGraphicsView):
         self.fit_content()
         self._hover_cid = None
         self._update_edges()
-        self.view_changed.emit()
+        # Restore the playback cursor ring after a re-render (the scene was
+        # cleared, so the parented ring vanished with the old node items).
+        if self._path_cursor and self._path_cursor in self._node_items:
+            self._show_path_cursor(self._path_cursor)
 
     # ------------------------------------------------------------------ #
     # zoom control
@@ -1113,14 +1408,26 @@ class KnowledgeGraphView(QGraphicsView):
     def _start_physics(self) -> None:
         self._calm_frames = 0
         self._tick = 0
-        if self._physics:
-            self._phys_timer.start()
+        if not self._physics:
+            return
+        n = len(self._physics)
+        if n > _LIVELY_GUARD_NODES:
+            # Large living map: settle sooner and stay put (no perpetual drift).
+            self._phys_params = dict(_PHYS)
+            self._phys_params["energy_stop"] = max(_PHYS["energy_stop"], 0.6)
+            self._phys_timer.setInterval(50)  # calmer CPU burst while settling
+            self._float_enabled = False
+        else:
+            self._phys_params = _PHYS
+            self._phys_timer.setInterval(33)
+            self._float_enabled = True
+        self._phys_timer.start()
 
     def _physics_step(self) -> None:
         if self._focus_id is not None or len(self._physics) < 2:
             self._phys_timer.stop()
             return
-        P = _PHYS
+        P = self._phys_params
         cids = list(self._physics.keys())
         center = self.scene().sceneRect().center()
 
@@ -1174,7 +1481,8 @@ class KnowledgeGraphView(QGraphicsView):
             self._calm_frames += 1
             if self._calm_frames >= P["settle_frames"]:
                 self._phys_timer.stop()
-                self._float_timer.start()  # settled -> gentle floating
+                if self._float_enabled:
+                    self._float_timer.start()  # settled -> gentle floating
         else:
             self._calm_frames = 0
 
@@ -1192,7 +1500,11 @@ class KnowledgeGraphView(QGraphicsView):
         self._update_edges()
 
     def _update_edges(self) -> None:
-        from expert_anything.core.decoder import rel_semantic_color, classify_relation
+        from expert_anything.core.decoder import (
+            REL_SEMANTICS,
+            classify_relation,
+            rel_semantic_color,
+        )
         sem_filter = self._semantic_filter
 
         role_by_id = {cid: role for cid, _name, role in self._nodes}
@@ -1201,12 +1513,15 @@ class KnowledgeGraphView(QGraphicsView):
             role = role_by_id.get(cid, "normal")
             if role == "focus":
                 return FBOX_W / 2, FBOX_H / 2
-            if role == "context":
+            if role in ("context", "hop2"):
                 return CBOX_W / 2, CBOX_H / 2
             return BOX_W / 2, BOX_H / 2
 
         for (s, t, label), line in self._edge_items.items():
+            head = self._edge_heads.get((s, t, label))
             if s not in self._node_items or t not in self._node_items:
+                if head is not None:
+                    head.setVisible(False)
                 continue
             p1 = self._node_items[s].pos()
             p2 = self._node_items[t].pos()
@@ -1231,6 +1546,16 @@ class KnowledgeGraphView(QGraphicsView):
             else:
                 filter_alpha = 255
                 filter_width = 1.6
+
+            # Path playback: fade edges that are neither on the path trail
+            # nor touching the focused node, so the golden sequence stands out.
+            if (
+                self._path_playback
+                and not self._is_path_edge(s, t)
+                and s != self._focus_id
+                and t != self._focus_id
+            ):
+                filter_alpha = min(filter_alpha, 70)
 
             # edge colour: focus > anomaly > teaching context > path highlight > semantic colour > context
             if s == self._focus_id or t == self._focus_id:
@@ -1260,6 +1585,12 @@ class KnowledgeGraphView(QGraphicsView):
                 if sem == "contrast":
                     pen.setStyle(Qt.PenStyle.DashLine)
             line.setPen(pen)
+            head = self._edge_heads.get((s, t, label))
+            if head is not None:
+                sem_info = REL_SEMANTICS.get(sem, REL_SEMANTICS["related"])
+                _place_edge_head(
+                    head, b1, b2, str(sem_info.get("arrow", "normal")), pen.color()
+                )
 
     def _is_context_edge(self, s: str, t: str) -> bool:
         for a, b, label, _ in self._edges:
@@ -1427,15 +1758,20 @@ class KnowledgeGraphView(QGraphicsView):
         if self._focus_id != concept_id:
             self.focus_concept(concept_id)
         self.node_single_clicked.emit(concept_id)
-        self.concept_drilldown.emit(concept_id)
 
     def mouseDoubleClickEvent(self, event):
         hit = self._item_concept(event.pos())
         if hit is not None:
             cid, name = hit
-            if self._focus_id != cid:
-                self.focus_concept(cid)
-            self.concept_clicked.emit(name)
+            if self._drill_on_double_click:
+                # Main map: double-click enters the node's subgraph and grows
+                # the breadcrumb; teaching stays one right-click away.
+                self.drill_down(cid)
+                self.node_drilled.emit(cid)
+            else:
+                if self._focus_id != cid:
+                    self.focus_concept(cid)
+                self.concept_clicked.emit(name)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
@@ -1458,7 +1794,9 @@ class KnowledgeGraphView(QGraphicsView):
         if chosen is act_teach:
             self.concept_clicked.emit(name)
         elif chosen is act_evidence:
-            self.concept_drilldown.emit(cid)
+            # Dedicated signal: a single click already means "open the detail
+            # card", so reusing that channel here would hijack every click.
+            self.evidence_requested.emit(cid)
         elif chosen is act_compare:
             self.node_single_clicked.emit(cid)
         elif chosen is act_focus:
@@ -1490,7 +1828,7 @@ class KnowledgeGraphView(QGraphicsView):
                 item.setPen(QPen(_hex("#0EA5E9"), 3))
             else:
                 role = next((r for cc, _n, r in self._nodes if cc == nid), "normal")
-                if nid in self._grey_ids or role == "context":
+                if nid in self._grey_ids or role in ("context", "hop2"):
                     item.setPen(QPen(_hex(_BORDER_CONTEXT), 1))
                 elif nid in self._anomaly_ids:
                     item.setPen(QPen(_hex(_BORDER_ANOMALY), 3))

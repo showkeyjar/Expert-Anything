@@ -15,6 +15,7 @@ Scan strategy (static, run on import):
    by prefix, and new families must be added to DYNAMIC_PREFIXES.
 """
 
+import ast
 import re
 import unittest
 from pathlib import Path
@@ -22,6 +23,7 @@ from pathlib import Path
 from expert_anything.core.i18n import LANGS, _STRINGS
 
 ROOT = Path(__file__).resolve().parent.parent
+I18N_FILE = ROOT / "expert_anything" / "core" / "i18n.py"
 # Code-level corpus: every .py in the repo (tools, verify scripts, tests,
 # package-internal _-prefixed modules like ui/widgets/_helpers.py) EXCEPT
 # i18n.py itself (definitions), this file (audit lists), the legacy/ archive
@@ -41,7 +43,7 @@ CORPUS = "\n".join(p.read_text(encoding="utf-8") for p in SRC_FILES)
 DYNAMIC_PREFIXES = (
     "rel_", "style_", "profile_", "channel_", "kind_", "anomaly_",
     "trend_", "sev_", "teacher_status_", "domain_template_reason_",
-    "profile_hint_", "baseline_", "guide_step",
+    "profile_hint_", "baseline_", "guide_step", "glossary_occ_",
 )
 # error keys are assembled with a *suffix*: f"{kind}_failed", teach_error etc.
 DYNAMIC_SUFFIXES = ("_failed",)
@@ -78,6 +80,40 @@ class I18nKeyIntegrityTest(unittest.TestCase):
                 missing,
                 f"key {key!r} missing languages: {sorted(missing)}",
             )
+
+    def test_no_duplicate_key_definitions(self):
+        """A key defined twice in the _STRINGS literal is silently shadowed:
+        the later definition wins at runtime while the earlier one is dead
+        text that misleads translators and reviewers. 2026-11-02 cleanup
+        removed 6 shadowed first-definitions (recommend_next, method_llm,
+        method_fallback, import_done, evidence_label, learn_next); this
+        guard keeps the table single-definition from here on."""
+        tree = ast.parse(I18N_FILE.read_text(encoding="utf-8"))
+        strings_dict = None
+        for node in tree.body:
+            if isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = (
+                    node.targets if isinstance(node, ast.Assign) else [node.target]
+                )
+                if any(
+                    isinstance(t, ast.Name) and t.id == "_STRINGS" for t in targets
+                ):
+                    strings_dict = node.value
+                    break
+        self.assertIsNotNone(strings_dict, "_STRINGS definition not found")
+        self.assertIsInstance(
+            strings_dict, ast.Dict, "_STRINGS is no longer a dict literal"
+        )
+        keys = [
+            k.value for k in strings_dict.keys if isinstance(k, ast.Constant)
+        ]
+        dupes = sorted({k for k in keys if keys.count(k) > 1})
+        self.assertEqual(
+            dupes,
+            [],
+            f"duplicate key definitions in _STRINGS — the later one silently "
+            f"wins and the earlier one is dead text: {dupes}",
+        )
 
     def test_literal_keys_are_defined(self):
         used = set(LITERAL_CALL.findall(CORPUS))

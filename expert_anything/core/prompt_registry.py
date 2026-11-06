@@ -1215,16 +1215,6 @@ def get_prompt(key: str, lang: str | None = None, default: str | None = None) ->
     return default if default is not None else ""
 
 
-def get_system_prompt(prompt_key: str, lang: str | None = None) -> str:
-    """Alias for get_prompt, naming convention for system prompts."""
-    return get_prompt(prompt_key, lang)
-
-
-def get_user_prompt(prompt_key: str, lang: str | None = None) -> str:
-    """Alias for get_prompt, naming convention for user prompts."""
-    return get_prompt(prompt_key, lang)
-
-
 # --------------------------------------------------------------------------- #
 # Domain-specific prompt variants
 # --------------------------------------------------------------------------- #

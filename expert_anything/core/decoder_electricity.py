@@ -30,11 +30,11 @@ def generate_market_architecture_scene() -> dict:
             {"id": "n5", "label": "发电企业", "kind": "store"},
         ],
         "edges": [
-            {"from": "n1", "to": "n2", "label": "协调"},
-            {"from": "n1", "to": "n3", "label": "监管"},
-            {"from": "n2", "to": "n4", "label": "跨省交易"},
-            {"from": "n3", "to": "n4", "label": "省内交易"},
-            {"from": "n5", "to": "n3", "label": "上网电量"},
+            {"from": "n1", "to": "n2", "label": "协调", "type": "related"},
+            {"from": "n1", "to": "n3", "label": "监管", "type": "related"},
+            {"from": "n2", "to": "n4", "label": "跨省交易", "type": "related"},
+            {"from": "n3", "to": "n4", "label": "省内交易", "type": "related"},
+            {"from": "n5", "to": "n3", "label": "上网电量", "type": "causes"},
         ],
         "steps": [
             {"caption": "顶层：中国电力交易中心负责全国设计", "show": ["n1"], "active": "n1"},
@@ -59,10 +59,10 @@ def generate_price_formation_scene() -> dict:
             {"id": "n5", "label": "现货价格", "kind": "flow"},
         ],
         "edges": [
-            {"from": "n1", "to": "n4", "label": "+"},
-            {"from": "n2", "to": "n4", "label": "+"},
-            {"from": "n3", "to": "n4", "label": "+"},
-            {"from": "n5", "to": "n4", "label": "替代"},
+            {"from": "n1", "to": "n4", "label": "+", "type": "part_of"},
+            {"from": "n2", "to": "n4", "label": "+", "type": "part_of"},
+            {"from": "n3", "to": "n4", "label": "+", "type": "part_of"},
+            {"from": "n5", "to": "n4", "label": "替代", "type": "contrast"},
         ],
         "steps": [
             {"caption": "传统电价 = 上网电价 + 输配电价 + 政府基金", "show": ["n1", "n2", "n3", "n4"], "active": "n4"},
@@ -91,11 +91,11 @@ def generate_trading_process_scene() -> dict:
             {"id": "n5", "label": "履约执行", "kind": "flow"},
         ],
         "edges": [
-            {"from": "n1", "to": "n2", "label": "并发"},
-            {"from": "n1", "to": "n3", "label": "输入"},
-            {"from": "n2", "to": "n3", "label": "输入"},
-            {"from": "n3", "to": "n4", "label": "输出"},
-            {"from": "n4", "to": "n5", "label": "执行"},
+            {"from": "n1", "to": "n2", "label": "并发", "type": "related"},
+            {"from": "n1", "to": "n3", "label": "输入", "type": "prereq"},
+            {"from": "n2", "to": "n3", "label": "输入", "type": "prereq"},
+            {"from": "n3", "to": "n4", "label": "输出", "type": "causes"},
+            {"from": "n4", "to": "n5", "label": "执行", "type": "prereq"},
         ],
         "steps": [
             {"caption": "日前市场：发电企业提交次日报价", "show": ["n1"], "active": "n1"},
@@ -126,9 +126,9 @@ def generate_lmp_scene() -> dict:
             {"id": "n4", "label": "节点边际电价", "kind": "current"},
         ],
         "edges": [
-            {"from": "n1", "to": "n4", "label": "+"},
-            {"from": "n2", "to": "n4", "label": "+"},
-            {"from": "n3", "to": "n4", "label": "+"},
+            {"from": "n1", "to": "n4", "label": "+", "type": "part_of"},
+            {"from": "n2", "to": "n4", "label": "+", "type": "part_of"},
+            {"from": "n3", "to": "n4", "label": "+", "type": "part_of"},
         ],
         "steps": [
             {"caption": "LMP的第一部分：电能价值（能量节点的价格）", "show": ["n1", "n4"], "active": "n1"},

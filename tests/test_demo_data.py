@@ -41,6 +41,78 @@ class TestDemoData(unittest.TestCase):
                 self.assertIn(r["source"], ids, f"{aid}: dangling relation source")
                 self.assertIn(r["target"], ids, f"{aid}: dangling relation target")
 
+    def test_relation_evidence_is_a_verbatim_whole_source_line(self):
+        """No template notes, no paraphrases: evidence must be sliceable back."""
+        for aid, data in self.assets.items():
+            text = data.get("source_text", "")
+            lines = set(text.splitlines())
+            for r in data.get("relations", []):
+                ev = r.get("evidence", "")
+                self.assertTrue(ev, f"{aid}: relation {r['id']} has no evidence")
+                self.assertIn(ev, lines, f"{aid}: evidence is not a whole source line")
+                self.assertEqual(
+                    text.count(ev), 1,
+                    f"{aid}: evidence occurs more than once; the anchor is ambiguous",
+                )
+                for forbidden in ("模板", "演示数据", "确定性生成"):
+                    self.assertNotIn(
+                        forbidden, ev,
+                        f"{aid}: evidence still contains a generator note",
+                    )
+
+    def test_relation_evidence_is_located_by_offset_and_line(self):
+        """Every relation carries a truthful anchor for the jump-to-source UI."""
+        for aid, data in self.assets.items():
+            text = data.get("source_text", "")
+            for r in data.get("relations", []):
+                loc = r.get("location")
+                self.assertIsNotNone(
+                    loc, f"{aid}: relation {r['id']} has no source location"
+                )
+                start, end = loc["char_start"], loc["char_end"]
+                self.assertGreaterEqual(start, 0, f"{aid}: negative char_start")
+                self.assertLessEqual(end, len(text), f"{aid}: char_end past source")
+                self.assertEqual(
+                    text[start:end], r["evidence"],
+                    f"{aid}: location does not slice back to the evidence",
+                )
+                self.assertEqual(
+                    loc["line"], text.count("\n", 0, start) + 1,
+                    f"{aid}: recorded line disagrees with char offset",
+                )
+
+    def test_relation_semantics_cover_prereq_plus_two(self):
+        """Keep the prereq main line but require two more of the six semantics."""
+        from expert_anything.core.decoder import classify_relation
+
+        for aid, data in self.assets.items():
+            rels = data.get("relations", [])
+            types = {r.get("type", "") for r in rels}
+            self.assertIn("prereq", types, f"{aid}: missing prereq main line")
+            self.assertGreaterEqual(
+                len(types), 3,
+                f"{aid}: only {sorted(types)}; need prereq + two more semantics",
+            )
+            for r in rels:
+                # The label must express the declared type on its own, so a
+                # drifted label cannot silently hide behind a correct type field.
+                self.assertEqual(
+                    classify_relation(r.get("label", ""), ""), r["type"],
+                    f"{aid}: label {r.get('label')!r} does not read as {r['type']}",
+                )
+
+    def test_relation_endpoint_pairs_are_unique(self):
+        """One line per node pair keeps the main map readable."""
+        for aid, data in self.assets.items():
+            pairs = [
+                frozenset((r["source"], r["target"]))
+                for r in data.get("relations", [])
+            ]
+            self.assertEqual(
+                len(pairs), len(set(pairs)),
+                f"{aid}: duplicate endpoint pair(s) would draw overlapping edges",
+            )
+
     def test_learning_path_references_real_concepts(self):
         for aid, data in self.assets.items():
             ids = {c["id"] for c in data.get("concepts", [])}

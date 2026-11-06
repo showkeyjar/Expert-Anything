@@ -175,19 +175,16 @@ class TeacherModel:
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-_KIND_LABELS = {
-    "contradiction": "矛盾",
-    "undefined_term": "未定义术语",
-    "logical_gap": "逻辑断点",
-    "surprising_claim": "反常主张",
-    "learner_gap": "学习者信号",
-    "needs_llm": "需要 LLM",
-    "unanchored_source": "无原文锚点",
-}
-
-
 def kind_label(kind: str) -> str:
-    return _KIND_LABELS.get(kind, kind)
+    """Localized anomaly-kind label — the single mapping for every UI surface.
+
+    Resolved through i18n at call time (never frozen at import); unknown kinds
+    fall back to their raw code so a new anomaly type stays readable before its
+    translation lands.
+    """
+    key = f"kind_{kind}"
+    label = i18n.t(key)
+    return kind if label == key else label
 
 
 def _parse_json(text: str) -> dict:
@@ -855,7 +852,7 @@ def incorporate_comparison(
     if shared:
         names = "、".join(str(x) for x in shared[:5])
         for note, other_name in ((na, cb.name), (nb, ca.name)):
-            text = f"对比锚点:与「{other_name}」共享概念邻居:{names}"
+            text = f"对比关联:与「{other_name}」共享相关概念:{names}"
             if text not in note.connections:
                 note.connections.append(text)
 
@@ -1035,3 +1032,81 @@ def anomaly_prioritized_path(
     front = [cid for cid in base if cid in open_ids]
     rest = [cid for cid in base if cid not in open_ids]
     return front + rest
+
+
+#: Mastery at/above which a ``learner_gap`` anomaly counts as closed.
+GAP_RESOLVE_MASTERY = 0.6
+
+
+def resolve_satisfied_anomalies(
+    asset: KnowledgeAsset | None,
+    teacher: TeacherModel | None,
+    learner_state: dict | None,
+) -> int:
+    """Mark anomalies whose fix is already evidenced as ``resolved``.
+
+    The status vocabulary (``open | investigating | resolved |
+    surfaced_to_student``) existed from day one and every consumer
+    (``anomaly_concept_ids`` / ``concept_anomalies`` / doubt strips / coach)
+    already filters on it — but nothing ever resolved anything, so a closed
+    gap kept crying wolf in the teaching path forever.  Two kinds carry a
+    deterministic satisfaction check and are handled here:
+
+    - ``learner_gap``: the named concept's mastery reached
+      ``GAP_RESOLVE_MASTERY`` — the learner demonstrably fixed it;
+    - ``unanchored_source``: the named concept now carries source locations
+      (e.g. a re-extraction anchored its evidence).
+
+    Material-level doubts (contradiction / logical_gap / surprising_claim)
+    stay open by design — the system must not talk itself out of them.
+    Concept matching reuses the ``anomaly_concept_ids`` rule (concept name in
+    the description or location).  Returns the number newly resolved
+    (0 → nothing changed, caller may skip persistence).  Never raises:
+    anomaly hygiene must not break teaching.
+    """
+    if teacher is None or asset is None:
+        return 0
+    anomalies = getattr(teacher, "anomalies", None) or []
+    concepts = getattr(asset, "concepts", None) or []
+    if not anomalies or not concepts:
+        return 0
+    from expert_anything.core.learner import normalize as _norm
+
+    state = learner_state if isinstance(learner_state, dict) else {}
+    cstate = state.get("concepts", {})
+    if not isinstance(cstate, dict):
+        cstate = {}
+
+    def _match_concept(an) -> object | None:
+        for c in concepts:
+            name = getattr(c, "name", "") or ""
+            if name and (
+                name in (getattr(an, "description", "") or "")
+                or name in (getattr(an, "location", "") or "")
+            ):
+                return c
+        return None
+
+    resolved = 0
+    for an in anomalies:
+        if getattr(an, "status", "") == "resolved":
+            continue
+        kind = getattr(an, "kind", "")
+        if kind == "learner_gap":
+            c = _match_concept(an)
+            if c is None:
+                continue
+            rec = cstate.get(_norm(c.name), {})
+            try:
+                mastery = float(rec.get("mastery", 0.0)) if isinstance(rec, dict) else 0.0
+            except (TypeError, ValueError):
+                mastery = 0.0
+            if mastery >= GAP_RESOLVE_MASTERY:
+                an.status = "resolved"
+                resolved += 1
+        elif kind == "unanchored_source":
+            c = _match_concept(an)
+            if c is not None and getattr(c, "locations", None):
+                an.status = "resolved"
+                resolved += 1
+    return resolved

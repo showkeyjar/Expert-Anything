@@ -1025,13 +1025,13 @@ class Tutor:
             score = round(max(0.1, min(0.85, 0.15 + ratio * 0.55 + length_factor * 0.15)), 2)
             missed = [t for t in sorted(key_terms) if t.lower() not in ans_lower][:5]
             feedback = (
-                f"(未接入 LLM,基于关键术语匹配的粗略评估。"
+                f"(智能分析未开启,以下为基于关键术语匹配的粗略评估。"
                 f"命中 {hits}/{len(key_terms)} 个关键术语。)"
                 + (f"\n可能遗漏的要点：{'、'.join(missed)}" if missed else "")
             )
         else:
             score = round(max(0.1, 0.2 + length_factor * 0.5), 2)
-            feedback = "(未接入 LLM,基于回答长度的粗略估计,不是真实评估。)"
+            feedback = "(智能分析未开启,以下为基于回答长度的粗略估计,不是真实评估。)"
 
         return {
             "score": score,
@@ -1481,7 +1481,7 @@ class Tutor:
             score = round(max(0.2, min(0.9, 0.2 + ratio * 0.7)), 2)
             missed = [t for t in sorted(key_terms) if t.lower() not in ans_lower][:5]
             feedback = (
-                f"(未接入 LLM,基于关键术语匹配的粗略估计。"
+                f"(智能分析未开启,以下为基于关键术语匹配的粗略估计。"
                 f"命中 {hits}/{len(key_terms)} 个关键术语。)"
                 + (f"\n可能遗漏的要点：{'、'.join(missed)}" if missed else "")
             )
@@ -1489,7 +1489,7 @@ class Tutor:
             # no key terms available — fall back to length
             words = len(answer.strip())
             score = 0.3 if words < 5 else (0.6 if words < 30 else 0.8)
-            feedback = "(未接入 LLM,基于回答长度的粗略估计,不是真实评估。)"
+            feedback = "(智能分析未开启,以下为基于回答长度的粗略估计,不是真实评估。)"
         return {
             "score": score,
             "understood": score >= 0.6,

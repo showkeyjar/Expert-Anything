@@ -139,10 +139,6 @@ class MasteryDistributionBar(QWidget):
         self._counts = counts or {"mastered": 0, "learning": 0, "weak": 0, "unstudied": 0}
         self.setMinimumHeight(22)
 
-    def set_counts(self, counts: dict[str, int]) -> None:
-        self._counts = counts
-        self.update()
-
     def paintEvent(self, event) -> None:
         painter = _QPainter(self)
         painter.setRenderHint(_QPainter.RenderHint.Antialiasing)

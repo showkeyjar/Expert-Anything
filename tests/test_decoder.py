@@ -304,7 +304,12 @@ class TestDomainDecoders(unittest.TestCase):
     def test_registry_contains_both_domains(self):
         self.assertEqual(
             set(decoder.DOMAIN_DECODERS),
-            {"electricity_trading", "carbon_trading"},
+            {
+                "electricity_trading",
+                "carbon_trading",
+                "renewable_forecasting",
+                "distributed_energy",
+            },
         )
 
     def test_carbon_curated_scene_via_entry_point(self):
@@ -427,6 +432,25 @@ class TestTeachScenePipeline(unittest.TestCase):
         lesson = tutor.teach(asset.concepts[0], style="example")
         self.assertIn("scene", lesson)
         self.assertTrue(lesson["scene"].get("nodes"))
+
+
+class TestRelationSemantics(unittest.TestCase):
+    """Free-form labels must fold into the six canonical semantics."""
+
+    def test_longest_pattern_wins_over_shorter_one(self):
+        # "属于…的一部分" also contains "属于" (is_a); the longer, more
+        # specific phrase must be read as composition, not classification.
+        self.assertEqual(decoder.classify_relation("属于…的一部分", ""), "part_of")
+        self.assertEqual(decoder.classify_relation("属于", ""), "is_a")
+
+    def test_canonical_types_pass_through(self):
+        for sem in decoder.REL_SEMANTICS:
+            self.assertEqual(decoder.classify_relation("", sem), sem)
+
+    def test_free_form_type_alias_folds(self):
+        self.assertEqual(decoder.classify_relation("", "contains"), "part_of")
+        self.assertEqual(decoder.classify_relation("", "dependency"), "prereq")
+        self.assertEqual(decoder.classify_relation("", "effect"), "causes")
 
 
 if __name__ == "__main__":

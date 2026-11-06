@@ -13,8 +13,9 @@ from expert_anything.ui.views.source_view import SourceView
 from expert_anything.ui.views.teach_view import TeachView
 from expert_anything.ui.views.learner_view import LearnerView
 from expert_anything.ui.views.teacher_view import TeacherView
+from expert_anything.ui.views.panorama_view import PanoramaView
 
 __all__ = [
     "ImportView", "KnowledgeView", "ConceptMapView",
-    "SourceView", "TeachView", "LearnerView", "TeacherView",
+    "SourceView", "TeachView", "LearnerView", "TeacherView", "PanoramaView",
 ]

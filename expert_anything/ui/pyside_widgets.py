@@ -16,7 +16,7 @@ from __future__ import annotations
 import html
 import re
 
-from PySide6.QtCore import Qt, Signal, QUrl
+from PySide6.QtCore import Qt, Signal, QUrl, QTimer
 from PySide6.QtGui import (
     QColor as _QColor,
     QFont as _QFont,
@@ -69,6 +69,13 @@ class SourceTextView(QTextBrowser):
     """
 
     concept_anchor_clicked = Signal(str)
+    # Emitted (debounced) whenever the reader's resting scroll offset for an
+    # asset changes — the view persists it so reading resumes in place.
+    reading_position_changed = Signal(str, int)
+    # Focused-reading card actions (deterministic projection, see _focus_card)
+    teach_requested = Signal(str)  # concept name
+    decode_requested = Signal(str)  # concept id (open the decoded scene)
+    focus_exit_requested = Signal()  # back to the full text
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -82,45 +89,79 @@ class SourceTextView(QTextBrowser):
         self._asset: KnowledgeAsset | None = None
         self._concept_ids_by_name: dict[str, str] = {}
         self._learner_state: dict = {}
+        self._focus_id: str | None = None
+        # Reading-position memory: ignore scroll events until the saved offset
+        # has been restored, then debounce writes while the reader scrolls.
+        self._position_armed: bool = False
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._flush_position)
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
     # -- data ---------------------------------------------------------------
     def set_asset(self, asset: KnowledgeAsset, learner_state: dict | None = None) -> None:
         self._asset = asset
         self._concept_ids_by_name = {c.name.lower(): c.id for c in asset.concepts}
         self._learner_state = learner_state or {}
+        self._focus_id = None  # a new asset always starts in full-text mode
+        self._position_armed = False
+        self._save_timer.stop()
         self._render()
+        # Restore after the document has finished its layout (setHtml only
+        # schedules the layout; the scrollbar range is not valid yet).
+        QTimer.singleShot(0, self._restore_position)
 
-    def _render(self) -> None:
+    # -- reading-position memory -------------------------------------------
+    def _restore_position(self) -> None:
+        """Jump back to where this asset was last read."""
         if self._asset is None:
-            self.setHtml("")
+            self._position_armed = True
             return
-        text = self._asset.source_text or ""
+        from expert_anything.core.learner import load_reading_position
 
-        # Build mastery lookup from learner state
+        pos = load_reading_position(self._learner_state, self._asset.asset_id)
+        if pos:
+            sb = self.verticalScrollBar()
+            sb.setValue(min(pos, sb.maximum()))
+        self._position_armed = True
+
+    def _on_scroll(self, _value: int) -> None:
+        if not self._position_armed or self._asset is None:
+            return
+        self._save_timer.start(500)
+
+    def _flush_position(self) -> None:
+        """Write the current offset into learner state and notify the view."""
+        if self._asset is None or not self._position_armed:
+            return
+        from expert_anything.core.learner import save_reading_position
+
+        pos = self.verticalScrollBar().value()
+        save_reading_position(self._learner_state, self._asset.asset_id, pos)
+        self.reading_position_changed.emit(self._asset.asset_id, pos)
+
+    def hideEvent(self, event) -> None:
+        # Leaving the reader mid-scroll must not lose the last offset if the
+        # 500ms debounce had not fired yet.
+        if self._position_armed and self._save_timer.isActive():
+            self._save_timer.stop()
+            self._flush_position()
+        super().hideEvent(event)
+
+    def _compiled_concepts(self) -> list[tuple]:
+        """(pattern, concept_id, name, mastery) — longest name first so a
+        short concept name never shadows a longer one as a sub-string."""
         from expert_anything.core.learner import normalize as _norm
+
         mastery_map: dict[str, float] = {}
         for k, v in self._learner_state.get("concepts", {}).items():
             mastery_map[_norm(k)] = float(v.get("mastery", 0.0))
-
-        # Reverse anchors: lines that serve as grounded evidence for a concept
-        # get an inline margin mark so readers see what the line feeds into.
-        line_marks: dict[int, list[tuple[str, str]]] = {}
-        for c in self._asset.concepts:
-            for ev in c.evidence or []:
-                loc = c.location_for_evidence(ev)
-                if loc is not None and loc.line:
-                    idx = loc.line - 1
-                    marks = line_marks.setdefault(idx, [])
-                    if all(cid != c.id for cid, _ in marks):
-                        marks.append((c.id, c.name))
-
-        # highlight concept names (longest first to avoid sub-string clashes)
         names = sorted(
             (c.name for c in self._asset.concepts if len(c.name) >= 2),
             key=len,
             reverse=True,
         )
-        compiled = [
+        return [
             (
                 re.compile(re.escape(name), re.IGNORECASE),
                 self._concept_ids_by_name.get(name.lower(), ""),
@@ -129,30 +170,99 @@ class SourceTextView(QTextBrowser):
             )
             for name in names
         ]
+
+    def _evidence_marks(self) -> dict[int, list[tuple[str, str]]]:
+        """Reverse anchors: line -> concepts the line is grounded evidence for."""
+        marks: dict[int, list[tuple[str, str]]] = {}
+        for c in self._asset.concepts:
+            for ev in c.evidence or []:
+                loc = c.location_for_evidence(ev)
+                if loc is not None and loc.line:
+                    lst = marks.setdefault(loc.line - 1, [])
+                    if all(cid != c.id for cid, _ in lst):
+                        lst.append((c.id, c.name))
+        return marks
+
+    def _term_tooltips(self) -> dict:
+        """Registered domain term tooltip per concept name (lowercased).
+
+        Hovering a concept highlight in the source shows its official domain
+        term (canonical name · aliases — definition) so the reader gets the
+        domain vocabulary inline while reading.  Deterministic (template only);
+        empty when the asset has no detectable domain.  Cached per asset.
+        """
+        cache = getattr(self, "_term_tip_cache", None)
+        if cache is not None and cache[0] is self._asset:
+            return cache[1]
+        mapping: dict = {}
+        asset = self._asset
+        if asset is not None:
+            from expert_anything.core import terminology
+            from expert_anything.core.domain_templates import detect_domain_from_title
+
+            domain = detect_domain_from_title(getattr(asset, "title", "")) or ""
+            if domain:
+                for c in asset.concepts:
+                    term = terminology.get_term(c.name, domain)
+                    if term is None:
+                        continue
+                    tip = term.name
+                    if term.aliases:
+                        tip += " · " + " / ".join(term.aliases)
+                    if term.definition:
+                        tip += " — " + term.definition
+                    mapping[c.name.lower()] = tip
+        self._term_tip_cache = (asset, mapping)
+        return mapping
+
+    def _highlight(self, line_html: str, compiled: list[tuple]) -> str:
+        """Wrap every concept name in one escaped line with a mastery-coloured
+        anchor (green=mastered, amber=learning, red=weak, yellow=unstudied);
+        registered domain terms also carry a definition tooltip."""
+        tooltips = self._term_tooltips()
+        for pattern, cid, name, m in compiled:
+            if not pattern.search(line_html):
+                continue
+            if m >= 0.6:
+                bg, fg = "#C8E6C9", "#1B5E20"
+            elif m >= 0.3:
+                bg, fg = "#FFF8E1", "#E65100"
+            elif m > 0:
+                bg, fg = "#FFEBEE", "#C62828"
+            else:
+                bg, fg = "#FFF3B0", "#0c4a6e"
+            tip = tooltips.get(name.lower(), "")
+            title_attr = f' title="{html.escape(tip)}"' if tip else ""
+            line_html = pattern.sub(
+                lambda m_match: (
+                    f'<a href="concept://{cid}"{title_attr} style="background-color:{bg};'
+                    f'color:{fg};text-decoration:none;border-radius:2px;'
+                    f'padding:0 2px;">'
+                    f"{m_match.group(0)}</a>"
+                ),
+                line_html,
+            )
+        return line_html
+
+    def _body_html(
+        self,
+        all_lines: list[str],
+        compiled: list[tuple],
+        line_marks: dict,
+        indexes: list[int] | None = None,
+    ) -> str:
+        """Render source lines (all of them, or a projected subset).
+
+        A gap between two kept lines is marked with a ⋯ row so the reader
+        knows material was folded away and no sentence was silently altered.
+        """
         out_lines: list[str] = []
-        for idx, raw in enumerate(text.split("\n")):
-            line_html = html.escape(raw)
-            for pattern, cid, name, m in compiled:
-                if not pattern.search(line_html):
-                    continue
-                # Mastery-based highlight: green=mastered, amber=learning, red=weak, yellow=unstudied
-                if m >= 0.6:
-                    bg, fg = "#C8E6C9", "#1B5E20"
-                elif m >= 0.3:
-                    bg, fg = "#FFF8E1", "#E65100"
-                elif m > 0:
-                    bg, fg = "#FFEBEE", "#C62828"
-                else:
-                    bg, fg = "#FFF3B0", "#0c4a6e"
-                line_html = pattern.sub(
-                    lambda m_match: (
-                        f'<a href="concept://{cid}" style="background-color:{bg};'
-                        f'color:{fg};text-decoration:none;border-radius:2px;'
-                        f'padding:0 2px;">'
-                        f"{m_match.group(0)}</a>"
-                    ),
-                    line_html,
-                )
+        prev = -1
+        for idx in (indexes if indexes is not None else range(len(all_lines))):
+            if indexes is not None and prev >= 0 and idx - prev > 1:
+                out_lines.append('<span style="color:#B0BEC5;">⋯</span>')
+            prev = idx
+            line_html = self._highlight(html.escape(all_lines[idx]), compiled)
             if idx in line_marks:
                 prefix = "".join(
                     f'<a href="evidence://{cid}" title="{html.escape(name)}"'
@@ -164,8 +274,152 @@ class SourceTextView(QTextBrowser):
                 )
                 line_html = prefix + line_html
             out_lines.append(line_html)
-        body = "<br>".join(out_lines)
-        self.setHtml(f"<div style='font-size: 15px;line-height:1.7;'>{body}</div>")
+        return "<br>".join(out_lines)
+
+    # -- focused reading (deterministic projection) ---------------------------
+    def _focus_indexes(self, concept, all_lines: list[str]) -> list[int] | None:
+        """Line indexes that mention the concept, plus ±1 line of context.
+
+        Pure projection of source_text + evidence anchors: no LLM, no summary
+        invented. Returns None when the concept has no verbatim occurrence
+        (template-enriched concepts) — the caller then shows the full text
+        together with an honest notice instead of pretending to focus.
+        """
+        name = (concept.name or "").lower()
+        hits = {i for i, raw in enumerate(all_lines) if name and name in raw.lower()}
+        for ev in concept.evidence or []:
+            loc = concept.location_for_evidence(ev)
+            if loc is not None and loc.line:
+                hits.add(loc.line - 1)
+        hits = {i for i in hits if 0 <= i < len(all_lines)}
+        if not hits:
+            return None
+        keep: set[int] = set()
+        for i in hits:
+            for j in (i - 1, i, i + 1):
+                if 0 <= j < len(all_lines):
+                    keep.add(j)
+        return sorted(keep)
+
+    def _focus_card(self, concept, keep: int | None) -> str:
+        """Top card of a focus session: definition, anchors, action links."""
+        from urllib.parse import quote
+
+        from expert_anything.core.i18n import t as _tt
+
+        defn = html.escape((concept.definition or concept.summary or "").strip())
+        badge = _tt(
+            "focus_badge", n=(keep if keep else 0), a=len(concept.locations or [])
+        )
+        if keep is None:
+            badge = _tt("focus_no_match")
+        link = (
+            "display:inline-block;margin-right:6px;padding:2px 10px;"
+            "border-radius:12px;text-decoration:none;font-size:13px;"
+        )
+        links = (
+            f'<a href="teach:///{quote(concept.name)}" style="{link}'
+            'background-color:#E3F2FD;color:#1565C0;">▶ '
+            f'{_tt("focus_teach_btn")}</a>'
+            f'<a href="decode:///{concept.id}" style="{link}'
+            'background-color:#FFF3E0;color:#E65100;">🎬 '
+            f'{_tt("focus_decode_btn")}</a>'
+            f'<a href="fulltext:///" style="{link}'
+            'background-color:#F5F5F5;color:#546E7A;">↩ '
+            f'{_tt("focus_exit_btn")}</a>'
+        )
+        return (
+            '<div style="background-color:#F0F7FF;border:1px solid #BBDEFB;'
+            'border-radius:8px;padding:9px 11px;margin-bottom:8px;">'
+            f'<div style="font-size:16px;font-weight:bold;color:#0c3d5f;">'
+            f"{html.escape(concept.name)}</div>"
+            f'<div style="font-size:13.5px;color:#37474F;">{defn}</div>'
+            f'<div style="font-size:12px;color:#6B7A90;margin:3px 0 6px 0;">'
+            f"{badge}</div>"
+            f"<div>{links}</div>"
+            "</div>"
+        )
+
+    def set_focus_concept(self, concept_id: str | None) -> None:
+        """Enter (or leave) focused reading for one concept.
+
+        Exiting restores the reading position so the learner does not lose
+        their place in the full text.
+        """
+        if not concept_id or concept_id == self._focus_id:
+            if self._focus_id is None:
+                return
+            self._focus_id = None
+            self._render()
+            QTimer.singleShot(0, self._restore_position)
+            return
+        self._focus_id = concept_id
+        # Focus changes the document, so the stored full-text offset must not
+        # be overwritten while reading the projection.
+        self._position_armed = False
+        self._render()
+
+    def _render(self) -> None:
+        if self._asset is None:
+            self.setHtml("")
+            return
+        text = self._asset.source_text or ""
+        compiled = self._compiled_concepts()
+        line_marks = self._evidence_marks()
+        all_lines = text.split("\n")
+
+        if self._focus_id:
+            concept = self._asset.concept_by_id(self._focus_id)
+            if concept is None:
+                self._focus_id = None
+            else:
+                keep = self._focus_indexes(concept, all_lines)
+                self.setHtml(
+                    "<div style='font-size: 15px;line-height:1.7;'>"
+                    f"{self._focus_card(concept, len(keep) if keep else None)}"
+                    f"{self._body_html(all_lines, compiled, line_marks, keep)}"
+                    "</div>"
+                )
+                return
+
+        body = self._body_html(all_lines, compiled, line_marks)
+
+        # Coverage heatmap bar — one cell per line, colored by concept presence
+        coverage_cells: list[str] = []
+        for idx in range(len(all_lines)):
+            if idx in line_marks:
+                color = "#1565C0"
+            elif any(
+                p.search(html.escape(all_lines[idx]))
+                for p, *_ in compiled
+            ):
+                color = "#90CAF9"
+            elif all_lines[idx].strip():
+                color = "#E0E0E0"
+            else:
+                color = "#F5F5F5"
+            line_num = idx + 1
+            coverage_cells.append(
+                f'<span title="Line {line_num}" '
+                f'style="display:inline-block;width:3px;height:18px;'
+                f'background-color:{color};margin:0 0.5px;'
+                f'border-radius:1px;cursor:pointer;" '
+                f'onclick="this.scrollIntoView()"></span>'
+            )
+        coverage_bar = "".join(coverage_cells)
+        coverage_html = (
+            f'<div style="background-color:#FAFBFC;border:1px solid #E0E0E0;'
+            f'border-radius:6px;padding:4px 8px;margin-bottom:6px;">'
+            f'<span style="font-size:10px;color:#9E9E9E;margin-right:6px;">'
+            f'📊 {_t("coverage_label")}</span>'
+            f'{coverage_bar}'
+            f'</div>'
+        )
+
+        self.setHtml(
+            f"<div style='font-size: 15px;line-height:1.7;'>"
+            f"{coverage_html}{body}</div>"
+        )
 
     # -- navigation -----------------------------------------------------------
     def scroll_to_concept(self, concept_id: str, evidence: str | None = None) -> None:
@@ -245,28 +499,6 @@ class SourceTextView(QTextBrowser):
         self.ensureCursorVisible()
         return count
 
-    def scroll_to_text(self, needle: str) -> None:
-        """Scroll to the first occurrence of an arbitrary text (e.g. a chapter
-        title) and highlight its paragraph."""
-        if not needle:
-            return
-        doc = self.document()
-        cursor = doc.find(needle[:200])
-        if cursor.isNull():
-            return
-        block = cursor.block()
-        fmt = QTextCharFormat()
-        fmt.setBackground(QColor("#B3E5FC"))
-        sel = self.ExtraSelection()
-        sel.format = fmt
-        sel.cursor = QTextCursor(block)
-        sel.cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-        self.setExtraSelections([sel])
-        tc = QTextCursor(doc)
-        tc.setPosition(cursor.selectionStart())
-        self.setTextCursor(tc)
-        self.ensureCursorVisible()
-
     # -- anchor handling ------------------------------------------------------
     def _on_anchor(self, url: QUrl) -> None:
         if url.scheme() == "concept":
@@ -274,6 +506,18 @@ class SourceTextView(QTextBrowser):
         elif url.scheme() == "evidence":
             # reverse anchor (evidence margin mark) -> same concept hop
             self.concept_anchor_clicked.emit(url.host())
+        elif url.scheme() == "fulltext":
+            self.focus_exit_requested.emit()
+        elif url.scheme() == "teach":
+            from urllib.parse import unquote
+
+            name = unquote(url.path().lstrip("/"))
+            if name:
+                self.teach_requested.emit(name)
+        elif url.scheme() == "decode":
+            cid = url.host() or url.path().lstrip("/")
+            if cid:
+                self.decode_requested.emit(cid)
 
 
 # --------------------------------------------------------------------------- #
@@ -414,20 +658,18 @@ class ConceptDetailPanel(QDialog):
         # -- mini scene preview (visual deconstruction) ---------------------
         try:
             from expert_anything.core import decoder
+            from expert_anything.ui.widgets._helpers import _HAS_SVG, SvgScenePreview
             # Unified entry point: a curated domain scene when the asset
             # belongs to a domain that ships one, the generic relation graph
             # otherwise (non-domain concepts keep the old fallback behaviour).
             scene = decoder.scene_for_concept(asset, concept)
-            if scene and scene.get("nodes"):
+            if _HAS_SVG and scene and scene.get("nodes"):
                 svg_data = decoder.render_svg(scene)
                 if svg_data:
                     try:
-                        from PySide6.QtSvgWidgets import QSvgWidget
-                        from PySide6.QtCore import QByteArray
-                        svg_widget = QSvgWidget()
-                        svg_widget.load(QByteArray(svg_data.encode("utf-8")))
-                        svg_widget.setMinimumHeight(160)
-                        svg_widget.setMaximumHeight(220)
+                        svg_widget = SvgScenePreview()
+                        svg_widget.load_svg(svg_data, zoom_title=concept.name)
+                        svg_widget.setMinimumHeight(180)
                         svg_widget.setStyleSheet(
                             "background-color: #FAFAFA; border: 1px solid #E8E8E8;"
                             "border-radius: 8px;"

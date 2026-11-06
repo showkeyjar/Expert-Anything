@@ -48,7 +48,6 @@ from PySide6.QtCore import (
     Signal,
     Slot,
 )
-from PySide6.QtGui import QFont, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -60,7 +59,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
-    QStyleFactory,
     QVBoxLayout,
     QWidget,
 )
@@ -83,6 +81,7 @@ from expert_anything.core.learner import (
     topic_clusters,
     concept_density,
     stuck_concepts,
+    unregister_asset,
 )
 from expert_anything.core.llm import LLMClient, LLMNotConfigured
 from expert_anything.core.models import (
@@ -109,6 +108,7 @@ from expert_anything.core.teacher import (
     build_teacher_model,
 )
 from expert_anything.core import auto_harness as _ah
+from expert_anything.ui import theme
 from expert_anything.ui.pyside_graph import KnowledgeGraphView
 from expert_anything.ui.widgets import (
     ConceptDetailPanel,
@@ -118,6 +118,9 @@ from expert_anything.ui.widgets import (
     NodeDetailCard,
     MapLegend,
     TrendChartView,
+    GuideBar,
+    GroupQuizDialog,
+    GlossaryDialog,
 )
 from expert_anything.ui.views import (
     ImportView,
@@ -127,6 +130,7 @@ from expert_anything.ui.views import (
     TeachView,
     LearnerView,
     TeacherView,
+    PanoramaView,
 )
 from expert_anything.ui.view_manager import ViewManager
 
@@ -181,6 +185,14 @@ progress_signal = ProgressSignal()
 
 
 class MainWindow(QMainWindow):
+    # HarnessSpec policy styles (Chinese, auto_harness STYLE_CYCLE) → style
+    # combo codes (TeachView._CODE_TO_IDX).
+    _HARNESS_STYLE_CODES = {
+        "例子": "example",
+        "图示": "diagram",
+        "拆解步骤": "steps",
+    }
+
     # ---- constructor --------------------------------------------------------
 
     def __init__(self):
@@ -231,6 +243,8 @@ class MainWindow(QMainWindow):
                     config.LLM_API_KEY,
                     config.LLM_BASE_URL,
                     config.LLM_MODEL,
+                    max_concurrency=config.LLM_MAX_CONCURRENCY,
+                    timeout=config.LLM_TIMEOUT,
                 )
             except LLMNotConfigured:
                 self.llm_client = None
@@ -273,6 +287,32 @@ class MainWindow(QMainWindow):
                     "history": [],
                 }
 
+        # Heal stale anomaly statuses once per startup (AGENTS.md §34): a gap
+        # the learner has since closed must not keep crying wolf in doubt
+        # strips / teaching order.  Resolves only evidence-backed kinds and
+        # persists only when something actually changed.
+        try:
+            from expert_anything.core.teacher import (
+                TeacherModel,
+                resolve_satisfied_anomalies,
+            )
+
+            for aid, tdata in list(self.teacher_models.items()):
+                if not tdata or aid not in self.assets:
+                    continue
+                try:
+                    asset = self.get_asset(aid)
+                    if asset is None:
+                        continue
+                    tm = TeacherModel.from_dict(tdata)
+                    if resolve_satisfied_anomalies(asset, tm, self.learner):
+                        save_teacher(aid, tm)
+                        self.teacher_models[aid] = tm.to_dict()
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
         # AutoHarness
         harness_state = config.DATA_DIR / "harness_state.json"
         self._harness_specs = _ah.load_harness_state(harness_state)
@@ -299,9 +339,7 @@ class MainWindow(QMainWindow):
         # Language
         lang = get_lang()
         app = QApplication.instance()
-        if app is not None:
-            app.setStyle(QStyleFactory.create("Fusion"))
-        self.setFont(QFont("Segoe UI", 11))
+        theme.apply_theme(app)
 
         # Central layout
         central = QWidget()
@@ -314,7 +352,7 @@ class MainWindow(QMainWindow):
         self._sidebar = self._build_sidebar()
         root.addWidget(self._sidebar)
 
-        # Main area: topbar + content stack (7 pages)
+        # Main area: topbar + content stack (8 pages)
         main_area = QWidget()
         main_layout = QVBoxLayout(main_area)
         main_layout.setContentsMargins(0, 0, 0, 0)
@@ -326,7 +364,7 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.content_stack, 1)
         root.addWidget(main_area, 1)
 
-        # Build all 7 views
+        # Build all 8 views
         self._build_import_view()
         self._build_knowledge_view()
         self._build_concept_map_view()
@@ -334,6 +372,7 @@ class MainWindow(QMainWindow):
         self._build_teach_view()
         self._build_learner_view()
         self._build_teacher_view()
+        self._build_panorama_view()
         # View constructors may trigger nested Qt layout ownership changes;
         # publish the final live graph after the complete view tree exists.
         self._dash_graph = self._knowledge_view._dash_graph
@@ -347,6 +386,7 @@ class MainWindow(QMainWindow):
             self._teach_view,
             self._learner_view,
             self._teacher_view,
+            self._panorama_view,
         ]:
             self.content_stack.addWidget(v)
 
@@ -361,10 +401,10 @@ class MainWindow(QMainWindow):
                 self._teach_view,
                 self._learner_view,
                 self._teacher_view,
+                self._panorama_view,
             ]
         )
         self._view_manager.navigate_requested.connect(self.on_nav_click)
-        self._view_manager.refresh_requested.connect(self._refresh_all_views)
 
         # First-run users need an actionable entry point.  The map remains the
         # home view once an asset exists, but an empty map is not a useful
@@ -375,21 +415,55 @@ class MainWindow(QMainWindow):
     # ---- topbar ----------------------------------------------------------------
 
     def _build_topbar(self):
+        """Topbar = the original asset/progress row + the proactive guide bar.
+
+        The second row is the coach's permanent voice (AGENTS.md §49): it lives
+        outside the content stack so the主张 stays visible in every view.
+        """
         bar = QWidget()
-        bar.setStyleSheet("background-color: white; border-bottom: 2px solid #E0E0E0;")
-        bar.setFixedHeight(48)
-        lay = QHBoxLayout(bar)
+        bar.setStyleSheet(f"background-color: {theme.SURFACE};")
+
+        outer = QVBoxLayout(bar)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        row = QWidget()
+        row.setStyleSheet(
+            f"background-color: {theme.SURFACE};"
+            f" border-bottom: 1px solid {theme.DIVIDER};"
+        )
+        row.setFixedHeight(theme.TOPBAR_HEIGHT)
+        outer.addWidget(row)
+
+        self._guide_bar = GuideBar()
+        self._guide_bar.start_requested.connect(self._on_guide_start)
+        self._guide_bar.swap_requested.connect(
+            lambda rec: self._on_guide_dismissed(rec, "swap")
+        )
+        self._guide_bar.dismiss_requested.connect(
+            lambda rec: self._on_guide_dismissed(rec, "dismiss")
+        )
+        outer.addWidget(self._guide_bar)
+
+        lay = QHBoxLayout(row)
         lay.setContentsMargins(20, 0, 16, 0)
         lay.setSpacing(12)
 
         self._topbar_title = QLabel()
         self._topbar_title.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #1F2933;"
+            f"font-size: 16px; font-weight: 600; color: {theme.TEXT};"
         )
         lay.addWidget(self._topbar_title)
 
         self._topbar_progress = QLabel()
-        self._topbar_progress.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
+        self._topbar_progress.setStyleSheet(
+            f"color: {theme.TEXT_MUTED}; font-size: 12.5px;"
+        )
+        # Numbers here are "统计 chip" — they must lead somewhere (设计理念第 20
+        # 条).  Rich text lets each segment be its own link without extra widgets.
+        self._topbar_progress.setTextFormat(Qt.TextFormat.RichText)
+        self._topbar_progress.setOpenExternalLinks(False)
+        self._topbar_progress.linkActivated.connect(self._on_topbar_drill)
         lay.addWidget(self._topbar_progress)
 
         lay.addStretch()
@@ -401,31 +475,99 @@ class MainWindow(QMainWindow):
         _lang_idx = self._lang_combo.findData(get_lang())
         if _lang_idx >= 0:
             self._lang_combo.setCurrentIndex(_lang_idx)
+        self._lang_combo.setFixedWidth(112)
         self._lang_combo.setStyleSheet(
-            "QComboBox { border: 1px solid #E0E0E0; border-radius: 4px;"
-            "padding: 3px 8px; font-size: 13.5px; background-color: white; }"
+            f"QComboBox {{ border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_MD}px; padding: 3px 8px;"
+            " font-size: 12.5px; background-color: transparent; }"
+            f"QComboBox:hover {{ border-color: {theme.BORDER_STRONG}; }}"
         )
         self._lang_combo.currentIndexChanged.connect(self._apply_language)
-        lay.addWidget(QLabel(_t("lang") + ": "))
+        lang_lbl = QLabel(_t("lang"))
+        lang_lbl.setStyleSheet(
+            f"color: {theme.TEXT_FAINT}; font-size: 11.5px;"
+        )
+        lay.addWidget(lang_lbl)
         lay.addWidget(self._lang_combo)
 
-        # Shortcut buttons
-        for label, view in [
-            ("📖 " + _t("btn_teach"), "teach"),
-            ("🗺️ " + _t("btn_map"), "concept_map"),
-            ("📄 " + _t("btn_source"), "source"),
-        ]:
-            btn = QPushButton(label)
-            btn.setStyleSheet(
-                "QPushButton { background-color: transparent; color: #1565C0;"
-                "border: 1px solid #BBDEFB; border-radius: 6px;"
-                "padding: 5px 12px; font-size: 14px; }"
-                "QPushButton:hover { background-color: #E3F2FD; }"
-            )
-            btn.clicked.connect(lambda checked, v=view: self.on_nav_click(v))
-            lay.addWidget(btn)
+        # Navigation lives in the sidebar only.  The topbar used to duplicate
+        # three of those entries as "shortcut" buttons, which gave every screen
+        # three competing entry points for the same action — the main reason
+        # the shell read as crowded.
 
         return bar
+
+    # ---- proactive guidance (AGENTS.md §49) --------------------------------
+
+    def _refresh_guide_bar(self):
+        """Recompute the single next主张 and show it in the guide bar.
+
+        Reads the same signals the rest of the app trusts (adaptive_path /
+        due_for_review / stuck / anomalies) via ``core.coach``; never raises
+        into the UI — a coaching failure hides the strip.
+        """
+        bar = getattr(self, "_guide_bar", None)
+        if bar is None:
+            return
+        try:
+            from expert_anything.core.coach import recommend
+
+            asset = self.get_asset()
+            teacher = self.teacher_models.get(self.current_asset_id or "")
+            rec = recommend(asset, self.learner, teacher)
+            bar.set_recommendation(rec)
+        except Exception:
+            bar.set_recommendation(None)
+
+    def _on_guide_start(self, rec: dict):
+        """Accept the coach's主张: open teaching at exactly that concept.
+
+        Review-shaped主张 route through the review entry point so the lesson is
+        re-taught from a different angle instead of repeating the first lesson
+        (AGENTS.md §6 — never double-open a course).
+        """
+        if not isinstance(rec, dict):
+            return
+        try:
+            from expert_anything.core.coach import record_coach_feedback
+
+            record_coach_feedback(self.learner, rec, "start")
+            self.save_learner_state()
+        except Exception:
+            pass
+        name = rec.get("concept_name") or ""
+        if not name:
+            # Asset-level主张 (no concept to teach): land the learner where the
+            # next step lives rather than silently doing nothing.  "import" has
+            # nothing to teach yet → the import view; "explore" means everything
+            # is mastered → the concept map, where roaming is the point.
+            self.on_nav_click(
+                "concept_map" if rec.get("kind") == "explore" else "import"
+            )
+            return
+        from expert_anything.core.coach import is_review
+
+        if is_review(rec):
+            self._on_review_one_request(name)
+        else:
+            self._on_teach_request(name)
+
+    def _on_guide_dismissed(self, rec: dict, action: str = "dismiss"):
+        """Record that the learner passed on a claim (``swap`` / ``dismiss``).
+
+        This is what turns the guide bar from a broadcaster into a listener:
+        repeated dismissals of one kind demote it (``coach.coach_fatigue``),
+        while accepting a kind resets its run.  Persisting is best-effort — a
+        feedback failure must never interrupt teaching.
+        """
+        try:
+            from expert_anything.core.coach import record_coach_feedback
+
+            record_coach_feedback(self.learner, rec, action)
+            self.save_learner_state()
+        except Exception:
+            pass
+        self._refresh_guide_bar()
 
     def _update_topbar(self):
         if self.current_asset_id and self.current_asset_id in self.assets:
@@ -434,115 +576,221 @@ class MainWindow(QMainWindow):
                 data.get("title") or data.get("source_name") or self.current_asset_id
             )
             stats = self._compute_stats()
-            self._topbar_title.setText(f"📚 {title}")
+            self._topbar_title.setText(title)
             self._topbar_progress.setText(
-                _t(
-                    "topbar_progress",
-                    m=stats["mastered"],
-                    t=stats["total"],
-                    l=stats["learning"],
+                self._topbar_progress_html(
+                    m=int(stats["mastered"]),
+                    t=int(stats["total"]),
+                    l=int(stats["learning"]),
                     r=len(due_for_review(self.learner, asset=self.get_asset())),
                 )
             )
         else:
             self._topbar_title.setText(_t("app_name"))
             self._topbar_progress.setText("")
+        # keep the coach strip in step with learner state (cheap, deterministic)
+        self._refresh_guide_bar()
+
+    # Sentinel used to mark the numeric slots of the progress template so they
+    # can be swapped for links.  It never occurs in translation text.
+    _DRILL_SENTINEL = "\x01"
+
+    def _topbar_progress_html(self, m: int, t: int, l: int, r: int) -> str:
+        """Progress line with clickable segments (设计理念第 20 条).
+
+        已掌握 / 学习中 → 知识模型页并套用对应掌握度过滤；待复习 → 学习页复习队列。
+        The i18n template stays untouched: sentinels mark the slots and are
+        swapped for anchors, so a reordered or differently-spaced translation
+        still links correctly (and never leaks a control character).
+        """
+        S = self._DRILL_SENTINEL
+
+        def link(href: str, text, tip: str) -> str:
+            return (
+                f'<a href="{href}" title="{tip}" '
+                f'style="color:{theme.ACCENT}; text-decoration:none;">{text}</a>'
+            )
+
+        mastered_tip = _t("filter_mastered")
+        raw = _t(
+            "topbar_progress",
+            m=f"{S}M{S}",
+            t=f"{S}T{S}",
+            l=f"{S}L{S}",
+            r=f"{S}R{S}",
+        )
+        # Preferred: keep "m/t" as one link; fall back to per-number links only
+        # if a translation separates the pair.
+        raw = raw.replace(
+            f"{S}M{S}/{S}T{S}", link("drill:mastered", f"{m}/{t}", mastered_tip)
+        )
+        return (
+            raw.replace(f"{S}M{S}", link("drill:mastered", m, mastered_tip))
+            .replace(f"{S}T{S}", link("drill:mastered", t, mastered_tip))
+            .replace(f"{S}L{S}", link("drill:learning", l, _t("filter_learning")))
+            .replace(f"{S}R{S}", link("drill:due", r, _t("due_title", n=r)))
+        )
+
+    def _on_topbar_drill(self, href: str):
+        """Topbar progress link → the list it summarises."""
+        if href == "drill:due":
+            self.on_nav_click("learner")
+            return
+        self.on_nav_click("knowledge")  # refresh() rebuilds the filter combo
+        kv = getattr(self, "_knowledge_view", None)
+        combo = getattr(kv, "_mastery_filter", None) if kv is not None else None
+        if combo is not None:
+            combo.setCurrentIndex(4 if href == "drill:mastered" else 3)
 
     # ---- sidebar ----------------------------------------------------------------
 
+    @staticmethod
+    def _nav_label(text: str) -> str:
+        """Drop the decorative leading emoji from i18n nav labels.
+
+        Emoji made sense in a prototype, but a light text-only rail is calmer
+        and gives every language the same rhythm.  The i18n source keeps the
+        emoji (it is also used for tooltips and tests).
+        """
+        head, sep, tail = str(text).partition(" ")
+        if sep and tail and not head[:1].isalnum():
+            return tail
+        return str(text)
+
     def _build_sidebar(self):
+        from expert_anything.ui.widgets._helpers import CollapsibleSection
+
         sidebar = QWidget()
-        sidebar.setFixedWidth(220)
-        sidebar.setStyleSheet("background-color: #1A237E;")
+        sidebar.setObjectName("sidebar")
+        sidebar.setFixedWidth(theme.SIDEBAR_WIDTH)
+        sidebar.setStyleSheet(
+            f"#sidebar {{ background-color: {theme.SURFACE};"
+            f" border-right: 1px solid {theme.BORDER}; }}"
+        )
         lay = QVBoxLayout(sidebar)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
-        # Logo area
-        logo = QWidget()
-        logo.setStyleSheet("background-color: #0D1B4C; padding: 18px 0 12px;")
-        logo_lay = QVBoxLayout(logo)
-        logo_lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo_lay.setSpacing(2)
-        icon_lbl = QLabel("🧠")
-        icon_lbl.setStyleSheet("font-size: 30px; text-align: center;")
-        icon_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo_lay.addWidget(icon_lbl)
+        # Brand: small accent tile + wordmark (the old 90px navy block with a
+        # brain emoji consumed a fifth of the sidebar before any navigation).
+        brand = QWidget()
+        brand_lay = QHBoxLayout(brand)
+        brand_lay.setContentsMargins(18, 18, 18, 14)
+        brand_lay.setSpacing(10)
+        tile = QLabel("EA")
+        tile.setFixedSize(30, 30)
+        tile.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        tile.setStyleSheet(
+            f"background-color: {theme.ACCENT}; color: {theme.TEXT_ON_ACCENT};"
+            f" border-radius: {theme.RADIUS_MD}px;"
+            " font-size: 12.5px; font-weight: 700;"
+        )
+        brand_lay.addWidget(tile)
         name_lbl = QLabel("ExpertAnything")
         name_lbl.setStyleSheet(
-            "color: white; font-size: 15px; font-weight: bold; text-align: center;"
+            f"color: {theme.TEXT}; font-size: 15px; font-weight: 700;"
         )
-        name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        logo_lay.addWidget(name_lbl)
-        lay.addWidget(logo)
+        brand_lay.addWidget(name_lbl)
+        brand_lay.addStretch()
+        lay.addWidget(brand)
 
-        # Primary nav
+        # Primary nav (小白核心路径：4 个入口)
+        nav_style = (
+            f"QPushButton {{ background-color: transparent;"
+            f" color: {theme.TEXT_MUTED}; text-align: left;"
+            " padding: 9px 10px; border: none;"
+            f" border-radius: {theme.RADIUS_MD}px; font-size: 13.5px; }}"
+            f"QPushButton:hover {{ background-color: {theme.SURFACE_HOVER};"
+            f" color: {theme.TEXT}; }}"
+            f"QPushButton:checked {{ background-color: {theme.ACCENT_TINT};"
+            f" color: {theme.ACCENT_HOVER}; font-weight: 600; }}"
+        )
         nav = QWidget()
         nav_lay = QVBoxLayout(nav)
-        nav_lay.setContentsMargins(8, 12, 8, 0)
-        nav_lay.setSpacing(4)
+        nav_lay.setContentsMargins(10, 2, 10, 0)
+        nav_lay.setSpacing(2)
         self._nav_buttons: dict[str, QPushButton] = {}
-        for icon, label, view in [
-            ("🗺️", "nav_map", "concept_map"),
-            ("📖", "nav_teach", "teach"),
-            ("📥", "nav_import", "import"),
+        for label, view in [
+            ("nav_map", "concept_map"),
+            ("nav_teach", "teach"),
+            ("nav_import", "import"),
+            ("nav_source", "source"),
         ]:
-            btn = QPushButton(f"{icon}  {self._t(label)}")
-            btn.setStyleSheet(
-                "QPushButton { background-color: transparent; color: white;"
-                "text-align: left; padding: 10px 14px; border: none;"
-                "border-radius: 6px; font-size: 15px; }"
-                "QPushButton:hover { background-color: #3949AB; }"
-                "QPushButton:checked { background-color: #3949AB;"
-                "border-left: 3px solid #80D8FF; padding-left: 11px; }"
-            )
+            btn = QPushButton(self._nav_label(self._t(label)))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(nav_style)
             btn.setCheckable(True)
             btn.clicked.connect(lambda checked, v=view: self.on_nav_click(v))
             self._nav_buttons[view] = btn
             nav_lay.addWidget(btn)
         lay.addWidget(nav)
 
-        # Divider
+        # Hairline divider
+        div_wrap = QWidget()
+        div_lay = QVBoxLayout(div_wrap)
+        div_lay.setContentsMargins(16, 10, 16, 10)
         div = QWidget()
         div.setFixedHeight(1)
-        div.setStyleSheet("background-color: #3949AB; margin: 8px 16px;")
-        lay.addWidget(div)
+        div.setStyleSheet(f"background-color: {theme.DIVIDER};")
+        div_lay.addWidget(div)
+        lay.addWidget(div_wrap)
 
-        # Secondary nav
-        sec = QWidget()
-        sec_lay = QVBoxLayout(sec)
-        sec_lay.setContentsMargins(8, 0, 8, 0)
-        sec_lay.setSpacing(4)
-        for icon, label, view in [
-            ("📊", "nav_knowledge", "knowledge"),
-            ("📄", "nav_source", "source"),
-            ("🧠", "nav_learner", "learner"),
-            ("👨‍🏫", "nav_teacher", "teacher"),
+        # 进阶功能（默认折叠，小白不需要在首屏看到教师模型等高级入口）
+        adv_section = CollapsibleSection(_t("nav_advanced"))
+        adv_section._toggle.setStyleSheet(
+            f"QPushButton {{ background-color: transparent;"
+            f" color: {theme.TEXT_MUTED}; border: none; text-align: left;"
+            " padding: 6px 10px; font-size: 12.5px; font-weight: 600; }"
+            f"QPushButton:hover {{ color: {theme.ACCENT}; }}"
+        )
+        body_lay = adv_section.body_layout()
+        body_lay.setContentsMargins(0, 0, 0, 0)
+        body_lay.setSpacing(2)
+        adv_style = (
+            f"QPushButton {{ background-color: transparent;"
+            f" color: {theme.TEXT_MUTED}; text-align: left;"
+            " padding: 7px 10px; border: none;"
+            f" border-radius: {theme.RADIUS_MD}px; font-size: 12.5px; }}"
+            f"QPushButton:hover {{ background-color: {theme.SURFACE_HOVER};"
+            f" color: {theme.TEXT}; }}"
+            f"QPushButton:checked {{ background-color: {theme.ACCENT_TINT};"
+            f" color: {theme.ACCENT_HOVER}; font-weight: 600; }}"
+        )
+        for label, view in [
+            ("nav_knowledge", "knowledge"),
+            ("nav_learner", "learner"),
+            ("nav_teacher", "teacher"),
+            ("nav_panorama", "panorama"),
         ]:
-            btn = QPushButton(f"{icon}  {self._t(label)}")
-            btn.setStyleSheet(
-                "QPushButton { background-color: transparent; color: #9FA8DA;"
-                "text-align: left; padding: 8px 14px; border: none;"
-                "border-radius: 6px; font-size: 14.5px; }"
-                "QPushButton:hover { background-color: #283593; color: white; }"
-                "QPushButton:checked { background-color: #283593; color: white;"
-                "border-left: 3px solid #80D8FF; padding-left: 11px; }"
-            )
+            btn = QPushButton(self._nav_label(self._t(label)))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(adv_style)
             btn.setCheckable(True)
             btn.clicked.connect(lambda checked, v=view: self.on_nav_click(v))
             self._nav_buttons[view] = btn
-            sec_lay.addWidget(btn)
-        lay.addWidget(sec)
+            body_lay.addWidget(btn)
+        adv_host = QWidget()
+        adv_host_lay = QVBoxLayout(adv_host)
+        adv_host_lay.setContentsMargins(10, 0, 10, 0)
+        adv_host_lay.addWidget(adv_section)
+        lay.addWidget(adv_host)
 
         # Asset list
         self._asset_list_widget = QWidget()
         al_lay = QVBoxLayout(self._asset_list_widget)
-        al_lay.setContentsMargins(8, 12, 8, 8)
-        al_lay.setSpacing(4)
+        al_lay.setContentsMargins(10, 10, 10, 8)
+        al_lay.setSpacing(2)
         al_title = QLabel(_t("nav_assets"))
-        al_title.setStyleSheet("color: #7986CB; font-size: 12.5px; font-weight: bold;")
+        al_title.setStyleSheet(
+            f"color: {theme.TEXT_FAINT}; font-size: 11.5px; font-weight: 600;"
+        )
         al_lay.addWidget(al_title)
-        self._asset_list_layout = al_lay
+        # Keep the heading outside the dynamic list: _refresh_asset_list clears
+        # this layout on every switch and used to delete the heading with it.
+        self._asset_list_layout = QVBoxLayout()
+        self._asset_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._asset_list_layout.setSpacing(2)
+        al_lay.addLayout(self._asset_list_layout, 1)
         self._asset_buttons: dict = {}
         lay.addWidget(self._asset_list_widget, 1)
         self._refresh_asset_list()
@@ -565,6 +813,11 @@ class MainWindow(QMainWindow):
         view.topic_teach_requested.connect(self._on_topic_teach_request)
         view.open_concept_panel.connect(self._on_open_concept_panel)
         view.focus_graph.connect(self._on_focus_graph)
+        view.group_quiz_requested.connect(self._on_group_quiz_request)
+        view.glossary_requested.connect(self._on_open_glossary)
+        # Double-clicking a concept row opens its evidence in the source text
+        # (the TOC's single click already navigates to the map).
+        view.jump_evidence.connect(self._on_jump_to_evidence)
         self._knowledge_view = view
         self.knowledge_view = view
         # Compatibility attribute used by tests and external callers.
@@ -593,8 +846,6 @@ class MainWindow(QMainWindow):
         view.teach_started.connect(self._on_teach_started)
         view.stuck_detected.connect(self._on_stuck_detected)
         view.followup_done.connect(self._on_followup_done)
-        view.harness_adopted.connect(self._on_adopt_harness)
-        view.harness_transferred.connect(self._on_transfer_harness)
         view.evidence_jump_requested.connect(self._on_teach_evidence_jump)
         view.evaluate_recorded.connect(self._on_evaluate_recorded)
         self._teach_view = view
@@ -614,32 +865,51 @@ class MainWindow(QMainWindow):
     def _build_teacher_view(self):
         view = TeacherView(self)
         view.open_concept_panel.connect(self._on_open_concept_panel)
+        view.teach_requested.connect(self._on_teach_request)
         self._teacher_view = view
         self.teacher_view = view
+
+    def _build_panorama_view(self):
+        view = PanoramaView(self)
+        view.asset_switch_requested.connect(self._on_panorama_asset_switch)
+        view.concept_jump_requested.connect(self._on_panorama_concept_jump)
+        # A statistic chip that counts concepts/relations must be able to
+        # take the learner to the graph that shows them.
+        view.view_switch_requested.connect(self.on_nav_click)
+        self._panorama_view = view
+        self.panorama_view = view
 
     # ---- knowledge graph helpers -----------------------------------------------
 
     def _teach_graph_ref(self) -> KnowledgeGraphView:
         if self._teach_graph is None:
             self._teach_graph = KnowledgeGraphView()
-            self._teach_graph.concept_clicked.connect(self._on_graph_teach_click)
-            self._teach_graph.node_single_clicked.connect(self._on_graph_node_clicked)
+            self._wire_graph(self._teach_graph)
         return self._teach_graph
+
+    def _wire_graph(self, graph: KnowledgeGraphView) -> None:
+        """Connect the shared graph interaction signals (one place, so a new
+        graph surface can never ship with a clickable-but-dead menu item)."""
+        graph.concept_clicked.connect(self._on_graph_teach_click)
+        graph.node_single_clicked.connect(self._on_graph_node_clicked)
+        graph.evidence_requested.connect(self._on_graph_evidence_click)
+
+    def _on_graph_evidence_click(self, concept_id: str):
+        """Right-click ▸ 查看证据 — jump the reader to this concept's passage."""
+        self._on_teach_evidence_jump(concept_id, "")
 
     def _dash_graph_ref(self) -> KnowledgeGraphView:
         # The dashboard graph belongs to KnowledgeView.  A rebuilt view must
         # always receive a fresh QObject; retaining the old C++ wrapper after
         # deleteLater() leaves MainWindow pointing at an invalid object.
         graph = KnowledgeGraphView()
-        graph.concept_clicked.connect(self._on_graph_teach_click)
-        graph.node_single_clicked.connect(self._on_graph_node_clicked)
+        self._wire_graph(graph)
         return graph
 
     def _graph_view_ref(self) -> KnowledgeGraphView:
         if self._graph_view is None:
             self._graph_view = KnowledgeGraphView()
-            self._graph_view.concept_clicked.connect(self._on_graph_teach_click)
-            self._graph_view.node_single_clicked.connect(self._on_graph_node_clicked)
+            self._wire_graph(self._graph_view)
         return self._graph_view
 
     def _path_ladder_ref(self) -> PathLadderView:
@@ -663,6 +933,7 @@ class MainWindow(QMainWindow):
         "teach": 4,
         "learner": 5,
         "teacher": 6,
+        "panorama": 7,
     }
 
     def on_nav_click(self, view_name: str):
@@ -710,6 +981,45 @@ class MainWindow(QMainWindow):
         # Delegate to teach view: start a quick quiz
         if hasattr(self, "_teach_view"):
             self._teach_view.start_quick_quiz_by_name(c.name)
+
+    def _on_group_quiz_request(self, concept_ids: list, title: str):
+        """Chapter / topic comprehensive quiz: mixed questions over a group.
+
+        A single-concept self-test checks recall; this checks the structure of
+        the whole group (chapter or topic cluster). Each answer is scored and
+        recorded through the existing quiz channel, and the group is summarised
+        at the end — then the views refresh so mastery colours catch up.
+        """
+        asset = self.get_asset()
+        if asset is None or not concept_ids:
+            return
+        dialog = GroupQuizDialog(self, asset, list(concept_ids), title, self)
+        dialog.exec()
+        self._refresh_all_views()
+
+    def _on_open_glossary(self):
+        """Domain terminology table: 缩写 ↔ 全称 ↔ 释义, deterministic.
+
+        Every row comes from the asset's registered domain template, so no
+        invented term can appear.  Terms that map onto a concept of the current
+        asset get a ▶ jump into the concept panel (地图游走通向学习).
+        """
+        asset = self.get_asset()
+        if asset is None:
+            return
+        self._glossary_dialog = GlossaryDialog(asset, self)
+        self._glossary_dialog.concept_jump_requested.connect(self._on_glossary_jump)
+        self._glossary_dialog.exec()
+        self._glossary_dialog = None
+
+    def _on_glossary_jump(self, concept_id: str):
+        """Term → concept: close the modal table first (it owns a modal event
+        loop), then land on the map with the concept's detail panel open."""
+        dialog = getattr(self, "_glossary_dialog", None)
+        if dialog is not None:
+            dialog.accept()
+        self.on_nav_click("concept_map")
+        self._open_concept_panel(concept_id)
 
     def _on_topic_teach_request(
         self, concept_name: str, topic_name: str,
@@ -880,10 +1190,47 @@ class MainWindow(QMainWindow):
             # selected node and its grounded details stay visible together.
             self._concept_map_view.focus_and_show(concept_id)
 
+    # ---- project panorama ------------------------------------------------------
+
+    def _switch_asset_quiet(self, asset_id: str):
+        """Switch the active asset without forcing a navigation away.
+
+        Used by the panorama page, which aggregates across materials and must
+        stay put while the learner drills into a specific one.
+        """
+        if asset_id not in self.assets or asset_id == self.current_asset_id:
+            return
+        self.current_asset_id = asset_id
+        self._refresh_asset_list()
+        self._rebuild_all_views()
+        self._update_topbar()
+
+    def _on_panorama_asset_switch(self, asset_id: str):
+        self._switch_asset_quiet(asset_id)
+
+    def _on_panorama_concept_jump(self, asset_id: str, concept_name: str):
+        self._switch_asset_quiet(asset_id)
+        asset = self.get_asset()
+        if asset is not None and concept_name:
+            c = asset.concept_by_name(concept_name)
+            if c is not None:
+                self._open_concept_panel(c.id)
+                return
+        # Concept lives in a material that is not active / not loaded as a
+        # concept — fall back to the learner model where mastery is visible.
+        self.on_nav_click("learner")
+
     def _on_jump_to_evidence(self, concept_id: str, evidence: str = ""):
         self.on_nav_click("source")
-        if self._source_view_widget:
-            self._source_view_widget.scroll_to_concept(concept_id, evidence or None)
+        # ``on_nav_click`` refreshes the reader (fresh mastery colours and
+        # anchors), which replaces ``SourceView._source_widget``; re-bind to
+        # the live widget — the cached one was just deleteLater'd, so scrolling
+        # it would silently do nothing (a dead link in all but appearance).
+        view = getattr(self, "_source_view", None)
+        widget = getattr(view, "_source_widget", None) if view is not None else None
+        self._source_view_widget = widget
+        if widget is not None:
+            widget.scroll_to_concept(concept_id, evidence or None)
 
     def _on_teach_evidence_jump(self, concept_ref: str, evidence: str = ""):
         """Evidence badge clicked — resolve the concept (global graph ids
@@ -947,78 +1294,24 @@ class MainWindow(QMainWindow):
 
     def _on_stuck_detected(self, concept_name: str, stuck_info: object):
         self._refresh_all_views()
-        self._offer_harness_evolution(concept_name, stuck_info)
-        self._offer_harness_transfer_cards()
+        self._adapt_teaching_silently(concept_name)
 
-    def _offer_harness_transfer_cards(self):
-        """Stuck signal → cross-asset migration candidates → light-blue cards.
+    def _adapt_teaching_silently(self, concept_name: str):
+        """Stuck signal → silently improve the teaching strategy.
 
-        Reuses _find_transfer_candidates (eligibility gate → differential
-        OFF/ON evaluation → migrate/no_change verdict). Only "migrate"
-        verdicts become cards, at most 2 per run per (target, source, spec)
-        signature — the differential evaluation itself is a local
-        deterministic simulation (no LLM), so running it on stuck is cheap.
-        """
-        try:
-            asset = self.get_asset()
-            if asset is None:
-                return
-            shown = getattr(self, "_transfer_offer_shown", None)
-            if shown is None:
-                shown = self._transfer_offer_shown = set()
-            # skip the evaluation entirely when every source spec was
-            # already offered (and dismissed) this session
-            fresh = [
-                aid
-                for aid, spec in self._harness_specs.items()
-                if aid != asset.asset_id
-                and self.assets.get(aid)
-                and (asset.asset_id, aid, spec.get("name", "")) not in shown
-            ]
-            if not fresh:
-                return
-            w = getattr(self._teach_view, "_teach_view_widget", None)
-            if w is None or not hasattr(w, "append_transfer_suggestion"):
-                return
-            for cand in self._find_transfer_candidates(asset)[:2]:
-                ev = cand.get("evaluation") or {}
-                diff = (ev.get("comparison") or {}).get("diff")
-                gain = cand.get("gain") if diff is not None else ev.get(
-                    "coverage_diff", 0.0
-                )
-                sig = (
-                    asset.asset_id,
-                    cand.get("source_asset_id", ""),
-                    (cand.get("spec") or {}).get("name", ""),
-                )
-                if sig in shown:
-                    continue
-                shown.add(sig)
-                body = _t(
-                    "harness_transfer_body",
-                    source=cand.get("source_title", ""),
-                    name=(cand.get("spec") or {}).get("name", "?"),
-                    gain=f"{float(gain):+.2f}",
-                    cost=ev.get("cost_diff", 0),
-                )
-                w.append_transfer_suggestion(_t("harness_transfer_title"), body, cand)
-        except Exception:
-            pass
-
-    def _offer_harness_evolution(self, concept_name: str, stuck_info=None):
-        """Stuck signal → joint evolution → suggestion card in the teach view.
-
-        Closes the AGENTS.md §12 loop: evolve_joint produces the candidate
-        (all signal layers fused, check_harness-admitted), the result view
-        renders it as an amber/purple/cyan card, one click re-teaches.
-        Session-level dedup: the same (asset, concept, reason, candidate)
-        is only offered once per run — repeated weak evaluations must not
-        spam identical cards.
+        AutoHarness is an internal mechanism: the learner never sees evolution
+        cards, guard trimming or cross-asset migration. The same deterministic
+        pipeline still runs — ``evolve_joint`` (all signal layers) or a
+        strategy that wins on another asset — and the adopted HarnessSpec is
+        persisted with its audit event. The one visible effect is the live
+        explanation style switching, so the next "换个讲法" lands differently.
         """
         try:
             asset = self.get_asset()
             if asset is None or not concept_name:
                 return
+            if getattr(self, "_harness_offer_shown", None) is None:
+                self._harness_offer_shown = set()
             spec = self._harness_specs.get(asset.asset_id) or _ah.fallback_harness()
             reports = _ah.load_session_reports(
                 config.DATA_DIR / "harness_state.json"
@@ -1026,155 +1319,98 @@ class MainWindow(QMainWindow):
             res = _ah.evolve_joint(
                 spec, self.learner, reports=reports, concept_name=concept_name
             )
-            if not res.get("evolved"):
-                return
-            cands = res.get("candidates") or []
-            if not cands:
-                return
-            cand = cands[0]
+            cand = (res.get("candidates") or [None])[0] if res.get("evolved") else None
             reason = res.get("reason", "stuck")
-            focused = res.get("focused") or {}
-            concept = focused.get("name") or concept_name
-            fallback_attempts = 3
-            if isinstance(stuck_info, dict):
-                fallback_attempts = stuck_info.get("attempts", 3)
-            attempts = focused.get("attempts") or fallback_attempts
-            sig = (asset.asset_id, concept, reason, cand.get("name", ""))
-            if getattr(self, "_harness_offer_shown", None) is None:
-                self._harness_offer_shown = set()
-            if sig in self._harness_offer_shown:
+            if cand is not None:
+                sig = (asset.asset_id, concept_name, reason, cand.get("name", ""))
+                if sig in self._harness_offer_shown:
+                    return
+                self._harness_offer_shown.add(sig)
+                self._apply_harness_silently(cand, reason, concept_name)
                 return
-            self._harness_offer_shown.add(sig)
-
-            summary = _ah.harness_summary(cand)
-            if reason == "regression":
-                src = "regression"
-                title = _t("harness_regress_title")
-                body = _t(
-                    "harness_regress_body",
-                    concept=concept,
-                    before=f"{focused.get('before_avg', 0):.2f}",
-                    after=f"{focused.get('after_avg', 0):.2f}",
-                    attempts=attempts,
-                )
-                extra = None
-            elif reason in ("stuck", "sessions"):
-                src = "stuck"
-                title = _t("harness_suggest_title")
-                body = _t(
-                    "harness_suggest_body",
-                    concept=concept,
-                    attempts=attempts,
-                    summary=summary,
-                )
-                extra = None
-            else:
-                src = "joint"
-                title = _t("harness_joint_title")
-                body = _t(
-                    "harness_joint_body",
-                    concept=concept,
-                    reason=reason,
-                    summary=summary,
-                    diag="；".join(res.get("diagnosis", [])),
-                )
-                extra = {"_joint_reason": reason}
-            w = getattr(self._teach_view, "_teach_view_widget", None)
-            if w is not None and hasattr(w, "append_harness_suggestion"):
-                w.append_harness_suggestion(title, body, cand, source=src, extra=extra)
+            self._adopt_transfer_silently(asset, concept_name)
         except Exception:
             pass
 
+    def _adopt_transfer_silently(self, asset, concept_name: str):
+        """No local candidate → adopt the strategy that wins on another asset."""
+        shown = getattr(self, "_transfer_offer_shown", None)
+        if shown is None:
+            shown = self._transfer_offer_shown = set()
+        # skip the differential evaluation entirely when every source asset
+        # was already offered (and adopted) this session
+        fresh_sources = [
+            aid
+            for aid in self._harness_specs
+            if aid != asset.asset_id
+            and not any(
+                sig[0] == asset.asset_id and sig[1] == aid for sig in shown
+            )
+        ]
+        if not fresh_sources:
+            return
+        listed = self._find_transfer_candidates(asset)[:1]
+        if not listed:
+            return
+        cand = listed[0]
+        spec = cand.get("spec") or {}
+        sig = (asset.asset_id, cand.get("source_asset_id", ""), spec.get("name", ""))
+        if sig in shown:
+            return
+        shown.add(sig)
+        path = config.DATA_DIR / "harness_state.json"
+        ok, _event = _ah.adopt_harness_for_asset(
+            path,
+            asset.asset_id,
+            spec,
+            source_asset_id=cand.get("source_asset_id", ""),
+            concept=concept_name,
+        )
+        if not ok:
+            return
+        self._harness_specs[asset.asset_id] = spec
+        self._harness_history = _ah.load_harness_history(path)
+        self._nudge_style(spec)
+
+    def _apply_harness_silently(self, spec: dict, reason: str, concept_name: str):
+        """Persist an evolved spec + audit event, then nudge the live style."""
+        asset = self.get_asset()
+        if asset is None:
+            return
+        path = config.DATA_DIR / "harness_state.json"
+        old_spec = self._harness_specs.get(asset.asset_id)
+        self._harness_specs[asset.asset_id] = spec
+        _ah.save_harness_state(path, self._harness_specs)
+        self._harness_history = _ah.record_harness_evolution(
+            path,
+            _ah.evolution_event(
+                reason,
+                old_spec,
+                spec,
+                asset_id=asset.asset_id,
+                concept=concept_name,
+            ),
+        )
+        self._nudge_style(spec)
+
+    def _nudge_style(self, spec: dict):
+        """Switch the live explanation style to the adopted strategy's style."""
+        tv = getattr(self, "_teach_view", None)
+        combo = getattr(tv, "_style_combo", None)
+        if combo is None:
+            return
+        code = self._HARNESS_STYLE_CODES.get(
+            (spec.get("policy") or {}).get("style", ""), None
+        )
+        if code is None:
+            return
+        idx = tv._CODE_TO_IDX.get(code, 0)
+        combo.blockSignals(True)
+        combo.setCurrentIndex(idx)
+        combo.blockSignals(False)
+
     def _on_followup_done(self, question: str, answer: str):
         pass
-
-    def _on_adopt_harness(self, candidate):
-        """Adopt an AutoHarness evolution candidate: persist + re-teach."""
-        try:
-            asset = self.get_asset()
-            if asset is None:
-                return
-            src = ""
-            joint_reason = ""
-            if isinstance(candidate, dict):
-                src = candidate.pop("_source", "")
-                joint_reason = candidate.pop("_joint_reason", "")
-            spec = candidate
-            old_spec = self._harness_specs.get(asset.asset_id)
-            self._harness_specs[asset.asset_id] = spec
-            _ah.save_harness_state(
-                config.DATA_DIR / "harness_state.json", self._harness_specs
-            )
-            concept_now = getattr(self, "_teach_concept_now", "")
-            if src == "regression":
-                reason = "regression"
-            elif src == "joint":
-                reason = joint_reason or "joint"
-            elif src == "stuck":
-                reason = "stuck"
-            else:
-                reason = "manual"
-            self._harness_history = _ah.record_harness_evolution(
-                config.DATA_DIR / "harness_state.json",
-                _ah.evolution_event(
-                    reason,
-                    old_spec,
-                    spec,
-                    asset_id=asset.asset_id,
-                    concept=concept_now,
-                ),
-            )
-            QMessageBox.information(
-                self,
-                _t("harness_suggest_title"),
-                _t("harness_adopted", name=spec.get("name", "?"), concept=concept_now),
-            )
-            style = spec.get("policy", {}).get("style")
-            concept = asset.concept_by_name(concept_now) if concept_now else None
-            if concept is not None and style:
-                self._show_teaching_content(concept, vary=1, style=style)
-        except Exception as exc:
-            QMessageBox.warning(self, _t("hint"), str(exc))
-
-    def _on_transfer_harness(self, payload):
-        """Adopt a harness migrated from another asset."""
-        try:
-            asset = self.get_asset()
-            if asset is None:
-                return
-            spec = payload.get("spec") or {}
-            source_id = payload.get("source_asset_id", "")
-            concept_now = getattr(self, "_teach_concept_now", "")
-            path = config.DATA_DIR / "harness_state.json"
-            ok, _event = _ah.adopt_harness_for_asset(
-                path,
-                asset.asset_id,
-                spec,
-                source_asset_id=source_id,
-                concept=concept_now,
-            )
-            if not ok:
-                QMessageBox.warning(self, _t("hint"), _t("harness_none"))
-                return
-            self._harness_specs[asset.asset_id] = spec
-            self._harness_history = _ah.load_harness_history(path)
-            source_title = payload.get("source_title", source_id)
-            QMessageBox.information(
-                self,
-                _t("harness_transfer_title"),
-                _t(
-                    "harness_transfer_adopted",
-                    name=spec.get("name", "?"),
-                    source=source_title,
-                    concept=concept_now,
-                ),
-            )
-            style = spec.get("policy", {}).get("style")
-            concept = asset.concept_by_name(concept_now) if concept_now else None
-            if concept is not None and style:
-                self._show_teaching_content(concept, vary=1, style=style)
-        except Exception as exc:
-            QMessageBox.warning(self, _t("hint"), str(exc))
 
     def _on_evaluate_recorded(self):
         self.save_learner_state()
@@ -1206,27 +1442,81 @@ class MainWindow(QMainWindow):
         for aid, data in self.assets.items():
             title = data.get("title") or data.get("source_name") or aid
             count = len(data.get("concepts", []))
+            row = QWidget()
+            row_lay = QHBoxLayout(row)
+            row_lay.setContentsMargins(0, 0, 0, 0)
+            row_lay.setSpacing(2)
             btn = QPushButton(
-                f"📚 {title[:22]}{'...' if len(title) > 22 else ''}  · {count}"
+                f"{title[:22]}{'...' if len(title) > 22 else ''}  · {count}"
             )
             btn.setToolTip(_t("asset_tooltip", title=title, count=count))
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(
-                "QPushButton { background-color: transparent; color: #BBDEFB;"
-                "text-align: left; padding: 8px 12px; border: none;"
-                "border-radius: 4px; font-size: 14px; }"
-                "QPushButton:hover { background-color: #283593; }"
-                "QPushButton:checked { background-color: #3949AB; }"
+                f"QPushButton {{ background-color: transparent;"
+                f" color: {theme.TEXT_MUTED}; text-align: left;"
+                " padding: 7px 10px; border: none;"
+                f" border-radius: {theme.RADIUS_MD}px; font-size: 12.5px; }}"
+                f"QPushButton:hover {{ background-color: {theme.SURFACE_HOVER};"
+                f" color: {theme.TEXT}; }}"
+                f"QPushButton:checked {{ background-color: {theme.ACCENT_TINT};"
+                f" color: {theme.ACCENT_HOVER}; }}"
             )
             btn.setCheckable(True)
             btn.setChecked(aid == self.current_asset_id)
             btn.clicked.connect(lambda checked, a=aid: self.on_asset_select(a))
+            row_lay.addWidget(btn, 1)
+            del_btn = QPushButton("×")
+            del_btn.setObjectName(f"asset_delete_{aid}")
+            del_btn.setToolTip(_t("asset_delete_tip", title=title))
+            del_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            del_btn.setFixedWidth(26)
+            del_btn.setFixedHeight(24)
+            del_btn.setStyleSheet(
+                f"QPushButton {{ background-color: transparent;"
+                f" color: {theme.TEXT_FAINT}; border: none;"
+                f" border-radius: {theme.RADIUS_SM}px; font-size: 12.5px; }}"
+                f"QPushButton:hover {{ background-color: {theme.DANGER};"
+                f" color: {theme.TEXT_ON_ACCENT}; }}"
+            )
+            del_btn.clicked.connect(
+                lambda checked, a=aid: self._on_delete_asset(a)
+            )
+            row_lay.addWidget(del_btn)
             self._asset_buttons[aid] = btn
-            self._asset_list_layout.addWidget(btn)
+            self._asset_list_layout.addWidget(row)
+        # Extra space belongs below the list, not between rows.
+        self._asset_list_layout.addStretch(1)
+
+    def _on_delete_asset(self, asset_id: str):
+        """Delete an asset with its teacher model and learner traces.
+
+        The knowledge index rebuilds itself from the remaining assets via its
+        signature check, so no explicit index maintenance is needed here.
+        """
+        data = self.assets.get(asset_id)
+        if data is None:
+            return
+        title = data.get("title") or data.get("source_name") or asset_id
+        answer = QMessageBox.question(
+            self,
+            _t("asset_delete_title"),
+            _t("asset_delete_confirm", title=title),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        delete_asset(asset_id)
+        self.assets.pop(asset_id, None)
+        self.teacher_models.pop(asset_id, None)
+        unregister_asset(self.learner, asset_id)
+        self.save_learner_state()
+        if self.current_asset_id == asset_id:
+            self.current_asset_id = next(iter(self.assets), None)
+        self._rebuild_all_views()
 
     def _rebuild_all_views(self):
         """Clear and rebuild every data-dependent view.
 
-        Fully rebuilds all 7 views (like the original code) so that graph
+        Fully rebuilds all 8 views (like the original code) so that graph
         widgets, concept panels, and other lazy-created references are
         fresh after an asset switch or language change.
         """
@@ -1266,6 +1556,7 @@ class MainWindow(QMainWindow):
         self._build_teach_view()
         self._build_learner_view()
         self._build_teacher_view()
+        self._build_panorama_view()
         # View constructors may trigger nested Qt layout ownership changes;
         # publish the final live graph after the complete view tree exists.
         self._dash_graph = self._knowledge_view._dash_graph
@@ -1278,6 +1569,7 @@ class MainWindow(QMainWindow):
             self._teach_view,
             self._learner_view,
             self._teacher_view,
+            self._panorama_view,
         ]:
             self.content_stack.addWidget(v)
 
@@ -1292,6 +1584,7 @@ class MainWindow(QMainWindow):
                     self._teach_view,
                     self._learner_view,
                     self._teacher_view,
+                    self._panorama_view,
                 ]
             )
 
@@ -1413,9 +1706,14 @@ class MainWindow(QMainWindow):
     def _compute_stats(self) -> dict:
         mastered = learning = unstudied = 0
         anomaly_count = 0
+        mastery_vals: list[float] = []
+        unanchored = 0
         for c in self.get_asset().concepts if self.get_asset() else []:
             norm = normalize(c.name)
             m = self.learner.get("concepts", {}).get(norm, {}).get("mastery", 0.0)
+            mastery_vals.append(m)
+            if not (getattr(c, "locations", None) or []):
+                unanchored += 1
             if m >= 0.6:
                 mastered += 1
             elif m > 0:
@@ -1425,12 +1723,15 @@ class MainWindow(QMainWindow):
         td = self.teacher_models.get(self.current_asset_id or "", {})
         anomaly_count = len(td.get("anomalies", []))
         total = mastered + learning + unstudied
+        avg_mastery = sum(mastery_vals) / len(mastery_vals) if mastery_vals else 0.0
         return dict(
             total=total,
             mastered=mastered,
             learning=learning,
             unstudied=unstudied,
             anomalies=anomaly_count,
+            avg_mastery=avg_mastery,
+            unanchored=unanchored,
         )
 
     def _next_concept(self):
@@ -1472,6 +1773,8 @@ class MainWindow(QMainWindow):
             self._teach_view.refresh()
         elif idx == 5 and hasattr(self, "_learner_view"):  # learner
             self._learner_view.refresh()
+        elif idx == 7 and hasattr(self, "_panorama_view"):  # panorama
+            self._panorama_view.refresh()
 
     # ---- global concept graph --------------------------------------------------
 
@@ -1616,6 +1919,16 @@ class MainWindow(QMainWindow):
                         break
 
         title = self._t("global_graph_title")
+        # Carry the current asset's curated path into the merged graph (ids
+        # prefixed) so path playback works in the all-assets scope too.
+        cur_prefix = f"{self.current_asset_id}:" if len(self.assets) > 1 else ""
+        cur_path: list[str] = []
+        cur_data = self.assets.get(self.current_asset_id or "", {})
+        for cid in cur_data.get("learning_path", []) or []:
+            pid = f"{cur_prefix}{cid}"
+            if any(c.id == pid for c in all_concepts):
+                cur_path.append(pid)
+
         global_asset = KnowledgeAsset(
             asset_id="global",
             type="global",
@@ -1626,7 +1939,7 @@ class MainWindow(QMainWindow):
             chapters=all_chapters,
             concepts=all_concepts,
             relations=all_relations,
-            learning_path=[],
+            learning_path=cur_path,
             method="global_graph",
             source_length=0,
         )

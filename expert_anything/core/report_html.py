@@ -661,6 +661,7 @@ def _build_trace_audit(history: list, learner: dict) -> str:
         "answer": t("audit_channel_answer"),
         "quiz": t("audit_channel_quiz"),
         "practice": t("audit_channel_practice"),
+        "flashcard": t("audit_channel_flashcard"),
     }
     per: dict[str, dict] = {}
     rotated = 0

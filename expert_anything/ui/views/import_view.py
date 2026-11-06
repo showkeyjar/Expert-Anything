@@ -32,6 +32,9 @@ from expert_anything.core.learner import register_asset
 from expert_anything.core.llm import LLMClient, LLMNotConfigured
 from expert_anything.core.teacher import TeacherModel, build_teacher_model
 from expert_anything.core.i18n import t as _t
+from expert_anything.ui import theme
+from expert_anything.ui.widgets._helpers import CollapsibleSection
+from expert_anything.ui.widgets.shared import PageHeader
 
 
 class ExtractWorker(QThread):
@@ -93,7 +96,6 @@ class ImportView(QWidget):
     # Signals emitted back to MainWindow
     asset_extracted = Signal(object)  # KnowledgeAsset
     teacher_built = Signal(object)  # TeacherModel
-    asset_selected = Signal(str)  # asset_id
     navigate_requested = Signal(str)  # view_name
 
     def __init__(self, main, parent=None):
@@ -159,22 +161,15 @@ class ImportView(QWidget):
         btn_layout = QHBoxLayout()
 
         choose_btn = QPushButton(_t("choose_file"))
-        choose_btn.setStyleSheet("""
-            QPushButton { background-color: #FF9800; color: white; border: none;
-                          border-radius: 6px; padding: 8px 16px; font-size: 15px; }
-            QPushButton:hover { background-color: #F57C00; }
-        """)
+        choose_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        choose_btn.setStyleSheet(theme.secondary_button_style())
         choose_btn.clicked.connect(self._on_choose_file)
         btn_layout.addWidget(choose_btn)
 
         self._analysis_btn = QPushButton(_t("start_analysis"))
         self._analysis_btn.setEnabled(False)
-        self._analysis_btn.setStyleSheet("""
-            QPushButton { background-color: #4CAF50; color: white; border: none;
-                          border-radius: 6px; padding: 8px 16px; font-size: 15px; }
-            QPushButton:hover { background-color: #388E3C; }
-            QPushButton:disabled { background-color: #BDBDBD; }
-        """)
+        self._analysis_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._analysis_btn.setStyleSheet(theme.primary_button_style())
         self._analysis_btn.clicked.connect(self._on_generate)
         btn_layout.addWidget(self._analysis_btn)
         btn_layout.addStretch()
@@ -187,11 +182,19 @@ class ImportView(QWidget):
         self._import_progress.setValue(0)
         self._import_progress.setFormat("%p%")
         self._import_progress.setVisible(True)
+        self._import_progress.setFixedHeight(6)
+        self._import_progress.setTextVisible(False)
+        self._import_progress.setStyleSheet(
+            f"QProgressBar {{ background-color: {theme.BORDER};"
+            " border: none; border-radius: 3px; }"
+            f"QProgressBar::chunk {{ background-color: {theme.ACCENT};"
+            " border-radius: 3px; }}"
+        )
         content_layout.addWidget(self._import_progress)
 
         self._import_status_label = QLabel(_t("import_status_wait"))
         self._import_status_label.setStyleSheet(
-            "color: #666; font-size: 14px; margin-top: 8px;"
+            f"color: {theme.TEXT_MUTED}; font-size: 12.5px; margin-top: 6px;"
         )
         content_layout.addWidget(self._import_status_label)
 
@@ -206,28 +209,24 @@ class ImportView(QWidget):
         self._llm_label = QLabel(llm_status)
         self._llm_label.setWordWrap(True)
         self._llm_label.setStyleSheet(
-            "color: #4CAF50; font-size: 14px; margin-top: 8px;"
+            f"color: {theme.SUCCESS}; font-size: 12.5px; margin-top: 6px;"
             if self._main.llm_client
-            else "color: #FF9800; font-size: 14px; margin-top: 8px;"
+            else f"color: {theme.WARNING}; font-size: 12.5px; margin-top: 6px;"
         )
         content_layout.addWidget(self._llm_label)
 
         layout.addWidget(content)
 
-    def _build_guide_card(self) -> QFrame:
-        """First-run guide card: a three-step walkthrough for newcomers."""
-        card = QFrame()
-        card.setStyleSheet(
-            "QFrame { background-color: #F7FAFF; border: 1px solid #D6E4F5;"
-            "border-radius: 8px; }"
-        )
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(16, 14, 16, 12)
-        lay.setSpacing(10)
+    def _build_guide_card(self) -> QWidget:
+        """First-run guide card: a three-step walkthrough for newcomers.
 
-        title = QLabel(_t("guide_title"))
-        title.setStyleSheet("font-size: 15.5px; font-weight: bold; color: #174A7E;")
-        lay.addWidget(title)
+        Smart fold: with no assets the card ships expanded (the newcomer
+        needs the loop explained); once any asset exists the returning user
+        gets a quiet first screen and the guide sits behind one click.
+        """
+        section = CollapsibleSection(_t("guide_title"))
+        body = section.body_layout()
+        body.setContentsMargins(4, 2, 4, 4)
 
         steps = QHBoxLayout()
         steps.setSpacing(10)
@@ -237,21 +236,23 @@ class ImportView(QWidget):
             (3, "guide_step3_title", "guide_step3_desc"),
         ]:
             steps.addWidget(self._guide_step(num, _t(title_key), _t(desc_key)), 1)
-        lay.addLayout(steps)
+        body.addLayout(steps)
 
         note = QLabel(_t("guide_note"))
         note.setWordWrap(True)
         note.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
-        lay.addWidget(note)
+        body.addWidget(note)
 
-        return card
+        section.set_expanded(not bool(getattr(self._main, "assets", None)))
+        return section
 
     @staticmethod
     def _guide_step(num: int, title: str, desc: str) -> QFrame:
         step = QFrame()
         step.setStyleSheet(
-            "QFrame { background-color: white; border: 1px solid #D6E4F5;"
-            "border-radius: 6px; }"
+            f"QFrame {{ background-color: {theme.SURFACE};"
+            f" border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_LG}px; }}"
         )
         lay = QVBoxLayout(step)
         lay.setContentsMargins(12, 10, 12, 10)
@@ -263,8 +264,9 @@ class ImportView(QWidget):
         badge.setFixedSize(22, 22)
         badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         badge.setStyleSheet(
-            "QLabel { background-color: #1565C0; color: white;"
-            "border-radius: 11px; font-size: 14px; font-weight: bold; }"
+            f"QLabel {{ background-color: {theme.ACCENT_TINT};"
+            f" color: {theme.ACCENT_HOVER}; border-radius: 11px;"
+            " font-size: 12px; font-weight: 700; }"
         )
         head.addWidget(badge)
         head.addWidget(QLabel(title), 1)
@@ -272,28 +274,13 @@ class ImportView(QWidget):
 
         d = QLabel(desc)
         d.setWordWrap(True)
-        d.setStyleSheet("color: #5F6B7A; font-size: 14px; line-height: 1.4;")
+        d.setStyleSheet(f"color: {theme.TEXT_MUTED}; font-size: 12.5px;")
         lay.addWidget(d)
 
         return step
 
     def _view_header(self, title, subtitle=""):
-        header = QFrame()
-        header.setStyleSheet(
-            "background-color: white; border-bottom: 2px solid #1565C0;"
-        )
-        lay = QHBoxLayout(header)
-        lay.setContentsMargins(20, 7, 20, 7)
-        lay.setSpacing(10)
-        t = QLabel(str(title))
-        t.setStyleSheet("font-size: 18px; font-weight: bold; color: #1F2933;")
-        lay.addWidget(t)
-        if subtitle:
-            s = QLabel(str(subtitle))
-            s.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
-            lay.addWidget(s)
-        lay.addStretch()
-        return header
+        return PageHeader(title, subtitle)
 
     def _update_ready(self):
         if not hasattr(self, "_analysis_btn"):
@@ -431,9 +418,7 @@ class ImportView(QWidget):
             _t(
                 "domain_template_ask",
                 template=offer["template_name"],
-                matched=offer["matched_count"],
                 total=offer["template_concept_count"],
-                pct=f"{offer['coverage']:.0%}",
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -457,9 +442,6 @@ class ImportView(QWidget):
         """Localized summary of a ``TemplateApplicationResult``."""
         stats = {
             "template": result.template_name or result.domain_id,
-            "matched": result.matched_count,
-            "total": result.template_concept_count,
-            "pct": f"{result.coverage:.0%}",
             "enriched": result.enriched_count,
         }
         if result.applied and result.learning_path_applied:
@@ -524,7 +506,6 @@ class ImportView(QWidget):
         self._analysis_btn.setEnabled(False)
 
         self.teacher_built.emit(teacher)
-        self.asset_selected.emit(teacher.asset_id)
         self.navigate_requested.emit("knowledge")
 
     def _on_extraction_error(self, error_msg):

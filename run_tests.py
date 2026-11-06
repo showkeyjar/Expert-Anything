@@ -2,7 +2,7 @@
 
 Usage:
     python run_tests.py          # full suite (LLM tests run if key configured)
-    python run_tests.py --quick  # skip LLM tests (fast, ~10s)
+    python run_tests.py --quick  # core+data+ui+runner, 796 tests, ~5 min (UI layer dominates)
     python run_tests.py --llm    # LLM tests only
 
 Layers:
@@ -35,7 +35,23 @@ LAYERS = {
         "tests.test_domain_prompts",
         "tests.test_terminology",
         "tests.test_search",
+        "tests.test_knowledge_index",
+        "tests.test_domain_renewable",
+        "tests.test_domain_distributed_energy",
+        "tests.test_scene_benchmark",
+        "tests.test_learning_benchmark",
+        "tests.test_quality_gate",
         "tests.test_i18n_integrity",
+        "tests.test_llm_endpoint",
+        "tests.test_round12",
+        "tests.test_round13",
+        "tests.test_round14",
+        "tests.test_round15",
+        "tests.test_round16",
+        "tests.test_round17",
+        "tests.test_round18",
+        "tests.test_round19",
+        "tests.test_round20",
     ],
     "data": ["tests.test_demo_data"],
     "ui": ["tests.test_ui"],

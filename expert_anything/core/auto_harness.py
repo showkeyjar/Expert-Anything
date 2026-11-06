@@ -903,8 +903,11 @@ def regression_detection(learner_state: dict, threshold: float | None = None,
     rows: dict[str, list[float]] = {}
     names: dict[str, str] = {}
     for h in learner_state.get("history", []):  # newest first
-        if (h.get("meta") or {}).get("review"):
+        meta = h.get("meta") or {}
+        if meta.get("review"):
             continue  # retention evidence — not teaching-channel regression
+        if meta.get("channel") == _learner.RECALL_CHANNEL:
+            continue  # self-explanation coverage — not a teaching-style effect
         key = h.get("key") or _learner.normalize(h.get("concept", ""))
         if not key:
             continue
@@ -1336,8 +1339,8 @@ def apply_to_learner(report: dict, learner_state: dict, asset_id: str,
                                          ensure_ascii=False)}
     return _learner.record_evaluation(
         learner_state, report["concept"], asset_id, report["value"],
-        answer="harness 会话", feedback=feedback or
-        f"AutoHarness 会话完成（{report['spec_name']}，{report['metric']}={report['value']}）",
+        answer="",
+        feedback=feedback or f"本课演练完成（掌握度 {report['value']:.0%}）",
         meta=meta)
 
 

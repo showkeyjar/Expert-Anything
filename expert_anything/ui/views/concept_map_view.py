@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
@@ -16,8 +18,26 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from expert_anything.core.learner import normalize
-from expert_anything.core.search import search_assets
+from expert_anything.core.knowledge_index import indexed_search
 from expert_anything.core.teacher import anomaly_concept_ids, TeacherModel
+from expert_anything.ui import theme
+from expert_anything.ui.widgets.shared import PageHeader
+
+
+def _toggle_style() -> str:
+    """One look for every toolbar toggle (the old ones each picked their own
+    candy colour and gradient, which is what made the toolbar feel busy)."""
+    return (
+        f"QPushButton {{ background-color: {theme.SURFACE};"
+        f" color: {theme.TEXT_MUTED}; border: 1px solid {theme.BORDER};"
+        f" border-radius: {theme.RADIUS_MD}px; padding: 5px 12px;"
+        " font-size: 13px; }"
+        f"QPushButton:hover {{ background-color: {theme.SURFACE_HOVER};"
+        f" color: {theme.TEXT}; }}"
+        f"QPushButton:checked {{ background-color: {theme.ACCENT_TINT};"
+        f" border-color: {theme.ACCENT_SOFT}; color: {theme.ACCENT_HOVER};"
+        " font-weight: 600; }"
+    )
 
 
 class ConceptMapView(QWidget):
@@ -38,15 +58,31 @@ class ConceptMapView(QWidget):
         self._map_detail = None
         self._scope_combo = None
         self._search_box = None
-        self._drill_path_label = None
+        self._breadcrumb_host = None
         self._legend = None
         self._global_asset = None
         self._active_sem_filters: set[str] = set()
         self._sem_filter_buttons: dict[str, QPushButton] = {}
         self._build()
 
+    # 标记文件路径：首次看到引导后就不再弹
+    _ONBOARDING_MARKER = Path("data/.cm_onboarding_seen")
+
     def refresh(self):
         self._refresh_map()
+        # 首次进入认知地图时给小白一个 3 步引导层
+        if (
+            self._graph_view is not None
+            and self._global_asset is not None
+            and self._global_asset.concepts
+            and not self._ONBOARDING_MARKER.exists()
+        ):
+            self._show_onboarding()
+            try:
+                self._ONBOARDING_MARKER.parent.mkdir(parents=True, exist_ok=True)
+                self._ONBOARDING_MARKER.touch()
+            except OSError:
+                pass  # 允许只读环境
 
     def focus_and_show(self, concept_id: str) -> None:
         """Show one concept in the unified map + inspector workspace.
@@ -80,17 +116,28 @@ class ConceptMapView(QWidget):
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(20, 16, 20, 20)
         content_layout.setSpacing(12)
+        self._content_layout = content_layout
 
         if (
             self._main.current_asset_id
             and self._main.current_asset_id in self._main.assets
         ):
             content_layout.addWidget(self._build_toolbar())
+            self._more_row = self._build_more_row()
+            content_layout.addWidget(self._more_row)
             splitter = QSplitter()
             self._graph_view = self._main._graph_view_ref()
+            # The main map is the drill-down surface: double-click enters a
+            # concept's subgraph (breadcrumb on top), right-click still offers
+            # teaching.  Embedded mini-graphs keep double-click-to-teach.
+            self._graph_view.enable_drill_down()
+            self._graph_view.node_drilled.connect(self._on_node_drilled)
             self._graph_view.concept_clicked.connect(self._on_graph_click)
             self._graph_view.node_single_clicked.connect(self._on_node_clicked)
             self._graph_view.edge_clicked.connect(self._on_edge_click)
+            # The graph widget survives view rebuilds — reflect its current
+            # mastery band in the freshly-created combo without re-rendering.
+            self._sync_mastery_filter_combo()
             self._map_detail = self._main._map_detail_ref()
             self._map_detail.teach_requested.connect(
                 lambda n: self.teach_requested.emit(n)
@@ -167,12 +214,8 @@ class ConceptMapView(QWidget):
         lay.addWidget(desc)
 
         cta = QPushButton(self._main._t("map_empty_cta"))
-        cta.setStyleSheet(
-            "QPushButton { background-color: #1565C0; color: white; border: none;"
-            "border-radius: 6px; padding: 10px 22px; font-size: 15.5px;"
-            "font-weight: bold; }"
-            "QPushButton:hover { background-color: #0D47A1; }"
-        )
+        cta.setCursor(Qt.CursorShape.PointingHandCursor)
+        cta.setStyleSheet(theme.primary_button_style())
         cta.clicked.connect(lambda: self._main.on_nav_click("import"))
         btn_row = QHBoxLayout()
         btn_row.addStretch()
@@ -185,22 +228,7 @@ class ConceptMapView(QWidget):
         return wrap
 
     def _view_header(self, title, subtitle=""):
-        header = QFrame()
-        header.setStyleSheet(
-            "background-color: white; border-bottom: 2px solid #1565C0;"
-        )
-        lay = QHBoxLayout(header)
-        lay.setContentsMargins(20, 7, 20, 7)
-        lay.setSpacing(10)
-        t = QLabel(str(title))
-        t.setStyleSheet("font-size: 18px; font-weight: bold; color: #1F2933;")
-        lay.addWidget(t)
-        if subtitle:
-            s = QLabel(str(subtitle))
-            s.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
-            lay.addWidget(s)
-        lay.addStretch()
-        return header
+        return PageHeader(title, subtitle)
 
     def _build_toolbar(self):
         toolbar_widget = QWidget()
@@ -217,34 +245,97 @@ class ConceptMapView(QWidget):
         self._search_box.returnPressed.connect(self._on_search)
         toolbar.addWidget(self._search_box, 1)
 
-        for label, tooltip, callback in [
-            (
-                "−",
-                self._main._t("zoom_out_tip"),
-                lambda: self._graph_view.zoom_out() if self._graph_view else None,
-            ),
-            (
-                self._main._t("zoom_fit"),
-                self._main._t("zoom_fit"),
-                lambda: self._graph_view.fit_content() if self._graph_view else None,
-            ),
-            (
-                "＋",
-                self._main._t("zoom_in_tip"),
-                lambda: self._graph_view.zoom_in() if self._graph_view else None,
-            ),
-        ]:
-            btn = QPushButton(label)
-            btn.setToolTip(tooltip)
-            btn.setStyleSheet(
-                "QPushButton { background-color: white; color: #1565C0;"
-                "border: 1px solid #BBDEFB; border-radius: 6px;"
-                "padding: 5px 10px; font-size: 14.5px; }"
-                "QPushButton:hover { background-color: #E3F2FD; }"
-            )
-            btn.clicked.connect(callback)
-            toolbar.addWidget(btn)
+        # 缩放组合：三个按钮紧挨，视觉上合成一个工具组
+        zoom_group = QWidget()
+        zoom_lay = QHBoxLayout(zoom_group)
+        zoom_lay.setContentsMargins(0, 0, 0, 0)
+        zoom_lay.setSpacing(0)
+        zoom_style_normal = (
+            f"QPushButton {{ background-color: {theme.SURFACE};"
+            f" color: {theme.ACCENT}; border: 1px solid {theme.BORDER};"
+            " padding: 5px 10px; font-size: 13px;"
+            "border-top-left-radius:6px; border-bottom-left-radius:6px;"
+            "border-top-right-radius:0px; border-bottom-right-radius:0px; }"
+            f"QPushButton:hover {{ background-color: {theme.ACCENT_TINT}; }}"
+        )
+        zoom_style_mid = (
+            f"QPushButton {{ background-color: {theme.SURFACE};"
+            f" color: {theme.ACCENT}; border-top: 1px solid {theme.BORDER};"
+            f" border-bottom: 1px solid {theme.BORDER};"
+            " padding: 5px 10px; font-size: 13px; }"
+            f"QPushButton:hover {{ background-color: {theme.ACCENT_TINT}; }}"
+        )
+        zoom_style_end = (
+            f"QPushButton {{ background-color: {theme.SURFACE};"
+            f" color: {theme.ACCENT}; border: 1px solid {theme.BORDER};"
+            " border-top-left-radius:0px; border-bottom-left-radius:0px;"
+            " border-top-right-radius:6px; border-bottom-right-radius:6px;"
+            " padding: 5px 10px; font-size: 13px; }"
+            f"QPushButton:hover {{ background-color: {theme.ACCENT_TINT}; }}"
+        )
 
+        btn_out = QPushButton("−")
+        btn_out.setToolTip(self._main._t("zoom_out_tip"))
+        btn_out.setStyleSheet(zoom_style_normal)
+        btn_out.clicked.connect(lambda: self._graph_view.zoom_out() if self._graph_view else None)
+        zoom_lay.addWidget(btn_out)
+
+        btn_fit = QPushButton(self._main._t("zoom_fit"))
+        btn_fit.setToolTip(self._main._t("zoom_fit"))
+        btn_fit.setStyleSheet(zoom_style_mid)
+        btn_fit.clicked.connect(lambda: self._graph_view.fit_content() if self._graph_view else None)
+        zoom_lay.addWidget(btn_fit)
+
+        btn_in = QPushButton("＋")
+        btn_in.setToolTip(self._main._t("zoom_in_tip"))
+        btn_in.setStyleSheet(zoom_style_end)
+        btn_in.clicked.connect(lambda: self._graph_view.zoom_in() if self._graph_view else None)
+        zoom_lay.addWidget(btn_in)
+        toolbar.addWidget(zoom_group)
+
+        # 显式下钻入口：选中节点时出现「展开子图」按钮
+        # （等同于双击手势的显式入口，避免"双击"成为隐藏功能）
+        self._drill_btn = QPushButton(self._main._t("drill_btn_label"))
+        self._drill_btn.setToolTip(self._main._t("drill_btn_tip"))
+        self._drill_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._drill_btn.setStyleSheet(theme.primary_button_style(compact=True))
+        self._drill_btn.clicked.connect(self._on_explicit_drill)
+        self._drill_btn.setVisible(False)
+        toolbar.addWidget(self._drill_btn)
+
+        # Breadcrumb bar: 全部知识 › A › B — every segment is a one-click jump
+        # back up the drill trail (下钻必须可回退).
+        self._breadcrumb_host = QWidget()
+        crumb_lay = QHBoxLayout(self._breadcrumb_host)
+        crumb_lay.setContentsMargins(0, 0, 0, 0)
+        crumb_lay.setSpacing(2)
+        toolbar.addWidget(self._breadcrumb_host, 1)
+
+        # 「更多工具」: reset/back/范围切换/热力图/过滤/导出等进阶功能
+        self._more_btn = QPushButton("▸ " + self._main._t("more_tools"))
+        self._more_btn.setToolTip(self._main._t("more_tools_hint"))
+        self._more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._more_btn.setStyleSheet(
+            f"QPushButton {{ background-color: transparent;"
+            f" color: {theme.TEXT_MUTED}; border: none; padding: 5px 6px;"
+            " font-size: 12.5px; font-weight: 600; }"
+            f"QPushButton:hover {{ color: {theme.ACCENT}; }}"
+        )
+        self._more_btn.clicked.connect(self._on_toggle_more_tools)
+        toolbar.addWidget(self._more_btn)
+
+        return toolbar_widget
+
+    def _build_more_row(self):
+        """Secondary toolbar row (reset/back/范围切换/语义过滤/热力图/导出…).
+        Hidden by default; toggled by the 「更多工具」 button."""
+        row_widget = QWidget()
+        row_widget.setVisible(False)
+        toolbar = QHBoxLayout(row_widget)
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.setSpacing(8)
+
+        # reset_map / map_back — 进阶状态维护操作，小白不需要在首行看到
         for label, tooltip, callback in [
             (
                 self._main._t("reset_map"),
@@ -260,19 +351,33 @@ class ConceptMapView(QWidget):
             btn = QPushButton(label)
             btn.setToolTip(tooltip)
             btn.setStyleSheet(
-                "QPushButton { background-color: white; color: #1565C0;"
-                "border: 1px solid #BBDEFB; border-radius: 6px;"
-                "padding: 5px 12px; font-size: 14.5px; }"
-                "QPushButton:hover { background-color: #E3F2FD; }"
+                "QPushButton { background-color: white; color: #455A64;"
+                "border: 1px solid #CFD8DC; border-radius: 6px;"
+                "padding: 4px 10px; font-size: 13.5px; }"
+                "QPushButton:hover { background-color: #ECEFF1; }"
             )
             btn.clicked.connect(callback)
             toolbar.addWidget(btn)
 
-        self._drill_path_label = QLabel(self._main._t("drill_hint"))
-        self._drill_path_label.setStyleSheet(
-            "QLabel { color: #546E7A; font-size: 14px; padding: 4px 8px; }"
+        # 范围切换（全部资产 / 仅当前资产）——跨资产场景是进阶用法
+        self._scope_combo = QComboBox()
+        self._scope_combo.addItems(
+            [
+                self._main._t("scope_all"),
+                self._main._t("scope_current"),
+            ]
         )
-        toolbar.addWidget(self._drill_path_label, 1)
+        self._scope_combo.setStyleSheet(
+            "QComboBox { border: 1px solid #CFD8DC; border-radius: 6px;"
+            "padding: 3px 7px; font-size: 13.5px; background-color: white; }"
+        )
+        self._scope_combo.currentIndexChanged.connect(self._on_scope_change)
+        toolbar.addWidget(self._scope_combo)
+
+        # 分隔线（小竖线，视觉上把"导航状态"和"过滤/视图模式"区分开）
+        sep = QLabel("│")
+        sep.setStyleSheet("color: #CFD8DC; font-size: 14px; padding: 0 2px;")
+        toolbar.addWidget(sep)
 
         # Semantic filter chips
         from expert_anything.core.decoder import REL_SEMANTICS
@@ -322,15 +427,7 @@ class ConceptMapView(QWidget):
         self._density_btn = QPushButton(self._main._t("density_view"))
         self._density_btn.setCheckable(True)
         self._density_btn.setToolTip(self._main._t("density_view_tip"))
-        self._density_btn.setStyleSheet(
-            "QPushButton { background-color: #E8EAF6; color: #283593;"
-            "border: 1px solid #9FA8DA; border-radius: 6px;"
-            "padding: 5px 12px; font-size: 14.5px; font-weight: 500; }"
-            "QPushButton:hover { background-color: #C5CAE9; }"
-            "QPushButton:checked { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-            "stop:0 #1565C0, stop:0.5 #FFA000, stop:1 #C62828);"
-            "color: white; border: 1px solid #7B1FA2; }"
-        )
+        self._density_btn.setStyleSheet(_toggle_style())
         self._density_btn.clicked.connect(self._on_toggle_density)
         toolbar.addWidget(self._density_btn)
 
@@ -338,40 +435,82 @@ class ConceptMapView(QWidget):
         self._mheat_btn = QPushButton(self._main._t("mastery_heat_view"))
         self._mheat_btn.setCheckable(True)
         self._mheat_btn.setToolTip(self._main._t("mastery_heat_tip"))
-        self._mheat_btn.setStyleSheet(
-            "QPushButton { background-color: #F1F8E9; color: #2E7D32;"
-            "border: 1px solid #A5D6A7; border-radius: 6px;"
-            "padding: 5px 12px; font-size: 14.5px; font-weight: 500; }"
-            "QPushButton:hover { background-color: #DCEDC8; }"
-            "QPushButton:checked { background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
-            "stop:0 #C62828, stop:0.4 #FFA000, stop:1 #2E7D32);"
-            "color: white; border: 1px solid #2E7D32; }"
-        )
+        self._mheat_btn.setStyleSheet(_toggle_style())
         self._mheat_btn.clicked.connect(self._on_toggle_mastery_heat)
         toolbar.addWidget(self._mheat_btn)
 
-        self._scope_combo = QComboBox()
-        self._scope_combo.addItems(
-            [
-                self._main._t("scope_all"),
-                self._main._t("scope_current"),
-            ]
+        # 2-hop breadth exploration toggle
+        self._hop2_btn = QPushButton(self._main._t("hop2_view"))
+        self._hop2_btn.setCheckable(True)
+        self._hop2_btn.setToolTip(self._main._t("hop2_tip"))
+        self._hop2_btn.setStyleSheet(_toggle_style())
+        self._hop2_btn.clicked.connect(self._on_toggle_hop2)
+        toolbar.addWidget(self._hop2_btn)
+
+        # Mastery band filter — isolate "what's left to learn" (full network
+        # only; focus mode keeps the ego-network intact).
+        self._mastery_filter_combo = QComboBox()
+        for band, label_key in (
+            ("all", "filter_all"),
+            ("unstudied", "filter_unstudied"),
+            ("weak", "filter_weak"),
+            ("mastered", "filter_mastered"),
+        ):
+            self._mastery_filter_combo.addItem(self._main._t(label_key), band)
+        self._mastery_filter_combo.setToolTip(
+            self._main._t("map_mastery_filter_tip")
         )
-        self._scope_combo.setStyleSheet(
-            "QComboBox { border: 1px solid #BDBDBD; border-radius: 6px;"
-            "padding: 4px 8px; font-size: 14.5px; background-color: white; }"
+        self._mastery_filter_combo.setStyleSheet(
+            f"QComboBox {{ border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_MD}px; padding: 4px 8px;"
+            f" font-size: 13px; background-color: {theme.SURFACE}; }}"
         )
-        self._scope_combo.currentIndexChanged.connect(self._on_scope_change)
-        toolbar.addWidget(self._scope_combo)
+        self._mastery_filter_combo.currentIndexChanged.connect(
+            self._on_mastery_filter_change
+        )
+        toolbar.addWidget(self._mastery_filter_combo)
+
+        # Learning-path playback: walk the curated path step by step, with the
+        # map highlighting the full sequence and the detail card following.
+        self._path_mode_btn = QPushButton(self._main._t("map_path_mode"))
+        self._path_mode_btn.setCheckable(True)
+        self._path_mode_btn.setToolTip(self._main._t("map_path_mode_tip"))
+        self._path_mode_btn.setStyleSheet(_toggle_style())
+        self._path_mode_btn.clicked.connect(self._on_toggle_path_mode)
+        toolbar.addWidget(self._path_mode_btn)
+
+        step_style = (
+            f"QPushButton {{ background-color: {theme.SURFACE};"
+            f" color: {theme.ACCENT}; border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_MD}px;"
+            " padding: 5px 10px; font-size: 13px; font-weight: 600; }"
+            f"QPushButton:hover {{ background-color: {theme.ACCENT_TINT}; }}"
+        )
+        self._path_prev_btn = QPushButton("◀")
+        self._path_prev_btn.setToolTip(self._main._t("map_path_prev_tip"))
+        self._path_prev_btn.setStyleSheet(step_style)
+        self._path_prev_btn.clicked.connect(lambda: self._on_path_step(-1))
+        toolbar.addWidget(self._path_prev_btn)
+
+        self._path_next_btn = QPushButton("▶")
+        self._path_next_btn.setToolTip(self._main._t("map_path_next_tip"))
+        self._path_next_btn.setStyleSheet(step_style)
+        self._path_next_btn.clicked.connect(lambda: self._on_path_step(1))
+        toolbar.addWidget(self._path_next_btn)
+
+        self._path_pos_label = QLabel("")
+        self._path_pos_label.setStyleSheet(
+            f"QLabel {{ color: {theme.TEXT_MUTED}; font-size: 12.5px;"
+            " padding: 0 4px; }"
+        )
+        toolbar.addWidget(self._path_pos_label)
+        for w in (self._path_prev_btn, self._path_next_btn, self._path_pos_label):
+            w.setVisible(False)
 
         # Export PNG button
         export_btn = QPushButton(self._main._t("export_png"))
-        export_btn.setStyleSheet(
-            "QPushButton { background-color: white; color: #1565C0;"
-            "border: 1px solid #BBDEFB; border-radius: 6px;"
-            "padding: 5px 12px; font-size: 14.5px; }"
-            "QPushButton:hover { background-color: #E3F2FD; }"
-        )
+        export_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        export_btn.setStyleSheet(theme.secondary_button_style())
         export_btn.setToolTip(self._main._t("export_png_tip"))
         export_btn.clicked.connect(self._on_export_png)
         toolbar.addWidget(export_btn)
@@ -390,7 +529,19 @@ class ConceptMapView(QWidget):
         self._chain_btn.clicked.connect(self._on_chain_toggle)
         toolbar.addWidget(self._chain_btn)
 
-        return toolbar_widget
+        toolbar.addStretch()
+        return row_widget
+
+    def _on_toggle_more_tools(self) -> None:
+        """Show/hide the secondary toolbar row (「更多工具」)."""
+        row = getattr(self, "_more_row", None)
+        if row is None:
+            return
+        on = not row.isVisible()
+        row.setVisible(on)
+        self._more_btn.setText(
+            ("▾ " if on else "▸ ") + self._main._t("more_tools")
+        )
 
     def _build_legend(self):
         from expert_anything.ui.widgets.map_widgets import MapLegend
@@ -416,6 +567,26 @@ class ConceptMapView(QWidget):
         self._mheat_btn.setChecked(active)
         if active and self._density_btn:
             self._density_btn.setChecked(False)
+        self._sync_legend()
+
+    def _on_toggle_hop2(self):
+        """Toggle 2-hop breadth exploration mode."""
+        if not self._graph_view:
+            return
+        active = self._graph_view.toggle_hop2_mode()
+        self._hop2_btn.setChecked(active)
+        self._sync_legend()
+
+    def _sync_legend(self):
+        """Keep the legend truthful: it must describe the *current* node
+        fill semantics, which heatmap/hop2 modes repaint."""
+        if self._legend is None or not self._graph_view:
+            return
+        self._legend.set_mode(
+            mastery_heat=getattr(self._graph_view, "_mastery_heat_mode", False),
+            density=getattr(self._graph_view, "_density_mode", False),
+            hop2=getattr(self._graph_view, "_hop2_mode", False),
+        )
 
     def _on_export_png(self):
         """Export the current knowledge graph as a PNG image."""
@@ -500,6 +671,17 @@ class ConceptMapView(QWidget):
             self._skeleton_btn.setText(
                 self._main._t("skeleton_exit" if enabled else "skeleton_view")
             )
+        # The graph widget survives view rebuilds — reflect its playback state
+        # in the freshly-created toolbar controls.
+        if hasattr(self, "_path_mode_btn") and self._path_mode_btn:
+            avail = self._graph_view.path_playback_available()
+            self._path_mode_btn.setEnabled(avail)
+            on = bool(getattr(self._graph_view, "_path_playback", False)) and avail
+            self._path_mode_btn.setChecked(on)
+            for w in (self._path_prev_btn, self._path_next_btn, self._path_pos_label):
+                w.setVisible(on)
+            if not on:
+                self._path_pos_label.setText("")
         self._update_drill_controls()
 
     def _on_search(self):
@@ -522,8 +704,9 @@ class ConceptMapView(QWidget):
 
         if not results:
             # No concept-name match: fall back to full-text search across
-            # definitions / evidence / source anchors (P1-2).
-            hits = search_assets(self._main.assets.values(), kw, limit=40)
+            # definitions / evidence / source anchors (P1-2). Uses the persistent
+            # index so repeated searches over a large corpus stay fast.
+            hits = indexed_search(self._main.assets, kw, limit=40)
             if hits:
                 self._show_fulltext_results(hits, kw)
                 return
@@ -579,11 +762,8 @@ class ConceptMapView(QWidget):
         lay.addWidget(lst)
 
         open_btn = QPushButton(self._main._t("search_open"))
-        open_btn.setStyleSheet(
-            "QPushButton { background-color: #1565C0; color: white; border: none;"
-            "border-radius: 6px; padding: 6px 16px; font-size: 14px; }"
-            "QPushButton:hover { background-color: #0D47A1; }"
-        )
+        open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        open_btn.setStyleSheet(theme.primary_button_style(compact=True))
         open_btn.clicked.connect(
             lambda: self._on_search_result_activated(lst.currentItem())
         )
@@ -642,11 +822,8 @@ class ConceptMapView(QWidget):
         lay.addWidget(lst)
 
         btn = QPushButton(self._main._t("search_open"))
-        btn.setStyleSheet(
-            "QPushButton { background-color: #1565C0; color: white; border: none;"
-            "border-radius: 6px; padding: 6px 16px; font-size: 14px; }"
-            "QPushButton:hover { background-color: #0D47A1; }"
-        )
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setStyleSheet(theme.primary_button_style(compact=True))
         btn.clicked.connect(lambda: self._on_search_result_activated(lst.currentItem()))
         lay.addWidget(btn)
 
@@ -675,6 +852,54 @@ class ConceptMapView(QWidget):
         if self._graph_view:
             self._graph_view.set_semantic_filter(self._active_sem_filters)
 
+    def _on_mastery_filter_change(self, _idx: int) -> None:
+        """Isolate the full network to one mastery band."""
+        if not self._graph_view:
+            return
+        band = self._mastery_filter_combo.currentData() or "all"
+        self._graph_view.set_mastery_filter(str(band))
+
+    def _on_toggle_path_mode(self) -> None:
+        """Toggle learning-path playback on the graph."""
+        if not self._graph_view:
+            return
+        enabled = self._graph_view.set_path_playback(self._path_mode_btn.isChecked())
+        self._path_mode_btn.setChecked(enabled)
+        for w in (self._path_prev_btn, self._path_next_btn, self._path_pos_label):
+            w.setVisible(enabled)
+        if enabled:
+            # Land on the first path node immediately so the mode switch has
+            # a visible effect (cursor ring + detail card follow).
+            self._on_path_step(1)
+        else:
+            self._path_pos_label.setText("")
+
+    def _on_path_step(self, delta: int) -> None:
+        """Advance the playback cursor; the detail card walks along."""
+        if not self._graph_view:
+            return
+        result = self._graph_view.path_step(delta)
+        if not result:
+            self._path_pos_label.setText("")
+            return
+        cid, pos_i, total = result
+        asset = self._global_asset
+        c = asset.concept_by_id(cid) if asset else None
+        self._path_pos_label.setText(
+            self._main._t("map_path_pos", i=pos_i, n=total, name=c.name if c else cid)
+        )
+        self._refresh_detail(cid)
+
+    def _sync_mastery_filter_combo(self) -> None:
+        """Reflect the persistent graph view's band in a freshly-built combo."""
+        combo = getattr(self, "_mastery_filter_combo", None)
+        if combo is None or self._graph_view is None:
+            return
+        band = getattr(self._graph_view, "_mastery_filter", "all")
+        idx = combo.findData(band)
+        if idx >= 0:
+            combo.setCurrentIndex(idx)
+
     def _on_toggle_skeleton(self) -> None:
         """Toggle core skeleton view on/off."""
         if not self._graph_view:
@@ -695,6 +920,7 @@ class ConceptMapView(QWidget):
             self._density_btn.setChecked(enabled)
         if enabled and hasattr(self, "_mheat_btn") and self._mheat_btn:
             self._mheat_btn.setChecked(False)
+        self._sync_legend()
 
     def _on_graph_click(self, concept_name):
         self.teach_requested.emit(concept_name)
@@ -715,10 +941,10 @@ class ConceptMapView(QWidget):
     def _on_node_clicked(self, concept_id: str):
         if not self._graph_view:
             return
-        was_focused = self._graph_view._focus_id == concept_id
-        if was_focused:
-            self._graph_view.drill_down(concept_id)
-        else:
+        # Single click = look (focus + detail).  Entering a concept's subgraph
+        # is the double-click gesture — mixing the two on one button is what
+        # made the old map feel like it had no real drill-down.
+        if self._graph_view._focus_id != concept_id:
             self._graph_view.focus_concept(concept_id)
         self._update_drill_controls()
         # If chain mode is active, update chain highlight for newly focused concept
@@ -729,46 +955,43 @@ class ConceptMapView(QWidget):
             return
         self._refresh_detail(concept_id)
 
-    def _on_edge_click(self, src_id: str, tgt_id: str, rel_label: str):
-        """When an edge is clicked, teach the source concept (which has the relation)."""
-        asset = self._global_asset or self._main.get_asset()
-        if asset is None:
+    def _on_node_drilled(self, concept_id: str) -> None:
+        """Double-click drill: the graph already re-rendered the subgraph;
+        refresh the breadcrumb trail and the inspector to match."""
+        self._update_drill_controls()
+        if str(concept_id).startswith("ext:"):
             return
-        src_c = asset.concept_by_id(src_id)
-        tgt_c = asset.concept_by_id(tgt_id)
-        if not src_c:
-            return
-        # Teach the source concept — the relation provides context
-        from PySide6.QtWidgets import QMessageBox
-        from expert_anything.core.decoder import classify_relation
+        self._refresh_detail(concept_id)
 
-        sem = classify_relation(rel_label, "")
-        sem_name = (
-            self._main._t("rel_" + sem)
-            if sem
-            in {
-                "prereq",
-                "causes",
-                "is_a",
-                "part_of",
-                "contrast",
-                "related",
-            }
-            else self._main._t("rel_default")
-        )
-        tgt_name = tgt_c.name if tgt_c else tgt_id
-        msg = self._main._t(
-            "edge_teach_msg", rel=sem_name, src=src_c.name, tgt=tgt_name
-        )
-        reply = QMessageBox.question(
-            self,
-            self._main._t("edge_teach_title"),
-            msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if reply == QMessageBox.StandardButton.Yes:
-            self.teach_requested.emit(src_c.name)
+    def _on_breadcrumb(self, level: int) -> None:
+        """Breadcrumb jump: 0 = full map, k = the k-th drilled concept."""
+        if not self._graph_view:
+            return
+        self._graph_view.drill_to(level)
+        self._update_drill_controls()
+        focus = self._graph_view._focus_id
+        if focus:
+            self._refresh_detail(focus)
+
+    def _on_edge_click(self, src_id: str, tgt_id: str, rel_label: str):
+        """Explain the line the learner just clicked (semantics + evidence)."""
+        asset = self._global_asset or self._main.get_asset()
+        if asset is None or self._map_detail is None:
+            return
+        if not asset.concept_by_id(src_id) or not asset.concept_by_id(tgt_id):
+            # Global-map ids carry an asset prefix; a local-scope edge may use
+            # bare ids instead, so fall back to the current asset.
+            asset = self._main.get_asset()
+            if asset is None:
+                return
+            if not asset.concept_by_id(src_id) or not asset.concept_by_id(tgt_id):
+                return
+        rtype = ""
+        if self._graph_view is not None:
+            rtype = self._graph_view._edge_type_map.get(
+                (src_id, tgt_id, rel_label), ""
+            )
+        self._map_detail.set_relation(asset, src_id, tgt_id, rel_label, rtype)
 
     def _explain_external(self, concept_id: str):
         asset = self._global_asset
@@ -844,16 +1067,110 @@ class ConceptMapView(QWidget):
         )
 
     def _update_drill_controls(self):
-        if not hasattr(self, "_drill_path_label") or not self._graph_view:
+        """Rebuild the breadcrumb bar from the graph's current drill trail.
+
+        Every crumb is a button — a trail you cannot click back up is just a
+        label, and the old static label is exactly what made drilling feel
+        one-way.  Also updates the explicit drill-in button and the always-
+        visible affordance capsule that tells the newcomer drilling exists.
+        """
+        host = getattr(self, "_breadcrumb_host", None)
+        if host is None or not self._graph_view:
             return
+        lay = host.layout()
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
         path = self._graph_view.drill_path()
         asset = self._global_asset
-        names = []
-        for cid in path:
+        in_drill = bool(path)
+
+        # — 面包屑 —
+        def _seg(text: str, level: int, current: bool) -> QPushButton:
+            b = QPushButton(text)
+            b.setFlat(True)
+            b.setCursor(Qt.CursorShape.PointingHandCursor)
+            weight = "bold" if current else "normal"
+            color = theme.ACCENT_HOVER if current else theme.ACCENT
+            b.setStyleSheet(
+                f"QPushButton {{ color: {color}; font-size: 13.5px;"
+                f"font-weight: {weight}; border: none; padding: 3px 5px;"
+                f"border-radius: 4px; background: transparent; }}"
+                "QPushButton:hover { background-color: #E3F2FD; }"
+            )
+            b.clicked.connect(lambda _=False, lv=level: self._on_breadcrumb(lv))
+            return b
+
+        lay.addWidget(_seg(self._main._t("drill_all"), 0, current=not path))
+        for i, cid in enumerate(path):
+            sep = QLabel("›")
+            sep.setStyleSheet("color: #90A4AE; font-size: 13.5px;")
+            lay.addWidget(sep)
             c = asset.concept_by_id(cid) if asset else None
-            names.append((c.name if c else cid))
-        self._drill_path_label.setText(
-            self._main._t("drill_current_prefix")
-            + (" > ".join(names) if names else self._main._t("drill_all"))
-            + self._main._t("drill_continue")
+            name = c.name if c else cid
+            if len(name) > 12:
+                name = name[:12] + "…"
+            lay.addWidget(_seg(name, i + 1, current=i == len(path) - 1))
+        lay.addStretch()
+
+        # — 显式「展开子图」按钮 —
+        # 下钻模式下不再显示（用户已经在子图里了，双击继续深入即可）；
+        # 未选中节点时也不显示（没有对象可钻）；有焦点节点才出现
+        drill_btn = getattr(self, "_drill_btn", None)
+        if drill_btn is not None:
+            focus_id = getattr(self._graph_view, "_focus_id", None)
+            visible = (not in_drill) and bool(focus_id)
+            drill_btn.setVisible(visible)
+
+    def _on_explicit_drill(self) -> None:
+        """工具栏「展开子图」按钮：显式入口，等效双击当前焦点节点。"""
+        if not self._graph_view:
+            return
+        focus_id = getattr(self._graph_view, "_focus_id", None)
+        if not focus_id:
+            return
+        self._graph_view.drill_down(focus_id)
+        self._update_drill_controls()
+        self._refresh_detail(focus_id)
+
+    def _show_onboarding(self) -> None:
+        """首次进入认知地图时，在工具栏下方显示一条可关闭的 3 步提示条。
+
+        刻意不用模态遮罩：小白的核心诉求是「快速看懂」，遮挡式引导既打断
+        视线又难关闭；一条不挡操作的提示条既补充 discoverability，也随时可收起。
+        """
+        bar = QWidget()
+        bar.setObjectName("cm_onboarding_bar")
+        bar.setStyleSheet(
+            "QWidget#cm_onboarding_bar { background-color: #E3F2FD;"
+            "border: 1px solid #90CAF9; border-radius: 8px; }"
         )
+        bar_lay = QHBoxLayout(bar)
+        bar_lay.setContentsMargins(14, 10, 10, 10)
+        bar_lay.setSpacing(18)
+        for text in (
+            self._main._t("cm_onboard_step1"),
+            self._main._t("cm_onboard_step2"),
+            self._main._t("cm_onboard_step3"),
+        ):
+            lbl = QLabel(text)
+            lbl.setStyleSheet("font-size: 13px; color: #0D47A1;")
+            bar_lay.addWidget(lbl)
+        bar_lay.addStretch()
+
+        dismiss = QPushButton("✕")
+        dismiss.setFixedSize(22, 22)
+        dismiss.setCursor(Qt.CursorShape.PointingHandCursor)
+        dismiss.setToolTip(self._main._t("cm_onboard_dismiss"))
+        dismiss.setStyleSheet(
+            "QPushButton { background-color: transparent; color: #1565C0;"
+            "border: none; font-size: 14px; font-weight: bold; }"
+            "QPushButton:hover { color: #0D47A1; }"
+        )
+        dismiss.clicked.connect(bar.deleteLater)
+        bar_lay.addWidget(dismiss)
+
+        self._content_layout.insertWidget(1, bar)

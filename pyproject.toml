@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "expert-anything"
+version = "0.1.0"
+description = "Knowledge Decoder & Learning OS — decode abstract knowledge into visuals, animations, and interactive lessons."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "ExpertAnything" }]
+keywords = ["education", "knowledge-graph", "learning", "llm", "spaced-repetition"]
+dependencies = [
+    # Narrow ranges for reproducible installs. Loosen the upper bound when a
+    # new major is validated locally.
+    "PySide6>=6.6,<6.9",
+    "Pillow>=10.0,<11.0",
+    "pypdf>=4.0,<5.0",
+]
+
+[project.scripts]
+# `pip install -e .` then `expert-anything` launches the desktop app.
+expert-anything = "main:main"
+
+[project.optional-dependencies]
+# Build tooling for the one-click installer (see build_installer.bat/.sh).
+build = ["pyinstaller>=6.0"]
+# Dev/test only — these flip the skipped PDF/PIL tests back on.
+dev = ["pypdf", "Pillow"]
+
+[tool.setuptools]
+packages = ["expert_anything"]

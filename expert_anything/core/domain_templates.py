@@ -35,9 +35,6 @@ class DomainTemplate:
                     return c
         return None
     
-    def get_chapter_by_id(self, chid: str) -> dict | None:
-        return next((ch for ch in self.chapters if ch.get("id") == chid), None)
-
 
 # --------------------------------------------------------------------------- #
 # Electricity Trading Domain Template
@@ -402,12 +399,358 @@ CARBON_TRADING_TEMPLATE = DomainTemplate(
 
 
 # --------------------------------------------------------------------------- #
+# Renewable Energy Power Forecasting Domain Template (third domain)
+# --------------------------------------------------------------------------- #
+# Third registered domain.  Mirrors the electricity/carbon templates: textbook-
+# level, time-invariant engineering notions of renewable power forecasting
+# (forecast horizons, NWP drivers, power curve, wind/PV/load targets, error
+# metrics, ensemble forecasting, bias correction).  No numeric thresholds, no
+# vendor specifics — only the stable skeleton a learner needs before reading a
+# real forecast report.  Template ``evidence`` is plain paraphrase (like the
+# electricity template, since the content is engineering fundamentals, not
+# time-sensitive policy) and is only ever written into concepts that have none
+# of their own.
+
+RENEWABLE_FORECASTING_TEMPLATE = DomainTemplate(
+    domain_id="renewable_forecasting",
+    name="新能源功率预测体系",
+
+    chapters=[
+        {
+            "id": "ch-horizon",
+            "title": "预测尺度与时间轴",
+            "concepts": [
+                {
+                    "id": "rf-001",
+                    "name": "超短期预测",
+                    "definition": "对未来数分钟至4小时内的新能源出力进行滚动预测，时间分辨率通常为15分钟。",
+                    "evidence": ["超短期预测：对未来数分钟至4小时内的新能源出力滚动预测，时间分辨率通常为15分钟。"],
+                    "significance": "面向实时调度与AGC，是平抑波动、保障安全的第一道防线。",
+                    "misconceptions": ["超短期预测用于年度规划", "超短期预测可以替代日前市场"],
+                },
+                {
+                    "id": "rf-002",
+                    "name": "短期预测",
+                    "definition": "以日前预测为主，覆盖未来0至72小时的新能源出力预测，是电力调度与市场交易的主要依据。",
+                    "evidence": ["短期预测：以日前预测为主，覆盖未来0至72小时的新能源出力预测。"],
+                    "prerequisites": ["rf-001"],
+                    "connections": ["rf-003"],
+                },
+                {
+                    "id": "rf-003",
+                    "name": "中长期预测",
+                    "definition": "覆盖未来数日至数月的新能源出力趋势预测，服务于检修计划与电量平衡。",
+                    "evidence": ["中长期预测：覆盖未来数日至数月的新能源出力趋势预测，服务于检修计划与电量平衡。"],
+                    "prerequisites": ["rf-002"],
+                    "connections": ["rf-004"],
+                },
+                {
+                    "id": "rf-004",
+                    "name": "预测时间尺度",
+                    "definition": "按预测周期把预测任务划分为超短期、短期与中长期三类的分类框架。",
+                    "evidence": ["预测时间尺度：按预测周期划分为超短期、短期与中长期三类的分类框架。"],
+                    "prerequisites": ["rf-001", "rf-002", "rf-003"],
+                    "significance": "不同尺度服务不同决策，尺度错配是预测误用的常见根源。",
+                },
+            ]
+        },
+        {
+            "id": "ch-input",
+            "title": "输入与驱动因素",
+            "concepts": [
+                {
+                    "id": "rf-005",
+                    "name": "数值天气预报(NWP)",
+                    "aliases": ["NWP", "数值天气预报"],
+                    "definition": "基于大气物理方程对风速、辐照、温度等气象要素的未来状态进行网格化预报，是功率预测的核心输入。",
+                    "evidence": ["数值天气预报（NWP）：基于大气物理方程对风速、辐照、温度等未来状态进行网格化预报，是功率预测的核心输入。"],
+                    "significance": "NWP的网格分辨率与更新频率直接决定预测上限。",
+                    "misconceptions": ["NWP是实测数据", "NWP分辨率越高越好而无需考虑时延"],
+                },
+                {
+                    "id": "rf-006",
+                    "name": "功率曲线",
+                    "definition": "描述单机或场站有功出力与风速（光伏为辐照）之间对应关系的特征曲线，是物理建模的基础。",
+                    "evidence": ["功率曲线：描述有功出力与风速（光伏为辐照）之间对应关系的特征曲线，是物理建模的基础。"],
+                    "prerequisites": ["rf-005"],
+                    "misconceptions": ["功率曲线是电价曲线", "功率曲线在所有工况下恒定不变"],
+                },
+                {
+                    "id": "rf-007",
+                    "name": "历史出力数据",
+                    "definition": "来自SCADA的历史功率与工况记录，用于数据驱动模型的训练与校验。",
+                    "evidence": ["历史出力数据：来自SCADA的历史功率与工况记录，用于数据驱动模型的训练与校验。"],
+                    "prerequisites": ["rf-006"],
+                },
+                {
+                    "id": "rf-008",
+                    "name": "气象要素",
+                    "aliases": ["风速", "辐照", "温度"],
+                    "definition": "影响新能源出力的关键变量，包括风速、太阳辐照与温度等。",
+                    "evidence": ["气象要素：影响新能源出力的关键变量，包括风速、太阳辐照与温度等。"],
+                    "connections": ["rf-005", "rf-006"],
+                },
+            ]
+        },
+        {
+            "id": "ch-target",
+            "title": "预测对象",
+            "concepts": [
+                {
+                    "id": "rf-009",
+                    "name": "风电功率预测",
+                    "definition": "对风电场有功出力的预测，受风速波动与尾流效应显著影响。",
+                    "evidence": ["风电功率预测：对风电场有功出力的预测，受风速波动与尾流效应显著影响。"],
+                    "prerequisites": ["rf-006"],
+                    "connections": ["rf-011"],
+                },
+                {
+                    "id": "rf-010",
+                    "name": "光伏功率预测",
+                    "definition": "对光伏电站出力的预测，受云团移动与辐照变化主导。",
+                    "evidence": ["光伏功率预测：对光伏电站出力的预测，受云团移动与辐照变化主导。"],
+                    "prerequisites": ["rf-006"],
+                    "connections": ["rf-011"],
+                },
+                {
+                    "id": "rf-011",
+                    "name": "负荷预测",
+                    "definition": "对用电侧功率需求的预测，与新能源预测共同支撑电力平衡。",
+                    "evidence": ["负荷预测：对用电侧功率需求的预测，与新能源预测共同支撑电力平衡。"],
+                    "prerequisites": ["rf-009", "rf-010"],
+                },
+            ]
+        },
+        {
+            "id": "ch-uncertainty",
+            "title": "不确定性与误差",
+            "concepts": [
+                {
+                    "id": "rf-012",
+                    "name": "预测误差",
+                    "aliases": ["RMSE", "MAE"],
+                    "definition": "用RMSE、MAE等指标衡量预测值与真实出力之间的偏差，是模型评估的核心。",
+                    "evidence": ["预测误差：用RMSE、MAE等指标衡量预测值与真实出力之间的偏差，是模型评估的核心。"],
+                    "prerequisites": ["rf-009"],
+                    "misconceptions": ["单一误差指标足以评价预测质量", "误差小等于预测可用"],
+                },
+                {
+                    "id": "rf-013",
+                    "name": "集合预报",
+                    "definition": "由多个成员预报构成、用以刻画预测不确定性的预报方式。",
+                    "evidence": ["集合预报：由多个成员预报构成、用以刻画预测不确定性的预报方式。"],
+                    "prerequisites": ["rf-012"],
+                    "connections": ["rf-014"],
+                    "misconceptions": ["集合预报是多个互相矛盾的结果", "集合成员越多越准"],
+                },
+                {
+                    "id": "rf-014",
+                    "name": "偏差校正",
+                    "definition": "对原始预报的系统偏差进行修正的方法，提升预测精度。",
+                    "evidence": ["偏差校正：对原始预报的系统偏差进行修正的方法，提升预测精度。"],
+                    "prerequisites": ["rf-013"],
+                },
+            ]
+        },
+    ],
+
+    quick_path=["rf-004", "rf-005", "rf-006", "rf-009", "rf-010", "rf-012", "rf-013"],
+
+    misconceptions={
+        "功率曲线": "功率曲线是风速到出力的映射，不是电价曲线",
+        "超短期预测": "超短期预测面向实时调度，不是年度规划",
+        "集合预报": "集合预报表达的是不确定性范围，不是多个互相矛盾的结果",
+        "NWP": "NWP是气象数值预报，不是实测数据",
+        "预测误差": "误差指标需结合场景解读，单一指标不足以评价预测可用性",
+    },
+
+    anchor_mapping={
+        "power": "新能源出力与电力系统实时平衡的关系",
+        "carbon": "新能源消纳提升与碳减排的关联",
+        "market": "新能源预测在日前与现货交易出清中的作用",
+        "storage": "预测误差与储能配置规模的关系",
+    }
+)
+
+
+# --------------------------------------------------------------------------- #
+# Distributed Energy Resources (DER) Domain Template — fourth curated domain.
+# --------------------------------------------------------------------------- #
+
+DISTRIBUTED_ENERGY_TEMPLATE = DomainTemplate(
+    domain_id="distributed_energy",
+    name="分布式能源资源体系",
+
+    chapters=[
+        {
+            "id": "ch-resource",
+            "title": "资源形态",
+            "concepts": [
+                {
+                    "id": "de-001",
+                    "name": "分布式发电",
+                    "definition": "分布在用户侧或配电网就近的小型发电资源，通常包括分布式光伏、分散式风电、燃气冷热电三联供与生物质发电等。",
+                    "evidence": ["分布式发电：分布在用户侧或配电网就近的小型发电资源。"],
+                    "significance": "贴近负荷、减少远距离输电损耗，是新型电力系统的重要组成。",
+                    "misconceptions": ["分布式发电等同于大型电站分散布置", "分布式发电不需要并网"],
+                },
+                {
+                    "id": "de-002",
+                    "name": "分布式光伏",
+                    "definition": "利用建筑屋顶、车棚、工商业园区等场地就近安装的光伏发电系统。",
+                    "evidence": ["分布式光伏：利用屋顶、车棚等场地就近安装的光伏系统。"],
+                    "prerequisites": ["de-001"],
+                },
+                {
+                    "id": "de-003",
+                    "name": "分散式风电",
+                    "aliases": ["分散式风电", "小型风电"],
+                    "definition": "单机容量较小、就近接入配电网的风力发电，区别于集中式大型风电场。",
+                    "evidence": ["分散式风电：单机容量较小、就近接入配电网的风力发电。"],
+                    "prerequisites": ["de-001"],
+                    "connections": ["de-002"],
+                },
+                {
+                    "id": "de-004",
+                    "name": "分布式热电与生物质",
+                    "definition": "包括燃气冷热电三联供、生物质发电等利用余热与有机质的分布式电源。",
+                    "evidence": ["分布式热电与生物质：利用余热与有机质的分布式电源。"],
+                    "connections": ["de-001"],
+                },
+            ]
+        },
+        {
+            "id": "ch-agg",
+            "title": "聚合形态",
+            "concepts": [
+                {
+                    "id": "de-005",
+                    "name": "微电网",
+                    "definition": "由分布式电源、储能、负荷与控制系统构成、可在并网与孤岛两种模式运行的局部电力系统。",
+                    "evidence": ["微电网：由分布式电源、储能与负荷构成、可并网或孤岛运行的局部电力系统。"],
+                    "prerequisites": ["de-001", "de-002"],
+                    "significance": "提升本地供电可靠性与新能源就地消纳能力。",
+                    "misconceptions": ["微电网是缩小版大电网", "孤岛运行意味着与大电网永久脱开"],
+                },
+                {
+                    "id": "de-006",
+                    "name": "虚拟电厂(VPP)",
+                    "aliases": ["VPP", "virtual power plant"],
+                    "definition": "通过通信与优化将地理分散的分布式资源聚合为可统一调度的整体。",
+                    "evidence": ["虚拟电厂：将分散的分布式资源聚合为可统一调度的整体。"],
+                    "prerequisites": ["de-005"],
+                    "connections": ["de-007"],
+                    "misconceptions": ["虚拟电厂是实体电厂", "VPP只聚合发电不聚合负荷"],
+                },
+                {
+                    "id": "de-007",
+                    "name": "需求响应(DR)",
+                    "aliases": ["DR", "demand response"],
+                    "definition": "通过价格或激励引导用户调整用电时段与负荷水平，等效提供灵活性资源。",
+                    "evidence": ["需求响应：引导用户调整用电以等效提供灵活性资源。"],
+                    "connections": ["de-006"],
+                },
+            ]
+        },
+        {
+            "id": "ch-balance",
+            "title": "平衡与支撑",
+            "concepts": [
+                {
+                    "id": "de-008",
+                    "name": "削峰填谷",
+                    "definition": "利用储能与可调负荷在负荷高峰放电、低谷充电，平抑净负荷曲线。",
+                    "evidence": ["削峰填谷：高峰放电、低谷充电以平抑净负荷曲线。"],
+                    "prerequisites": ["de-005"],
+                    "significance": "延缓配网扩容、降低峰谷差价。",
+                },
+                {
+                    "id": "de-009",
+                    "name": "就地消纳",
+                    "definition": "在分布式电源接入点附近直接消纳其出力，减少倒送与主网传输压力。",
+                    "evidence": ["就地消纳：在接入点附近直接消纳出力，减少倒送与主网压力。"],
+                    "prerequisites": ["de-002"],
+                    "connections": ["de-008"],
+                },
+                {
+                    "id": "de-010",
+                    "name": "电压与无功支撑",
+                    "definition": "分布式电源与逆变器提供无功调节，维持并网点电压在合格范围。",
+                    "evidence": ["电压与无功支撑：分布式电源提供无功调节以维持并网点电压。"],
+                    "prerequisites": ["de-002"],
+                    "connections": ["de-005"],
+                },
+            ]
+        },
+        {
+            "id": "ch-value",
+            "title": "价值与场景",
+            "concepts": [
+                {
+                    "id": "de-011",
+                    "name": "与电网互动",
+                    "definition": "分布式资源通过双向计量与调度指令参与配电网运行，形成源网荷储协同。",
+                    "evidence": ["与电网互动：分布式资源参与配电网运行，形成源网荷储协同。"],
+                    "prerequisites": ["de-005", "de-006"],
+                    "connections": ["de-008"],
+                },
+                {
+                    "id": "de-012",
+                    "name": "市场化交易",
+                    "aliases": ["隔墙售电", "绿电交易"],
+                    "definition": "分布式发电可通过隔墙售电、绿电交易等方式向邻近用户市场化售电。",
+                    "evidence": ["市场化交易：分布式发电可通过隔墙售电、绿电交易向邻近用户售电。"],
+                    "prerequisites": ["de-011"],
+                    "misconceptions": ["分布式发电只能自发自用", "绿电交易与常规电无差别"],
+                },
+                {
+                    "id": "de-013",
+                    "name": "韧性提升",
+                    "definition": "微电网孤岛运行在主网故障时维持关键负荷供电，提升供电韧性。",
+                    "evidence": ["韧性提升：微电网孤岛运行在主网故障时维持关键负荷供电。"],
+                    "prerequisites": ["de-005"],
+                    "connections": ["de-011"],
+                },
+                {
+                    "id": "de-014",
+                    "name": "碳减排协同",
+                    "definition": "高比例分布式新能源与就地消纳降低输配损耗并替代化石电力，协同碳减排。",
+                    "evidence": ["碳减排协同：分布式新能源就地消纳降低损耗并替代化石电力，协同碳减排。"],
+                    "prerequisites": ["de-009"],
+                    "connections": ["de-012"],
+                },
+            ]
+        },
+    ],
+
+    quick_path=["de-001", "de-005", "de-006", "de-008", "de-011", "de-012", "de-013"],
+
+    misconceptions={
+        "微电网": "微电网是局部系统，不是缩小版大电网",
+        "虚拟电厂": "VPP聚合的是分散资源而非实体电厂",
+        "就地消纳": "就地消纳强调就近消耗，不是越多倒送越好",
+        "隔墙售电": "隔墙售电是向邻近用户售电，需满足并网与计量规则",
+    },
+
+    anchor_mapping={
+        "power": "分布式资源与配电网的源网荷储协同关系",
+        "carbon": "分布式新能源就地消纳与碳减排的关联",
+        "market": "分布式发电隔墙售电与绿电交易的机制",
+        "storage": "削峰填谷中储能对分布式平衡的支撑",
+        "renewable": "分布式光伏/风电与新能源预测体系的衔接",
+    }
+)
+
+
+# --------------------------------------------------------------------------- #
 # Domain Registry
 # --------------------------------------------------------------------------- #
 
 DOMAIN_TEMPLATES: dict[str, DomainTemplate] = {
     "electricity_trading": ELECTRICITY_TRADING_TEMPLATE,
     "carbon_trading": CARBON_TRADING_TEMPLATE,
+    "renewable_forecasting": RENEWABLE_FORECASTING_TEMPLATE,
+    "distributed_energy": DISTRIBUTED_ENERGY_TEMPLATE,
 }
 
 
@@ -429,19 +772,61 @@ def get_domain_template(domain_id: str) -> DomainTemplate | None:
 _STRONG_POWER_KEYWORDS = ("电力", "电网", "电价", "spot market", "electricity")
 _WEAK_POWER_KEYWORDS = ("交易市场",)
 _CARBON_KEYWORDS = ("碳", "carbon", "emission", "排放")
+#: Renewable forecasting keywords.  Kept separate from the power table so a
+#: purely renewable title ("风电功率预测") is not hijacked by the electricity
+#: template, while a joint title ("电力系统新能源预测") still resolves to
+#: electricity via the strong-power branch above.  None of these overlap with
+#: the carbon keywords, so the order below is collision-free.
+_RENEWABLE_KEYWORDS = ("风电", "光伏", "新能源", "功率预测", "forecast",
+                       "renewable", "nwp")
+#: Distributed energy resources keywords.  Placed after the renewable table so a
+#: purely renewable title ("分布式光伏预测") still resolves to renewable (via the
+#: "光伏" branch above), while a DER-specific title ("微电网调度", "虚拟电厂") is
+#: captured here.  None of these overlap with the carbon keywords, so the order
+#: below is collision-free.  Deliberately avoids "光伏"/"风电"/"新能源" so DER
+#: never hijacks a pure renewable asset.
+_DER_KEYWORDS = ("分布式能源", "分布式发电", "分布式光伏", "分散式风电",
+                 "微电网", "microgrid", "虚拟电厂", "vpp",
+                 "demand response", "需求响应", "隔墙售电", "就地消纳",
+                 "der", "distributed")
+#: Dominant terms that, when present alongside a DER term, win the domain:
+#: - power-domain dominants ("电力"/"电价"/electricity/spot market) so a joint
+#:   title ("电力系统微电网") resolves to electricity, not DER;
+#: - renewable dominants that are NOT substrings of DER concept names
+#:   ("功率预测"/"forecast"/"renewable"/"nwp") so a forecasting title
+#:   ("分布式光伏功率预测") resolves to renewable, not DER.
+#: Deliberately excludes "电网" (substring of "微电网") and "光伏"/"风电"/"新能源"
+#: (substrings of DER concept names "分布式光伏"/"分散式风电") — including them
+#: would suppress pure-DER titles like "分布式光伏系统" / "分散式风电".
+_DER_DOMINANT_GUARD = ("电力", "电价", "electricity", "spot market",
+                       "功率预测", "forecast", "renewable", "nwp")
 
 
 def detect_domain_from_title(title: str) -> str | None:
     """Try to detect domain from asset title.
 
     Deterministic keyword matching, strongest signal first: strong power terms,
-    then carbon terms, then the weak/generic power phrase.  Returns ``None``
-    when nothing matches, which callers treat as "no domain" (generic prompts).
+    then renewable terms, then carbon terms, then the weak/generic power phrase.
+    Returns ``None`` when nothing matches, which callers treat as "no domain"
+    (generic prompts).
     """
     title_lower = str(title or "").lower()
 
+    # DER is checked before the strong-power branch so a purely DER title
+    # ("微电网调度") is not hijacked by the "电网" substring inside
+    # _STRONG_POWER_KEYWORDS.  It yields to a title that also names a dominant
+    # power term ("电力"/"电价"/electricity/spot market) so a joint title
+    # ("电力系统微电网") still resolves to electricity, matching the behaviour
+    # of the strong-power-over-renewable rule above.
+    if any(kw in title_lower for kw in _DER_KEYWORDS):
+        if not any(k in title_lower for k in _DER_DOMINANT_GUARD):
+            return "distributed_energy"
+
     if any(kw in title_lower for kw in _STRONG_POWER_KEYWORDS):
         return "electricity_trading"
+
+    if any(kw in title_lower for kw in _RENEWABLE_KEYWORDS):
+        return "renewable_forecasting"
 
     if any(kw in title_lower for kw in _CARBON_KEYWORDS):
         return "carbon_trading"

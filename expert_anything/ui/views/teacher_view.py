@@ -6,7 +6,23 @@ from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QPushButton, QVBoxLayout, QWidget,
 )
-from expert_anything.core.teacher import TeacherModel, build_teacher_model
+from expert_anything.core.teacher import TeacherModel, build_teacher_model, kind_label
+from expert_anything.ui.widgets._helpers import CollapsibleSection
+from expert_anything.ui import theme
+from expert_anything.ui.widgets.shared import PageHeader
+
+
+def _match_anomaly_concept(asset, anomaly: dict):
+    """Resolve the concept an anomaly card is about.
+
+    Same name-in-text rule as ``teacher.anomaly_concept_ids`` (description /
+    location carry the concept name).  Longest name wins so short sibling
+    names cannot steal the match; no match returns None and the card stays
+    read-only — never invent a target from a weak guess.
+    """
+    text = f"{anomaly.get('description', '')} {anomaly.get('location', '') or ''}"
+    hits = [c for c in getattr(asset, "concepts", []) if c.name and c.name in text]
+    return max(hits, key=lambda c: len(c.name)) if hits else None
 
 
 class TeacherWorker(QThread):
@@ -35,8 +51,8 @@ class TeacherView(QWidget):
 
     # Signals
     open_concept_panel = Signal(str)  # concept_id
+    teach_requested = Signal(str)     # concept name — start a lesson
     teacher_built = Signal(object)    # TeacherModel
-    teacher_rebuilt = Signal(object)  # TeacherModel
 
     def __init__(self, main, parent=None):
         super().__init__(parent)
@@ -77,18 +93,21 @@ class TeacherView(QWidget):
         # What is this?
         explain = QFrame()
         explain.setStyleSheet(
-            "QFrame { background-color: #FFF8E1; border: 1px solid #FFE0B2;"
-            "border-radius: 8px; }"
+            f"QFrame {{ background-color: {theme.SURFACE};"
+            f" border: 1px solid {theme.BORDER};"
+            f" border-radius: {theme.RADIUS_LG}px; }}"
         )
         ex_lay = QVBoxLayout(explain)
-        ex_lay.setContentsMargins(12, 10, 12, 10)
+        ex_lay.setContentsMargins(14, 12, 14, 12)
         ex_lay.setSpacing(4)
         ex_t = QLabel(self._main._t("teacher_explain_title"))
-        ex_t.setStyleSheet("font-size: 14.5px; font-weight: bold; color: #B45309;")
+        ex_t.setStyleSheet(
+            f"font-size: 14px; font-weight: 600; color: {theme.TEXT};"
+        )
         ex_lay.addWidget(ex_t)
         ex_b = QLabel(self._main._t("teacher_explain_body"))
         ex_b.setWordWrap(True)
-        ex_b.setStyleSheet("font-size: 14px; color: #5D4037;")
+        ex_b.setStyleSheet(f"font-size: 13px; color: {theme.TEXT_MUTED};")
         ex_lay.addWidget(ex_b)
         content_layout.addWidget(explain)
 
@@ -97,23 +116,11 @@ class TeacherView(QWidget):
         else:
             self._build_empty(content_layout)
 
+        content_layout.addStretch(1)
         self._root_layout.addWidget(content)
 
     def _view_header(self, title, subtitle=""):
-        header = QFrame()
-        header.setStyleSheet("background-color: white; border-bottom: 2px solid #1565C0;")
-        lay = QHBoxLayout(header)
-        lay.setContentsMargins(20, 7, 20, 7)
-        lay.setSpacing(10)
-        t = QLabel(str(title))
-        t.setStyleSheet("font-size: 18px; font-weight: bold; color: #1F2933;")
-        lay.addWidget(t)
-        if subtitle:
-            s = QLabel(str(subtitle))
-            s.setStyleSheet("color: #6B7A90; font-size: 13.5px;")
-            lay.addWidget(s)
-        lay.addStretch()
-        return header
+        return PageHeader(title, subtitle)
 
     def _build_existing(self, layout):
         from PySide6.QtWidgets import QMessageBox
@@ -122,21 +129,23 @@ class TeacherView(QWidget):
         status_labels = {"done": "done", "fallback": "fallback", "failed": "failed"}
         slbl = QLabel(self._main._t("teacher_status_" + status_labels.get(status, "done")))
         slbl.setStyleSheet(
-            f"font-size: 16px; font-weight: bold; "
-            f"color: {'#2E7D32' if status == 'done' else '#FF9800' if status == 'fallback' else '#F44336'};"
+            f"font-size: 14px; font-weight: 600; "
+            f"color: {theme.SUCCESS if status == 'done' else theme.WARNING if status == 'fallback' else theme.DANGER};"
         )
         layout.addWidget(slbl)
 
         method = teacher_data.get('method', '')
         if method:
             lbl = QLabel(self._main._t("teacher_method", m=method))
-            lbl.setStyleSheet("font-size: 14px; color: #666;")
+            lbl.setStyleSheet(
+                f"font-size: 12.5px; color: {theme.TEXT_MUTED};"
+            )
             layout.addWidget(lbl)
 
         synthesized = teacher_data.get('synthesized_at', '')
         if synthesized:
             lbl = QLabel(self._main._t("teacher_time", t=synthesized[:19]))
-            lbl.setStyleSheet("font-size: 14px; color: #666;")
+            lbl.setStyleSheet(f"font-size: 12.5px; color: {theme.TEXT_MUTED};")
             layout.addWidget(lbl)
 
         # Source-provenance coverage: how many concepts carry a grounded
@@ -152,7 +161,13 @@ class TeacherView(QWidget):
                     pct=pct, n=len(anchored), total=len(asset.concepts),
                 )
             )
-            color = "#2E7D32" if rate >= 0.8 else "#E65100" if rate >= 0.5 else "#C62828"
+            color = (
+                theme.SUCCESS
+                if rate >= 0.8
+                else theme.WARNING
+                if rate >= 0.5
+                else theme.DANGER
+            )
             rate_lbl.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {color};")
             layout.addWidget(rate_lbl)
             missing = [c.name for c in asset.concepts if not c.locations]
@@ -160,51 +175,54 @@ class TeacherView(QWidget):
                 shown = "、".join(missing[:5]) + ("…" if len(missing) > 5 else "")
                 miss_lbl = QLabel(self._main._t("teacher_unanchored_list", names=shown))
                 miss_lbl.setWordWrap(True)
-                miss_lbl.setStyleSheet("font-size: 13px; color: #90A4AE;")
+                miss_lbl.setStyleSheet(
+                    f"font-size: 12px; color: {theme.TEXT_FAINT};"
+                )
                 layout.addWidget(miss_lbl)
 
         btn_layout = QHBoxLayout()
         recheck_btn = QPushButton(self._main._t("recheck"))
-        recheck_btn.setStyleSheet("""
-            QPushButton { background-color: #FF9800; color: white; border: none;
-                          border-radius: 6px; padding: 8px 16px; font-size: 15px; }
-            QPushButton:hover { background-color: #F57C00; }
-        """)
+        recheck_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        recheck_btn.setStyleSheet(theme.secondary_button_style())
         recheck_btn.clicked.connect(self._on_recheck)
         btn_layout.addWidget(recheck_btn)
 
         if not self._main.llm_client:
             hint = QLabel(self._main._t("recheck_needs_llm"))
-            hint.setStyleSheet("color: #999; font-size: 14px;")
+            hint.setStyleSheet(
+                f"color: {theme.TEXT_FAINT}; font-size: 12px;"
+            )
             btn_layout.addWidget(hint)
         btn_layout.addStretch()
         layout.addLayout(btn_layout)
 
-        # Anomalies
-        anomalies = teacher_data.get('anomalies', [])
+        # Anomalies — split by lifecycle status: open ones stay actionable
+        # cards; resolved ones move to a separate "teaching worked" section so
+        # the learner sees the gap actually closed instead of crying wolf
+        # forever (round-19: resolve_satisfied_anomalies marks them, the board
+        # must show the difference).
+        all_anomalies = teacher_data.get('anomalies', [])
+        anomalies = [
+            a for a in all_anomalies if a.get('status', 'open') != 'resolved'
+        ]
+        resolved_anomalies = [
+            a for a in all_anomalies if a.get('status') == 'resolved'
+        ]
         if anomalies:
             albl = QLabel(self._main._t("anomaly_label", n=len(anomalies)))
             albl.setStyleSheet(
-                "font-size: 15px; font-weight: bold; color: #E65100; margin-top: 12px;"
+                f"font-size: 14px; font-weight: 600; color: {theme.WARNING};"
+                " margin-top: 12px;"
             )
             layout.addWidget(albl)
 
-            kind_labels = {
-                "contradiction": self._main._t("kind_contradiction"),
-                "undefined_term": self._main._t("kind_undefined_term"),
-                "logical_gap": self._main._t("kind_logical_gap"),
-                "surprising_claim": self._main._t("kind_surprising_claim"),
-                "learner_gap": self._main._t("kind_learner_gap"),
-                "needs_llm": self._main._t("kind_needs_llm"),
-                "unanchored_source": self._main._t("kind_unanchored_source"),
-            }
             sev_colors = {
-                "high": "#C62828", "medium": "#E65100",
-                "low": "#616161", "info": "#0277BD",
+                "high": theme.DANGER, "medium": theme.WARNING,
+                "low": theme.TEXT_MUTED, "info": theme.ACCENT,
             }
             sev_bgs = {
-                "high": "#FFEBEE", "medium": "#FFF3E0",
-                "low": "#F5F5F5", "info": "#E1F5FE",
+                "high": theme.DANGER_TINT, "medium": theme.WARNING_TINT,
+                "low": theme.SURFACE_MUTED, "info": theme.ACCENT_TINT,
             }
 
             for a in anomalies:
@@ -212,13 +230,14 @@ class TeacherView(QWidget):
                 desc = a.get('description', '')
                 sev = a.get('severity', 'medium')
                 loc = a.get('location', '')
-                sev_color = sev_colors.get(sev, "#616161")
-                sev_bg = sev_bgs.get(sev, "#F5F5F5")
+                sev_color = sev_colors.get(sev, theme.TEXT_MUTED)
+                sev_bg = sev_bgs.get(sev, theme.SURFACE_MUTED)
 
                 acard = QFrame()
                 acard.setStyleSheet(
-                    f"QFrame {{ background-color: {sev_bg};"
-                    f"border-left: 4px solid {sev_color}; border-radius: 6px; }}"
+                    f"QFrame {{ background-color: {theme.SURFACE};"
+                    f" border: 1px solid {theme.BORDER};"
+                    f" border-radius: {theme.RADIUS_LG}px; }}"
                 )
                 a_lay = QVBoxLayout(acard)
                 a_lay.setContentsMargins(12, 8, 12, 8)
@@ -226,74 +245,192 @@ class TeacherView(QWidget):
 
                 head = QHBoxLayout()
                 head.setSpacing(8)
-                badge = QLabel(f"{kind_labels.get(kind, kind)} · {sev}")
+                badge = QLabel(f"{kind_label(kind)} · {sev}")
                 badge.setStyleSheet(
-                    f"background-color: {sev_color}; color: white;"
-                    "padding: 2px 10px; border-radius: 8px;"
-                    "font-size: 12px; font-weight: bold;"
+                    f"background-color: {sev_bg}; color: {sev_color};"
+                    " padding: 2px 9px; border-radius: 6px;"
+                    " font-size: 11.5px; font-weight: 600;"
                 )
                 head.addWidget(badge)
                 if loc:
                     loc_lbl = QLabel(self._main._t("anomaly_loc", loc=loc[:40]))
-                    loc_lbl.setStyleSheet("color: #757575; font-size: 12.5px;")
+                    loc_lbl.setStyleSheet(
+                        f"color: {theme.TEXT_FAINT}; font-size: 11.5px;"
+                    )
                     head.addWidget(loc_lbl)
                 head.addStretch()
                 a_lay.addLayout(head)
 
                 desc_lbl = QLabel(desc)
                 desc_lbl.setWordWrap(True)
-                desc_lbl.setStyleSheet("font-size: 14.5px; color: #37474F;")
+                desc_lbl.setStyleSheet(
+                    f"font-size: 13px; color: {theme.TEXT};"
+                )
                 a_lay.addWidget(desc_lbl)
+
+                # Anomalies are the highest-priority teaching signal
+                # (anomaly_prioritized_path), yet the board used to be
+                # read-only: the learner saw "contradiction / undefined" and
+                # could not act.  Same name-matching rule as
+                # teacher.anomaly_concept_ids; unmatched stays read-only
+                # (never invent a target).
+                target = _match_anomaly_concept(asset, a)
+                if target is not None:
+                    acts = QHBoxLayout()
+                    acts.setSpacing(8)
+                    view_btn = QPushButton(
+                        self._main._t("anomaly_view_concept")
+                    )
+                    view_btn.setObjectName("anomaly_view_btn")
+                    view_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    view_btn.setStyleSheet(theme.secondary_button_style())
+                    view_btn.clicked.connect(
+                        lambda checked, cid=target.id: self.open_concept_panel.emit(cid)
+                    )
+                    acts.addWidget(view_btn)
+                    teach_btn = QPushButton(self._main._t("anomaly_teach"))
+                    teach_btn.setObjectName("anomaly_teach_btn")
+                    teach_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                    teach_btn.setStyleSheet(theme.primary_button_style(compact=True))
+                    teach_btn.clicked.connect(
+                        lambda checked, n=target.name: self.teach_requested.emit(n)
+                    )
+                    acts.addWidget(teach_btn)
+                    acts.addStretch()
+                    a_lay.addLayout(acts)
+
                 layout.addWidget(acard)
+
+        # Resolved anomalies and concept notes are secondary reading: they
+        # move behind one 「更多」 fold so the first screen keeps only the
+        # status block and the *open* (actionable) anomalies.  Hidden, never
+        # removed — one click away.
+        more_section = self._more_section = CollapsibleSection(
+            self._main._t("more_section")
+        )
+
+        # Resolved anomalies: the gap closed — show it as evidence that
+        # teaching worked, greyed out and read-only (nothing left to act on).
+        # The reason is derived from the kind, the same deterministic rule
+        # resolve_satisfied_anomalies uses to close them.
+        if resolved_anomalies:
+            rlbl = QLabel(
+                self._main._t("teacher_resolved_label", n=len(resolved_anomalies))
+            )
+            rlbl.setStyleSheet(
+                "font-size: 14px; font-weight: bold; color: #757575; margin-top: 12px;"
+            )
+            more_section.add(rlbl)
+
+            reason_keys = {
+                "learner_gap": "teacher_resolved_reason_mastery",
+                "unanchored_source": "teacher_resolved_reason_anchor",
+            }
+            for a in resolved_anomalies:
+                kind = a.get('kind', '?')
+                rcard = QFrame()
+                rcard.setStyleSheet(
+                    f"QFrame {{ background-color: {theme.SURFACE_MUTED};"
+                    f" border: 1px solid {theme.BORDER};"
+                    f" border-radius: {theme.RADIUS_MD}px; }}"
+                )
+                r_lay = QVBoxLayout(rcard)
+                r_lay.setContentsMargins(12, 8, 12, 8)
+                r_lay.setSpacing(4)
+
+                rhead = QHBoxLayout()
+                rhead.setSpacing(8)
+                rbadge = QLabel(
+                    f"{kind_label(kind)} · {self._main._t('teacher_resolved_badge')}"
+                )
+                rbadge.setStyleSheet(
+                    f"background-color: {theme.SURFACE};"
+                    f" color: {theme.TEXT_MUTED}; border: 1px solid {theme.BORDER};"
+                    " padding: 2px 9px; border-radius: 6px;"
+                    " font-size: 11.5px; font-weight: 600;"
+                )
+                rhead.addWidget(rbadge)
+                reason = QLabel(
+                    self._main._t(
+                        reason_keys.get(kind, "teacher_resolved_reason_generic")
+                    )
+                )
+                reason.setStyleSheet(
+                    f"color: {theme.SUCCESS}; font-size: 12px;"
+                )
+                rhead.addWidget(reason)
+                rhead.addStretch()
+                r_lay.addLayout(rhead)
+
+                rdesc = QLabel(a.get('description', ''))
+                rdesc.setWordWrap(True)
+                rdesc.setStyleSheet(
+                    f"font-size: 12.5px; color: {theme.TEXT_FAINT};"
+                )
+                r_lay.addWidget(rdesc)
+                more_section.add(rcard)
 
         # Concept notes
         notes = teacher_data.get('concept_notes', [])
         if notes:
             nlbl = QLabel(self._main._t("notes_label", n=len(notes)))
             nlbl.setStyleSheet(
-                "font-size: 15px; font-weight: bold; color: #666; margin-top: 12px;"
+                f"font-size: 14px; font-weight: 600; color: {theme.TEXT};"
+                " margin-top: 12px;"
             )
-            layout.addWidget(nlbl)
+            more_section.add(nlbl)
 
             nhint = QLabel(self._main._t("notes_hint", n=len(notes)))
-            nhint.setStyleSheet("font-size: 13.5px; color: #8D6E63;")
-            layout.addWidget(nhint)
+            nhint.setStyleSheet(
+                f"font-size: 12.5px; color: {theme.TEXT_MUTED};"
+            )
+            more_section.add(nhint)
 
             notes_list = QListWidget()
-            notes_list.setStyleSheet("""
-                QListWidget { background-color: white; border: 1px solid #E0E0E0;
-                              border-radius: 6px; font-size: 14.5px; }
-                QListWidget::item { padding: 7px 10px;
-                                    border-bottom: 1px solid #F0F0F0; }
-                QListWidget::item:hover { background-color: #FFF8E1; }
-            """)
+            notes_list.setStyleSheet(
+                f"QListWidget {{ background-color: {theme.SURFACE};"
+                f" border: 1px solid {theme.BORDER};"
+                f" border-radius: {theme.RADIUS_MD}px; font-size: 13px; }}"
+                f"QListWidget::item {{ padding: 7px 10px;"
+                f" border-bottom: 1px solid {theme.DIVIDER}; }}"
+                f"QListWidget::item:hover {{ background-color: {theme.ACCENT_TINT}; }}"
+            )
             for note in notes:
                 name = note.get('name', '?')
                 sign = note.get('significance', '')
                 miscon = note.get('misconceptions', [])
+                signals = note.get('learner_signals') or []
                 parts = [name]
                 if sign:
                     parts.append(sign[:46] + ("…" if len(sign) > 46 else ""))
                 if miscon:
                     parts.append(self._main._t("detail_miscon", s=miscon[0][:24]))
+                if signals:
+                    # What the system has learned FROM this learner — the
+                    # teacher model's learner envelope, finally visible here.
+                    parts.append(self._main._t("notes_signal_n", n=len(signals)))
                 item = QListWidgetItem("　".join(parts))
-                item.setData(2, note.get('concept_id', ''))
+                # Payload MUST live in UserRole: int role 2 is DisplayRole and
+                # blanked the whole row once already (AGENTS.md #7).
+                item.setData(Qt.ItemDataRole.UserRole, note.get('concept_id', ''))
                 notes_list.addItem(item)
             notes_list.itemClicked.connect(self._on_note_clicked)
-            layout.addWidget(notes_list)
+            more_section.add(notes_list)
+
+        if more_section.body_layout().count():
+            layout.addWidget(more_section)
 
     def _build_empty(self, layout):
         placeholder = QLabel(self._main._t("teacher_empty"))
         placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        placeholder.setStyleSheet("color: #757575; font-size: 16px; margin: 40px;")
+        placeholder.setStyleSheet(
+            f"color: {theme.TEXT_MUTED}; font-size: 15px; margin: 40px;"
+        )
         layout.addWidget(placeholder)
 
         build_btn = QPushButton(self._main._t("teacher_build_now"))
-        build_btn.setStyleSheet("""
-            QPushButton { background-color: #4CAF50; color: white; border: none;
-                          border-radius: 6px; padding: 10px 20px; font-size: 15px; }
-            QPushButton:hover { background-color: #388E3C; }
-        """)
+        build_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        build_btn.setStyleSheet(theme.primary_button_style())
         build_btn.clicked.connect(self._on_build_now)
         layout.addWidget(build_btn)
 
@@ -323,7 +460,8 @@ class TeacherView(QWidget):
             self, self._main._t("done"),
             self._main._t("recheck_done", n=len(teacher.anomalies))
         )
-        self.teacher_rebuilt.emit(teacher)
+        # The rebuilt model is already in main.teacher_models; every view reads
+        # it from there on entry, so no cross-view notification is needed.
         self._rebuild()
 
     def _on_build_now(self):
@@ -356,6 +494,6 @@ class TeacherView(QWidget):
         self._rebuild()
 
     def _on_note_clicked(self, item):
-        cid = item.data(2)
+        cid = item.data(Qt.ItemDataRole.UserRole)
         if cid:
             self.open_concept_panel.emit(cid)

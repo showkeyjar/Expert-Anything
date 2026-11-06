@@ -11,6 +11,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+try:
+    import pypdf  # noqa: F401 - optional dependency for PDF text extraction
+    HAS_PYPDF = True
+except ImportError:
+    HAS_PYPDF = False
+
 from expert_anything.core import learner, storage
 from expert_anything.core.extraction import (
     extract_knowledge,
@@ -162,6 +168,7 @@ class TestParsers(unittest.TestCase):
         text = extract_from_bytes(b"<html><body><p>html text</p></body></html>", "a.html")
         self.assertIn("html text", text)
 
+    @unittest.skipUnless(HAS_PYPDF, "pypdf not installed (pip install pypdf)")
     def test_pdf_extraction(self):
         pdf = _minimal_pdf(b"PDF text content 123")
         text = extract_from_bytes(pdf, "a.pdf")
@@ -219,6 +226,94 @@ class TestExtraction(unittest.TestCase):
             located += 1
         self.assertGreater(located, 0, "no grounded concept was located")
 
+    def test_markdown_headings_keep_nesting_depth(self):
+        """Markdown '#' depth is the real document tree; it must survive."""
+        text = (
+            "# 总览\n\n全书导言。\n\n"
+            "## 第一部分\n\n第一部分正文。\n\n"
+            "### 细节目录\n\n细节正文。\n\n"
+            "## 第二部分\n\n第二部分正文。\n"
+        )
+        asset = extract_knowledge(text, "t.md", llm=None)
+        by_id = {c.id: c.name for c in asset.concepts}
+        pairs = {(by_id[r.source], by_id[r.target]) for r in asset.relations}
+        self.assertIn(("总览", "第一部分"), pairs)
+        self.assertIn(("第一部分", "细节目录"), pairs)
+        self.assertIn(("总览", "第二部分"), pairs)
+        # a subsection of the first part must not become a child of the second
+        self.assertNotIn(("细节目录", "第二部分"), pairs)
+
+    def test_structural_relation_evidence_is_the_heading_line(self):
+        asset = extract_knowledge("# 总览\n\n导言。\n\n## 细节\n\n正文。\n", "t.md", llm=None)
+        self.assertTrue(asset.relations, "nesting should produce an edge")
+        text = asset.source_text
+        for r in asset.relations:
+            self.assertIn(r.evidence, text)
+            self.assertIsNotNone(r.location)
+            self.assertEqual(text[r.location.char_start:r.location.char_end], r.evidence)
+
+    def test_fenced_code_comments_are_not_headings(self):
+        """'#' inside a code fence is content, not document structure."""
+        text = (
+            "# 标题\n\n正文说明。\n\n"
+            "```python\n# 这不是标题\nprint(1)\n```\n\n"
+            "## 下一节\n\n下一节正文。\n"
+        )
+        asset = extract_knowledge(text, "t.md", llm=None)
+        names = [c.name for c in asset.concepts]
+        self.assertNotIn("这不是标题", names)
+        self.assertIn("下一节", names)
+
+    def test_plain_text_evidence_is_a_verbatim_slice(self):
+        """PDF-derived plain text has no headings: chunks must be real slices."""
+        text = (
+            "第一句交代背景。\n第二句给出方法。\n第三句说明结果。\n"
+            "第四句讨论局限。\n第五句展望未来。\n第六句总结全文。\n"
+        )
+        asset = extract_knowledge(text, "t.txt", llm=None)
+        self.assertTrue(asset.concepts)
+        for c in asset.concepts:
+            for ev in c.evidence:
+                self.assertIn(ev, text, "evidence must be a verbatim source slice")
+            self.assertTrue(c.locations, f"{c.name!r} evidence has no anchor")
+
+    def test_lead_in_label_is_not_a_heading(self):
+        """A blank-line-surrounded "label：" is a lead-in, not a section title."""
+        text = (
+            "# 总览\n\n导言段落。\n\n## 现象\n\n关键观测：\n\n第一，成本下降。\n\n"
+            "---\n\n第二，需求上升。\n"
+        )
+        asset = extract_knowledge(text, "t.md", llm=None)
+        names = [c.name for c in asset.concepts]
+        self.assertNotIn("关键观测：", names)
+        self.assertNotIn("---", names)
+        self.assertIn("现象", names)
+
+    def test_repeated_evidence_line_extends_to_unique_span(self):
+        text = (
+            "# 一\n\n同样的第一行。\n补充 A。\n\n"
+            "# 二\n\n同样的第一行。\n补充 B。\n"
+        )
+        asset = extract_knowledge(text, "t.md", llm=None)
+        by_name = {c.name: c for c in asset.concepts}
+        ev = by_name["一"].evidence[0]
+        self.assertIn("补充 A", ev)
+        self.assertEqual(text.count(ev), 1, "ambiguous evidence keeps a unique anchor")
+        loc = by_name["一"].locations[0]
+        self.assertEqual(text[loc.char_start:loc.char_end], ev)
+
+    def test_evidence_is_never_a_code_fence_marker(self):
+        text = (
+            "# 运行\n\n```powershell\npython main.py\n```\n\n"
+            "# 测试\n\n```powershell\npython run_tests.py\n```\n"
+        )
+        asset = extract_knowledge(text, "README.md", llm=None)
+        for c in asset.concepts:
+            self.assertFalse(
+                c.evidence and c.evidence[0].startswith(("```", "~~~")),
+                f"{c.name!r}: a fence marker is not evidence",
+            )
+
     def test_assemble_stamps_locations_from_llm_dict(self):
         text = "Alpha 是第一个概念。Beta 依赖 Alpha 才能运行。"
         data = {
@@ -232,6 +327,14 @@ class TestExtraction(unittest.TestCase):
         asset = _assemble(data, text, "x.md", "test")
         self.assertEqual(len(asset.relations), 1)
         self.assertIn(asset.relations[0].evidence, text)
+        rel = asset.relations[0]
+        self.assertIsNotNone(rel.location, "relation should carry a source anchor")
+        self.assertEqual(
+            text[rel.location.char_start:rel.location.char_end], rel.evidence
+        )
+        self.assertEqual(rel.location.line, 1)
+        rel2 = Relation.from_dict(rel.to_dict())
+        self.assertEqual(rel2.location.char_start, rel.location.char_start)
         by_name = {c.name: c for c in asset.concepts}
         alpha = by_name["Alpha"]
         self.assertTrue(alpha.locations, "Alpha should have a source location")
@@ -291,6 +394,60 @@ class TestExtraction(unittest.TestCase):
         }
         asset = _assemble(data, text, "x.md", "test")
         self.assertEqual(asset.relations, [])
+
+    def test_assemble_recovers_relation_evidence_from_co_mention_sentence(self):
+        sentence = "Alpha 与 Beta 相互依赖，共同组成系统。"
+        text = sentence + " Gamma 是独立概念。"
+        data = {
+            "concepts": [
+                {"name": "Alpha", "evidence": [sentence]},
+                {"name": "Beta", "evidence": [sentence]},
+                {"name": "Gamma", "evidence": ["Gamma 是独立概念。"]},
+            ],
+            "relations": [
+                {
+                    "source": "Alpha",
+                    "target": "Beta",
+                    "label": "依赖",
+                    "type": "prerequisite",
+                    # a paraphrase, not a verbatim span — the old code dropped it
+                    "evidence": "模型认为两者存在依赖关系。",
+                },
+            ],
+            "learning_path": ["Alpha", "Beta", "Gamma"],
+        }
+        asset = _assemble(data, text, "x.md", "test")
+        self.assertEqual(len(asset.relations), 1)
+        rel = asset.relations[0]
+        self.assertEqual(rel.evidence, sentence)
+        self.assertIn(rel.evidence, text)
+        # free-form LLM type is folded into the six canonical semantics
+        self.assertEqual(rel.type, "prereq")
+
+    def test_assemble_dedupes_chunk_overlap_and_symmetric_contrast(self):
+        sentence = "Alpha 导致 Beta，二者相互对比。"
+        data = {
+            "concepts": [
+                {"name": "Alpha", "evidence": [sentence]},
+                {"name": "Beta", "evidence": [sentence]},
+            ],
+            "relations": [
+                {"source": "Alpha", "target": "Beta", "label": "导致",
+                 "type": "causes", "evidence": sentence},
+                {"source": "Alpha", "target": "Beta", "label": "导致",
+                 "type": "causes", "evidence": sentence},
+                {"source": "Alpha", "target": "Beta", "label": "对比",
+                 "type": "contrast", "evidence": sentence},
+                {"source": "Beta", "target": "Alpha", "label": "对比",
+                 "type": "contrast", "evidence": sentence},
+            ],
+            "learning_path": ["Alpha", "Beta"],
+        }
+        asset = _assemble(data, sentence, "x.md", "test")
+        self.assertEqual(len(asset.relations), 2)
+        self.assertEqual(
+            sorted(r.type for r in asset.relations), ["causes", "contrast"]
+        )
 
     def test_chunked_extraction_merges_in_source_order_not_completion_order(self):
         from unittest import mock
@@ -888,6 +1045,267 @@ class TestLearner(unittest.TestCase):
         self.assertEqual(len(chain), 1)
         self.assertEqual(chain[0]["id"], "c1")
 
+    # -- learning streak ----------------------------------------------------
+    def test_learning_streak_empty(self):
+        from expert_anything.core.learner import learning_streak
+        result = learning_streak({})
+        self.assertEqual(result["current"], 0)
+        self.assertEqual(result["best"], 0)
+
+    def test_learning_streak_with_history(self):
+        from expert_anything.core.learner import learning_streak
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        state = {
+            "history": [
+                {"concept": "A", "score": 0.8, "at": now.isoformat()},
+                {"concept": "B", "score": 0.6, "at": (now - timedelta(days=1)).isoformat()},
+                {"concept": "C", "score": 0.4, "at": (now - timedelta(days=2)).isoformat()},
+                {"concept": "D", "score": 0.5, "at": (now - timedelta(days=5)).isoformat()},
+            ]
+        }
+        result = learning_streak(state)
+        self.assertEqual(result["current"], 3)
+        self.assertEqual(result["best"], 3)
+        self.assertEqual(result["total_days"], 4)
+
+    # -- reading position memory --------------------------------------------
+    def test_reading_position_roundtrip_per_asset(self):
+        from expert_anything.core.learner import (
+            save_reading_position,
+            load_reading_position,
+        )
+        state = {}
+        self.assertIsNone(load_reading_position(state, "a1"))
+        save_reading_position(state, "a1", 420)
+        save_reading_position(state, "a2", 900)
+        self.assertEqual(load_reading_position(state, "a1"), 420)
+        self.assertEqual(load_reading_position(state, "a2"), 900)
+        # overwrite + clamp to non-negative
+        save_reading_position(state, "a1", 50)
+        self.assertEqual(load_reading_position(state, "a1"), 50)
+        save_reading_position(state, "a1", -9)
+        # clamped to 0 == document top, which reads as "no saved position"
+        self.assertIsNone(load_reading_position(state, "a1"))
+        self.assertIsNone(load_reading_position(state, "missing"))
+
+    def test_reading_position_rejects_bad_values(self):
+        from expert_anything.core.learner import load_reading_position
+        self.assertIsNone(
+            load_reading_position({"reading_positions": {"a": True}}, "a")
+        )
+        self.assertIsNone(
+            load_reading_position({"reading_positions": {"a": "x"}}, "a")
+        )
+        # empty asset id is never written
+        from expert_anything.core.learner import save_reading_position
+        state = {}
+        save_reading_position(state, "", 100)
+        self.assertNotIn("reading_positions", state)
+
+    # -- recently-taught MRU -------------------------------------------------
+    def test_recent_taught_mru_order_dedup_and_limit(self):
+        from expert_anything.core.learner import (
+            record_taught_concept,
+            recent_taught_concepts,
+        )
+        state = {}
+        self.assertEqual(recent_taught_concepts(state), [])
+        for name in ["A", "B", "C"]:
+            record_taught_concept(state, name)
+        self.assertEqual(recent_taught_concepts(state), ["C", "B", "A"])
+        # re-teaching an older concept promotes it (no duplicate)
+        record_taught_concept(state, "A")
+        self.assertEqual(recent_taught_concepts(state), ["A", "C", "B"])
+        self.assertEqual(len(recent_taught_concepts(state, limit=2)), 2)
+        # empty names are ignored
+        record_taught_concept(state, "")
+        self.assertEqual(recent_taught_concepts(state), ["A", "C", "B"])
+
+    def test_recent_taught_storage_is_capped(self):
+        from expert_anything.core.learner import (
+            record_taught_concept,
+            RECENT_TAUGHT_CAP,
+        )
+        state = {}
+        for i in range(RECENT_TAUGHT_CAP + 5):
+            record_taught_concept(state, f"C{i}")
+        self.assertEqual(len(state["recent_taught"]), RECENT_TAUGHT_CAP)
+        self.assertEqual(state["recent_taught"][0], f"C{RECENT_TAUGHT_CAP + 4}")
+
+    # -- concept favorites ----------------------------------------------------
+    def test_favorites_toggle_roundtrip_and_normalize(self):
+        from expert_anything.core.learner import (
+            favorite_set,
+            is_favorite,
+            normalize,
+            toggle_favorite,
+        )
+        state = {}
+        self.assertFalse(is_favorite(state, "节点电价"))
+        self.assertTrue(toggle_favorite(state, "节点电价"))
+        self.assertTrue(is_favorite(state, "节点电价"))
+        # normalization: padded / case variants hit the same bookmark
+        self.assertTrue(is_favorite(state, "  节点电价 "))
+        # second toggle removes the bookmark
+        self.assertFalse(toggle_favorite(state, "节点电价"))
+        self.assertFalse(is_favorite(state, "节点电价"))
+        self.assertEqual(favorite_set(state), set())
+        # empty names are rejected and leave no trace on a fresh state
+        fresh = {}
+        self.assertFalse(toggle_favorite(fresh, ""))
+        self.assertNotIn("favorites", fresh)
+        # insertion order is preserved (normalized keys)
+        toggle_favorite(state, "Alpha")
+        toggle_favorite(state, "Beta")
+        self.assertEqual(state["favorites"], [normalize("Alpha"), normalize("Beta")])
+
+    # -- personal notes --------------------------------------------------------
+    def test_notes_set_get_delete_and_normalize(self):
+        from expert_anything.core.learner import (
+            get_note,
+            has_note,
+            normalize,
+            note_set,
+            set_note,
+            NOTE_CAP,
+        )
+
+        state = {}
+        self.assertEqual(get_note(state, "节点电价"), "")
+        self.assertFalse(has_note(state, "节点电价"))
+        # write then read; padded variants hit the same note
+        self.assertTrue(set_note(state, "节点电价", "我的理解：边际成本定价"))
+        self.assertEqual(get_note(state, "  节点电价 "), "我的理解：边际成本定价")
+        self.assertIn(normalize("节点电价"), note_set(state))
+        # overwrite
+        set_note(state, "节点电价", "v2：报价最低者定边际价")
+        self.assertEqual(get_note(state, "节点电价"), "v2：报价最低者定边际价")
+        # empty text deletes the note
+        self.assertFalse(set_note(state, "节点电价", "   "))
+        self.assertFalse(has_note(state, "节点电价"))
+        self.assertNotIn(normalize("节点电价"), state.get("notes", {}))
+        self.assertEqual(note_set(state), set())
+        # empty names are rejected and leave no trace
+        fresh = {}
+        self.assertFalse(set_note(fresh, "", "x"))
+        self.assertNotIn("notes", fresh)
+        # over-long notes are clamped
+        set_note(state, "Alpha", "x" * (NOTE_CAP + 50))
+        self.assertEqual(len(get_note(state, "Alpha")), NOTE_CAP)
+
+    # -- lesson snapshots --------------------------------------------------------
+    def test_lesson_snapshot_roundtrip_and_caps(self):
+        from expert_anything.core.learner import (
+            get_lesson_snapshot,
+            normalize,
+            save_lesson_snapshot,
+            LESSON_SNAPSHOT_CAP,
+            LESSON_STEPS_MAX,
+        )
+
+        state = {}
+        self.assertIsNone(get_lesson_snapshot(state, "节点电价"))
+        ok = save_lesson_snapshot(
+            state,
+            "节点电价",
+            "a1",
+            "example",
+            "边际成本决定节点电价……",
+            ["看报价", "找边际", "定出清"],
+        )
+        self.assertTrue(ok)
+        snap = get_lesson_snapshot(state, " 节点电价 ")
+        self.assertIsNotNone(snap)
+        self.assertEqual(snap["asset_id"], "a1")
+        self.assertEqual(snap["style"], "example")
+        self.assertEqual(snap["steps"], ["看报价", "找边际", "定出清"])
+        self.assertTrue(snap["at"])
+        self.assertIn(normalize("节点电价"), state["lesson_snapshots"])
+        # latest wins
+        save_lesson_snapshot(state, "节点电价", "a1", "steps", "新讲解", ["一", "二"])
+        self.assertEqual(get_lesson_snapshot(state, "节点电价")["explanation"], "新讲解")
+        self.assertEqual(len(state["lesson_snapshots"]), 1)
+        # empty explanation is a no-op; empty name rejected without trace
+        self.assertFalse(save_lesson_snapshot(state, "节点电价", "a1", "", "   ", []))
+        self.assertEqual(get_lesson_snapshot(state, "节点电价")["explanation"], "新讲解")
+        fresh = {}
+        self.assertFalse(save_lesson_snapshot(fresh, "", "a1", "", "abc", []))
+        self.assertNotIn("lesson_snapshots", fresh)
+        # caps: explanation and steps clamped
+        save_lesson_snapshot(
+            state,
+            "Beta",
+            "a1",
+            "",
+            "e" * (LESSON_SNAPSHOT_CAP + 10),
+            [f"s{i}" for i in range(LESSON_STEPS_MAX + 3)],
+        )
+        snap = get_lesson_snapshot(state, "Beta")
+        self.assertEqual(len(snap["explanation"]), LESSON_SNAPSHOT_CAP)
+        self.assertEqual(len(snap["steps"]), LESSON_STEPS_MAX)
+
+    # -- score trail --------------------------------------------------------------
+    def test_score_trail_chronological_and_review_flag(self):
+        from expert_anything.core.learner import normalize, score_trail
+
+        hist = [
+            {"concept": "节点电价", "key": normalize("节点电价"), "score": 0.9,
+             "meta": {"review": True}},
+            {"concept": "节点电价", "key": normalize("节点电价"), "score": 0.65,
+             "meta": {"channel": "answer"}},
+            {"concept": "别的", "key": normalize("别的"), "score": 0.2, "meta": {}},
+            {"concept": "节点电价", "key": normalize("节点电价"), "score": 0.4,
+             "meta": {"review": False}},
+        ]
+        # history is newest-first; trail must come back oldest→newest
+        trail = score_trail({"history": hist}, "节点电价")
+        self.assertEqual([t["score"] for t in trail], [0.4, 0.65, 0.9])
+        self.assertEqual([t["review"] for t in trail], [False, False, True])
+        # single record is not a trend
+        one = score_trail({"history": hist[:1]}, "别的")
+        self.assertEqual(one, [])
+        # limit keeps the latest N, still chronological
+        limited = score_trail({"history": hist}, "节点电价", limit=2)
+        self.assertEqual([t["score"] for t in limited], [0.65, 0.9])
+        self.assertEqual(score_trail({}, "节点电价"), [])
+
+    # -- structural complexity ----------------------------------------------
+    def test_structural_complexity_ranks_hubs(self):
+        from expert_anything.core.learner import structural_complexity
+
+        asset = _asset_with_relations()
+        sc = structural_complexity(asset)
+        # c2 is the middle hub: highest degree + highest in-degree
+        self.assertEqual(sc["c2"], 1.0)
+        self.assertGreater(sc["c3"], sc["c1"])  # more dependents than c1
+        self.assertTrue(all(0.0 <= v <= 1.0 for v in sc.values()))
+
+    def test_structural_complexity_empty(self):
+        from expert_anything.core.learner import structural_complexity
+
+        asset = KnowledgeAsset(
+            asset_id="e1", type="text", title="T", source_name="t.md",
+            created_at="", source_text="", concepts=[], relations=[],
+        )
+        sc = structural_complexity(asset)
+        self.assertEqual(sc, {})
+
+    # -- 2-hop breadth exploration ------------------------------------------
+    def test_select_nodes_2hop_extends_ego(self):
+        from expert_anything.core.graph_viz import _select_nodes
+
+        asset = _asset_with_relations()
+        nodes, _edges = _select_nodes(asset, "c1")
+        ids = {cid for cid, _n, _r in nodes}
+        self.assertNotIn("c3", ids)  # plain focus: only ego ring
+
+        nodes2, _edges2 = _select_nodes(asset, "c1", include_2hop=True)
+        ids2 = {cid for cid, _n, _r in nodes2}
+        self.assertIn("c3", ids2)  # 2-hop mode pulls in the second ring
+        role_c3 = next(r for cid, _n, r in nodes2 if cid == "c3")
+        self.assertEqual(role_c3, "hop2")
+
 
 # --------------------------------------------------------------------------- #
 # tutor (deterministic)
@@ -1217,7 +1635,7 @@ class TestTutor(unittest.TestCase):
         self.assertIn("feedback", r)
         self.assertIn("reference", r)
         self.assertTrue(0.0 <= r["score"] <= 1.0)
-        self.assertIn("未接入 LLM", r["feedback"])
+        self.assertIn("智能分析未开启", r["feedback"])
 
     def test_generate_quiz_without_llm_returns_fallback(self):
         r = self.tutor.generate_quiz(self.concept)
@@ -1368,9 +1786,9 @@ class TestCompareIncorporate(unittest.TestCase):
         tm = incorporate_comparison(asset, tm, "a", "b")
         na = tm.concept_note_by_id("a")
         nb = tm.concept_note_by_id("b")
-        self.assertTrue(any("对比锚点" in c and "H" in c for c in na.connections),
+        self.assertTrue(any("对比关联" in c and "H" in c for c in na.connections),
                         "shared hub missing from A's connections")
-        self.assertTrue(any("对比锚点" in c and "H" in c for c in nb.connections),
+        self.assertTrue(any("对比关联" in c and "H" in c for c in nb.connections),
                         "shared hub missing from B's connections")
         # no mastery state -> no gap anomaly
         self.assertFalse([a for a in tm.anomalies if a.kind == "learner_gap"])
@@ -1423,7 +1841,7 @@ class TestCompareIncorporate(unittest.TestCase):
                 "b": {"name": "B", "mastery": 0.9},
                 "shared_neighbors": ["H"]}
         tm = incorporate_comparison(asset, tm, "a", "b", comparison=comp)
-        self.assertTrue(any("对比锚点" in c for c in tm.concept_note_by_id("a").connections))
+        self.assertTrue(any("对比关联" in c for c in tm.concept_note_by_id("a").connections))
         self.assertTrue(any(a.kind == "learner_gap" for a in tm.anomalies))
 
     def test_bad_ids_are_ignored(self):
@@ -1567,3 +1985,750 @@ class TestStorage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+# --------------------------------------------------------------------------- #
+# coach — the single proactive主张 (AGENTS.md §49)
+# --------------------------------------------------------------------------- #
+
+
+class TestCoachRecommendation(unittest.TestCase):
+    """The coach must return exactly ONE主张 with the right priority."""
+
+    def _asset(self):
+        from expert_anything.core.models import Concept, KnowledgeAsset, Relation
+
+        a = KnowledgeAsset(
+            asset_id="a-coach",
+            type="text",
+            title="测试资产",
+            source_name="t.txt",
+            created_at="2026-01-01T00:00:00+00:00",
+            source_text="核心概念是解锁许多下游概念的基础。下游概念依赖核心概念。",
+        )
+        a.concepts = [
+            Concept(id="c1", name="核心概念", definition="基础", evidence=["核心概念是解锁许多下游概念的基础。"]),
+            Concept(id="c2", name="下游概念", definition="依赖", evidence=["下游概念依赖核心概念。"]),
+            Concept(id="c3", name="边缘概念", definition="独立", evidence=["边缘概念独立存在。"]),
+        ]
+        a.relations = [Relation(id="r1", source="c1", target="c2", label="prerequisite", type="prereq")]
+        a.learning_path = ["c1", "c2", "c3"]
+        return a
+
+    def _teacher(self, anomaly_for=()):
+        """A teacher model whose open anomalies mention the given concept names.
+
+        ``anomaly_concept_ids`` matches by *name appearing in the description*
+        (there is no concept_id field on Anomaly), so the description must
+        literally contain the concept name.
+        """
+        from expert_anything.core.teacher import TeacherModel, ConceptNote, Anomaly
+
+        notes = [
+            ConceptNote(concept_id="c1", name="核心概念"),
+            ConceptNote(concept_id="c2", name="下游概念"),
+            ConceptNote(concept_id="c3", name="边缘概念"),
+        ]
+        anomalies = [
+            Anomaly(
+                id=f"an-{i}",
+                kind="contradiction",
+                description=f"关于「{name}」的表述存在矛盾",
+                severity="high",
+                status="open",
+            )
+            for i, name in enumerate(anomaly_for)
+        ]
+        return TeacherModel(asset_id="a-coach", status="done", concept_notes=notes, anomalies=anomalies)
+
+    # -- import / explore ---------------------------------------------------
+
+    def test_no_asset_asks_for_import(self):
+        from expert_anything.core.coach import recommend
+
+        rec = recommend(None, {})
+        self.assertEqual(rec["kind"], "import")
+        self.assertEqual(rec["why_key"], "coach_why_import")
+
+    def test_asset_without_concepts_asks_for_import(self):
+        from expert_anything.core.coach import recommend
+        from expert_anything.core.models import KnowledgeAsset
+
+        rec = recommend(
+            KnowledgeAsset(
+                asset_id="x",
+                type="text",
+                title="空白资产",
+                source_name="t.txt",
+                created_at="2026-01-01T00:00:00+00:00",
+            ),
+            {},
+        )
+        self.assertEqual(rec["kind"], "import")
+
+    def test_all_mastered_and_fresh_is_explore(self):
+        from datetime import datetime, timezone
+
+        from expert_anything.core.coach import recommend
+        from expert_anything.core.learner import normalize
+
+        a = self._asset()
+        now = datetime.now(timezone.utc).isoformat()
+        state = {
+            "concepts": {
+                normalize(c.name): {
+                    "name": c.name, "mastery": 0.9, "sources": [a.asset_id],
+                    "last_feedback": "", "updated_at": now,
+                }
+                for c in a.concepts
+            },
+            "history": [],
+        }
+        rec = recommend(a, state, self._teacher())
+        self.assertEqual(rec["kind"], "explore")
+
+    # -- focus / path -------------------------------------------------------
+
+    def test_fresh_learner_gets_focus_with_unlock_reason(self):
+        from expert_anything.core.coach import recommend
+
+        a = self._asset()
+        rec = recommend(a, {"concepts": {}, "history": []}, self._teacher())
+        self.assertIn(rec["kind"], ("focus", "path"))
+        self.assertTrue(rec["concept_name"])
+        # the unlock count is what makes the claim concrete
+        if rec["kind"] == "focus":
+            self.assertIn(rec["why_key"], ("coach_why_focus_unlock", "coach_why_focus", "coach_why_weak"))
+
+    def test_focus_offers_alternatives(self):
+        from expert_anything.core.coach import recommend
+
+        a = self._asset()
+        rec = recommend(a, {"concepts": {}, "history": []}, self._teacher())
+        # two remaining concepts -> at least one runner-up for "换一个"
+        self.assertGreaterEqual(len(rec["alternatives"]), 1)
+        for alt in rec["alternatives"]:
+            self.assertTrue(alt["concept_name"])
+            self.assertNotEqual(alt["concept_name"], rec["concept_name"])
+
+    # -- review -------------------------------------------------------------
+
+    def test_due_items_produce_review_kind_with_review_semantics(self):
+        from datetime import datetime, timedelta, timezone
+
+        from expert_anything.core.coach import is_review, recommend
+        from expert_anything.core.learner import normalize
+
+        a = self._asset()
+        old = (datetime.now(timezone.utc) - timedelta(days=9)).isoformat()
+        state = {
+            "concepts": {
+                normalize(c.name): {
+                    "name": c.name, "mastery": 0.2, "sources": [a.asset_id],
+                    "last_feedback": "", "updated_at": old,
+                }
+                for c in a.concepts
+            },
+            "history": [],
+        }
+        rec = recommend(a, state, self._teacher())
+        self.assertEqual(rec["kind"], "review")
+        self.assertTrue(
+            is_review(rec),
+            "a review主张 must be flagged so the UI teaches it with vary=1",
+        )
+        self.assertEqual(rec["why_key"], "coach_why_review")
+        self.assertIn("days", rec["why_args"])
+        self.assertTrue(rec["alternatives"], "other due items become runner-ups")
+
+    def test_first_time_teaching_is_not_flagged_as_review(self):
+        from expert_anything.core.coach import is_review, recommend
+
+        rec = recommend(self._asset(), {"concepts": {}, "history": []}, self._teacher())
+        self.assertFalse(is_review(rec), "only due-item review主张 carry review semantics")
+
+    # -- stuck --------------------------------------------------------------
+
+    def test_stuck_concept_becomes_stuck_kind(self):
+        from expert_anything.core.coach import recommend
+        from expert_anything.core.learner import record_evaluation
+
+        a = self._asset()
+        state = {"concepts": {}, "history": []}
+        for _ in range(3):
+            record_evaluation(
+                state, "核心概念", a.asset_id, 0.1, "", "f",
+                meta={"channel": "answer", "review": False},
+            )
+        rec = recommend(a, state, self._teacher())
+        self.assertEqual(rec["kind"], "stuck")
+        self.assertEqual(rec["why_key"], "coach_why_stuck")
+        self.assertEqual(rec["concept_name"], "核心概念")
+
+    def test_review_failures_do_not_trigger_stuck_claim(self):
+        """Retention lapses belong to the review lane, never to stuck (AGENTS.md 6)."""
+        from expert_anything.core.coach import recommend
+        from expert_anything.core.learner import record_evaluation
+
+        a = self._asset()
+        state = {"concepts": {}, "history": []}
+        for _ in range(3):
+            record_evaluation(
+                state, "核心概念", a.asset_id, 0.05, "", "f",
+                meta={"channel": "flashcard", "review": True},
+            )
+        rec = recommend(a, state, self._teacher())
+        self.assertNotEqual(
+            rec["kind"], "stuck",
+            "low review scores are forgetting, not a failed teaching strategy",
+        )
+
+    # -- anomaly ------------------------------------------------------------
+
+    def test_anomaly_outranks_everything(self):
+        from datetime import datetime, timezone
+
+        from expert_anything.core.coach import recommend
+        from expert_anything.core.learner import normalize, record_evaluation
+
+        a = self._asset()
+        old = datetime.now(timezone.utc).replace(year=2020).isoformat()
+        state = {
+            "concepts": {
+                normalize(c.name): {
+                    "name": c.name, "mastery": 0.1, "sources": [a.asset_id],
+                    "last_feedback": "", "updated_at": old,
+                }
+                for c in a.concepts
+            },
+            "history": [],
+        }
+        # also make a concept stuck, so anomaly has something to outrank
+        for _ in range(3):
+            record_evaluation(
+                state, "核心概念", a.asset_id, 0.1, "", "f",
+                meta={"channel": "answer", "review": False},
+            )
+        rec = recommend(a, state, self._teacher(anomaly_for=("下游概念",)))
+        self.assertEqual(
+            rec["kind"], "anomaly",
+            "an open doubt must be resolved before drilling or reviewing",
+        )
+        self.assertEqual(rec["why_key"], "coach_why_anomaly")
+
+    # -- robustness ---------------------------------------------------------
+
+    def test_broken_teacher_model_degrades_instead_of_raising(self):
+        from expert_anything.core.coach import recommend
+
+        a = self._asset()
+        # a teacher payload missing every field must not kill coaching
+        rec = recommend(a, {"concepts": {}, "history": []}, {"garbage": True})
+        self.assertIsInstance(rec, dict)
+        self.assertIn("kind", rec)
+
+    def test_none_learner_state_is_tolerated(self):
+        from expert_anything.core.coach import recommend
+
+        rec = recommend(self._asset(), None, None)
+        self.assertIsInstance(rec, dict)
+        self.assertTrue(rec["kind"])
+
+    def test_output_shape_is_stable(self):
+        from expert_anything.core.coach import recommend
+
+        rec = recommend(self._asset(), {"concepts": {}, "history": []}, None)
+        for key in (
+            "kind", "concept_id", "concept_name", "why_key",
+            "why_args", "urgency", "alternatives",
+        ):
+            self.assertIn(key, rec)
+        self.assertIn(
+            rec["kind"],
+            ("anomaly", "stuck", "prereq", "review", "focus", "path", "explore", "import"),
+        )
+
+
+class TestCoachPrerequisiteAwareness(unittest.TestCase):
+    """The coach must not push the learner at a concept with a shaky foundation."""
+
+    def _asset(self):
+        """A -> B -> C ordering chain so mastery of A gates B."""
+        from expert_anything.core.models import Concept, KnowledgeAsset, Relation
+
+        a = KnowledgeAsset(
+            asset_id="a-prereq",
+            type="text",
+            title="前置测试",
+            source_name="p.txt",
+            created_at="2026-01-01T00:00:00+00:00",
+            source_text="基础概念是前提。进阶概念依赖基础概念。",
+        )
+        a.concepts = [
+            Concept(id="c1", name="基础概念", definition="前提", evidence=["基础概念是前提。"]),
+            Concept(id="c2", name="进阶概念", definition="依赖", evidence=["进阶概念依赖基础概念。"]),
+        ]
+        a.relations = [
+            Relation(id="r1", source="c1", target="c2", label="prerequisite", type="prereq")
+        ]
+        a.learning_path = ["c1", "c2"]
+        return a
+
+    def _state(self, **mastery):
+        """Learner state from ``{concept_name: mastery}``; fresh (nothing due)."""
+        from datetime import datetime, timezone
+
+        from expert_anything.core.learner import normalize
+
+        now = datetime.now(timezone.utc).isoformat()
+        a = self._asset()
+        state = {"concepts": {}, "history": []}
+        for c in a.concepts:
+            m = mastery.get(c.name, 0.9)
+            state["concepts"][normalize(c.name)] = {
+                "name": c.name, "mastery": m, "sources": [a.asset_id],
+                "last_feedback": "", "updated_at": now,
+            }
+        return state
+
+    def test_blocked_top_pick_becomes_prereq_claim(self):
+        """B ranks first but A is below 0.5 -> claim names A, keeps B as the goal."""
+        from expert_anything.core.coach import recommend
+
+        a = self._asset()
+        # B has the bigger deficit so it outranks A, while A is only just weak
+        state = self._state(基础概念=0.45, 进阶概念=0.0)
+        rec = recommend(a, state, None)
+
+        self.assertEqual(
+            rec["kind"], "prereq",
+            "a concept whose prerequisite is shaky must not be handed over as-is",
+        )
+        self.assertEqual(rec["concept_name"], "基础概念")
+        self.assertEqual(rec["why_key"], "coach_why_prereq")
+        self.assertEqual(rec["why_args"]["name"], "进阶概念")
+        self.assertEqual(rec["why_args"]["pct"], 45)
+
+    def test_stale_block_does_not_override_ranking(self):
+        """If the prerequisite is already mastered the block is stale: act on the goal."""
+        from expert_anything.core.coach import recommend
+
+        a = self._asset()
+        state = self._state(基础概念=0.95, 进阶概念=0.0)
+        rec = recommend(a, state, None)
+
+        self.assertNotEqual(
+            rec["kind"], "prereq",
+            "a mastered prerequisite must not be reported as a bottleneck",
+        )
+        self.assertEqual(rec["concept_name"], "进阶概念")
+
+    def test_ready_chain_prefers_the_forward_move(self):
+        from expert_anything.core.coach import recommend
+
+        a = self._asset()
+        state = self._state(基础概念=0.3, 进阶概念=0.0)
+        rec = recommend(a, state, None)
+        # whatever branch fires, it must point at a real concept of this asset
+        self.assertTrue(rec["concept_name"])
+        self.assertIsNotNone(a.concept_by_name(rec["concept_name"]))
+
+    def test_alternatives_never_duplicate_the_main_claim(self):
+        from expert_anything.core.coach import recommend
+
+        a = self._asset()
+        state = self._state(基础概念=0.45, 进阶概念=0.0)
+        rec = recommend(a, state, None)
+        names = [alt["concept_name"] for alt in rec["alternatives"]]
+        self.assertNotIn(
+            rec["concept_name"], names,
+            "a runner-up identical to the main claim makes 换一个 a no-op",
+        )
+
+    def test_prereq_claim_is_not_review_shaped(self):
+        from expert_anything.core.coach import is_review, recommend
+
+        a = self._asset()
+        state = self._state(基础概念=0.45, 进阶概念=0.0)
+        rec = recommend(a, state, None)
+        if rec["kind"] == "prereq":
+            self.assertFalse(
+                is_review(rec),
+                "a prerequisite gap is a gap, not spaced-review decay",
+            )
+
+    def test_prereq_kind_is_in_the_documented_order(self):
+        from expert_anything.core.coach import KIND_ORDER
+
+        self.assertIn("prereq", KIND_ORDER)
+        self.assertLess(
+            KIND_ORDER.index("prereq"), KIND_ORDER.index("review"),
+            "an open prerequisite gap outranks generic review pressure",
+        )
+        self.assertLess(
+            KIND_ORDER.index("stuck"), KIND_ORDER.index("prereq"),
+            "a stuck concept is more urgent than a foundation gap",
+        )
+
+
+class TestCoachFeedback(unittest.TestCase):
+    """The coach must remember how the learner responds — without hiding safety."""
+
+    # -- persistence --------------------------------------------------------
+
+    def test_feedback_is_recorded_newest_first_and_bounded(self):
+        from expert_anything.core.coach import COACH_EVENT_CAP, record_coach_feedback
+
+        state = {}
+        for i in range(COACH_EVENT_CAP + 12):
+            record_coach_feedback(
+                state, {"kind": "review", "concept_name": f"c{i}"}, "dismiss"
+            )
+
+        events = state["coach"]["events"]
+        self.assertEqual(len(events), COACH_EVENT_CAP, "the log must stay bounded")
+        self.assertEqual(
+            events[0]["concept"],
+            f"c{COACH_EVENT_CAP + 11}",
+            "newest reaction must be first",
+        )
+        self.assertEqual(events[0]["action"], "dismiss")
+
+    def test_feedback_ignores_malformed_input(self):
+        from expert_anything.core.coach import record_coach_feedback
+
+        state = {}
+        record_coach_feedback(state, None, "dismiss")
+        record_coach_feedback(state, {}, "dismiss")
+        record_coach_feedback(state, {"kind": "review"}, "not-an-action")
+        record_coach_feedback("not-a-dict", {"kind": "review"}, "dismiss")
+        self.assertEqual(state.get("coach", {}).get("events", []), [])
+
+    # -- fatigue ------------------------------------------------------------
+
+    def test_consecutive_dismissals_trigger_fatigue(self):
+        from expert_anything.core.coach import (
+            FATIGUE_THRESHOLD,
+            coach_fatigue,
+            record_coach_feedback,
+        )
+
+        state = {}
+        for _ in range(FATIGUE_THRESHOLD - 1):
+            record_coach_feedback(state, {"kind": "review"}, "dismiss")
+        self.assertEqual(coach_fatigue(state), {}, "too few dismissals to demote")
+
+        record_coach_feedback(state, {"kind": "review"}, "dismiss")
+        self.assertEqual(coach_fatigue(state).get("review"), FATIGUE_THRESHOLD)
+
+    def test_accepting_resets_the_run(self):
+        from expert_anything.core.coach import (
+            FATIGUE_THRESHOLD,
+            coach_fatigue,
+            record_coach_feedback,
+        )
+
+        state = {}
+        for _ in range(FATIGUE_THRESHOLD):
+            record_coach_feedback(state, {"kind": "review"}, "dismiss")
+        self.assertTrue(coach_fatigue(state))
+
+        record_coach_feedback(state, {"kind": "review"}, "start")
+        self.assertEqual(
+            coach_fatigue(state), {},
+            "acting on the advice must clear the fatigue run",
+        )
+
+    def test_anomaly_and_stuck_are_exempt_from_demotion(self):
+        """Known problems must never be silenced by clicking past them."""
+        from expert_anything.core.coach import coach_fatigue, record_coach_feedback
+
+        state = {}
+        for kind in ("anomaly", "stuck"):
+            for _ in range(6):
+                record_coach_feedback(state, {"kind": kind}, "dismiss")
+        self.assertEqual(
+            coach_fatigue(state), {},
+            "anomaly/stuck dismissals must not demote: hiding them would be the "
+            "'pretend to know' failure the design forbids",
+        )
+
+    def test_fatigue_is_per_kind(self):
+        from expert_anything.core.coach import (
+            FATIGUE_THRESHOLD,
+            coach_fatigue,
+            record_coach_feedback,
+        )
+
+        state = {}
+        for _ in range(FATIGUE_THRESHOLD):
+            record_coach_feedback(state, {"kind": "review"}, "dismiss")
+        for _ in range(FATIGUE_THRESHOLD):
+            record_coach_feedback(state, {"kind": "focus"}, "dismiss")
+
+        fat = coach_fatigue(state)
+        self.assertEqual(set(fat), {"review", "focus"})
+
+    # -- selection ----------------------------------------------------------
+
+    @staticmethod
+    def _claim(kind, name):
+        from expert_anything.core.coach import _blank
+
+        rec = _blank(kind, why_key="coach_why_focus")
+        rec["concept_name"] = name
+        return rec
+
+    def test_demoted_kind_stays_reachable_as_alternative(self):
+        from expert_anything.core.coach import (
+            FATIGUE_THRESHOLD,
+            _select,
+            record_coach_feedback,
+        )
+
+        state = {}
+        for _ in range(FATIGUE_THRESHOLD):
+            record_coach_feedback(state, {"kind": "review"}, "dismiss")
+
+        candidates = [
+            self._claim("review", "复习概念"),
+            self._claim("focus", "重点概念"),
+        ]
+        rec = _select(candidates, state)
+
+        self.assertEqual(rec["kind"], "focus", "the fatigued kind is deferred")
+        names = [a["concept_name"] for a in rec["alternatives"]]
+        self.assertIn(
+            "复习概念",
+            names,
+            "deferring must not delete the claim — it stays one click away",
+        )
+        self.assertEqual(rec["fatigue_note"]["kind"], "review")
+        self.assertEqual(rec["fatigue_note"]["n"], FATIGUE_THRESHOLD)
+
+    def test_all_fatigued_still_returns_a_claim(self):
+        from expert_anything.core.coach import (
+            FATIGUE_THRESHOLD,
+            _select,
+            record_coach_feedback,
+        )
+
+        state = {}
+        for kind in ("review", "focus"):
+            for _ in range(FATIGUE_THRESHOLD):
+                record_coach_feedback(state, {"kind": kind}, "dismiss")
+
+        rec = _select(
+            [self._claim("review", "复习概念"), self._claim("focus", "重点概念")],
+            state,
+        )
+        self.assertIn(
+            rec["kind"],
+            ("review", "focus"),
+            "the coach may lower its voice, never fall silent",
+        )
+
+    def test_select_handles_empty_candidates(self):
+        from expert_anything.core.coach import _select
+
+        rec = _select([], {})
+        self.assertEqual(rec["kind"], "explore")
+
+    def test_single_candidate_is_returned_unchanged(self):
+        from expert_anything.core.coach import _select
+
+        only = self._claim("review", "唯一主张")
+        rec = _select([only], {})
+        self.assertEqual(rec["kind"], "review")
+        self.assertEqual(rec["concept_name"], "唯一主张")
+
+    # -- integration --------------------------------------------------------
+
+    def test_recommend_defers_fatigued_kind_when_alternatives_exist(self):
+        """End-to-end: with a due queue AND a forward move, dismissing review
+        advice repeatedly must actually change what the coach leads with."""
+        from datetime import datetime, timedelta, timezone
+
+        from expert_anything.core.coach import (
+            FATIGUE_THRESHOLD,
+            recommend,
+            record_coach_feedback,
+        )
+        from expert_anything.core.learner import normalize
+        from expert_anything.core.models import Concept, KnowledgeAsset, Relation
+
+        a = KnowledgeAsset(
+            asset_id="a-fb2",
+            type="text",
+            title="综合反馈",
+            source_name="f.txt",
+            created_at="2026-01-01T00:00:00+00:00",
+            source_text="基础是先决。进阶依赖基础。旁支独立存在。",
+        )
+        a.concepts = [
+            Concept(id="c1", name="基础", definition="先决", evidence=["基础是先决。"]),
+            Concept(id="c2", name="进阶", definition="依赖", evidence=["进阶依赖基础。"]),
+            Concept(id="c3", name="旁支", definition="独立", evidence=["旁支独立存在。"]),
+        ]
+        a.relations = [Relation(id="r1", source="c1", target="c2", label="prerequisite", type="prereq")]
+        a.learning_path = ["c1", "c2", "c3"]
+
+        old = (datetime.now(timezone.utc) - timedelta(days=9)).isoformat()
+        state = {"concepts": {}, "history": []}
+        for c in a.concepts:
+            state["concepts"][normalize(c.name)] = {
+                "name": c.name, "mastery": 0.2, "sources": [a.asset_id],
+                "last_feedback": "", "updated_at": old,
+            }
+
+        before = recommend(a, state, None)
+        self.assertEqual(before["kind"], "review", "precondition: review is due")
+
+        for _ in range(FATIGUE_THRESHOLD):
+            record_coach_feedback(state, {"kind": "review"}, "dismiss")
+
+        after = recommend(a, state, None)
+        self.assertNotEqual(
+            after["kind"],
+            "review",
+            "after repeated dismissals the coach must lead with something else",
+        )
+        self.assertIsNotNone(a.concept_by_name(after["concept_name"]))
+
+
+class TestCoachUnlockNames(unittest.TestCase):
+    """The focus claim must name what mastering the concept unlocks."""
+
+    def _asset(self):
+        """A -> B -> C -> D chain: A transitively unlocks three concepts."""
+        from expert_anything.core.models import Concept, KnowledgeAsset, Relation
+
+        a = KnowledgeAsset(
+            asset_id="a-unlock",
+            type="text",
+            title="解锁测试",
+            source_name="u.txt",
+            created_at="2026-01-01T00:00:00+00:00",
+            source_text="甲是乙的前提。乙是丙的前提。丙是丁的前提。",
+        )
+        a.concepts = [
+            Concept(id="c1", name="甲", definition="根", evidence=["甲是乙的前提。"]),
+            Concept(id="c2", name="乙", definition="中", evidence=["乙是丙的前提。"]),
+            Concept(id="c3", name="丙", definition="中", evidence=["丙是丁的前提。"]),
+            Concept(id="c4", name="丁", definition="叶", evidence=["丙是丁的前提。"]),
+            Concept(id="c5", name="独立", definition="旁", evidence=["独立存在。"]),
+        ]
+        a.relations = [
+            Relation(id="r1", source="c1", target="c2", label="prerequisite", type="prereq"),
+            Relation(id="r2", source="c2", target="c3", label="prerequisite", type="prereq"),
+            Relation(id="r3", source="c3", target="c4", label="prerequisite", type="prereq"),
+        ]
+        a.learning_path = ["c1", "c2", "c3", "c4", "c5"]
+        return a
+
+    def test_names_are_transitive_and_nearest_first(self):
+        from expert_anything.core.coach import _unlocked_names
+
+        a = self._asset()
+        names = _unlocked_names(a, "c1", limit=8)
+        self.assertEqual(
+            names, ["乙", "丙", "丁"],
+            "must walk the ordering chain transitively, nearest first",
+        )
+
+    def test_names_respect_the_limit(self):
+        from expert_anything.core.coach import _unlocked_names
+
+        a = self._asset()
+        self.assertEqual(_unlocked_names(a, "c1", limit=2), ["乙", "丙"])
+
+    def test_leaf_concept_unlocks_nothing(self):
+        from expert_anything.core.coach import _unlocked_names
+
+        a = self._asset()
+        self.assertEqual(_unlocked_names(a, "c4"), [])
+        self.assertEqual(_unlocked_names(a, "c5"), [])
+
+    def test_unknown_concept_is_safe(self):
+        from expert_anything.core.coach import _unlocked_names
+
+        a = self._asset()
+        self.assertEqual(_unlocked_names(a, ""), [])
+        self.assertEqual(_unlocked_names(a, "nope"), [])
+
+    def _branching_asset(self):
+        """A hub with six leaf dependents: leverage 6 -> bonus 0.18 >= 0.15,
+        so the ``high_leverage`` unlock branch genuinely fires."""
+        from expert_anything.core.models import Concept, KnowledgeAsset, Relation
+
+        a = KnowledgeAsset(
+            asset_id="a-hub",
+            type="text",
+            title="枢纽测试",
+            source_name="h.txt",
+            created_at="2026-01-01T00:00:00+00:00",
+            source_text="枢纽是多个下游概念的前提。",
+        )
+        a.concepts = [
+            Concept(id="c0", name="枢纽", definition="根",
+                    evidence=["枢纽是多个下游概念的前提。"])
+        ]
+        for i, leaf in enumerate(("乙", "丙", "丁", "戊", "己", "庚"), 1):
+            a.concepts.append(
+                Concept(id=f"c{i}", name=leaf, definition="叶",
+                        evidence=["枢纽是多个下游概念的前提。"])
+            )
+        a.relations = [
+            Relation(id=f"r{i}", source="c0", target=f"c{i}",
+                     label="prerequisite", type="prereq")
+            for i in range(1, 7)
+        ]
+        a.learning_path = [c.id for c in a.concepts]
+        return a
+
+    def test_focus_claim_carries_names_alongside_count(self):
+        from expert_anything.core.coach import recommend
+
+        a = self._branching_asset()
+        rec = recommend(a, {"concepts": {}, "history": []}, None)
+        self.assertEqual(rec["kind"], "focus")
+        self.assertEqual(
+            rec["why_key"], "coach_why_focus_unlock",
+            "six dependents must light up the unlock branch, not the weak one",
+        )
+        self.assertEqual(
+            rec["why_args"]["n"], 6,
+            "the count stays: it is the authoritative transitive width",
+        )
+        self.assertEqual(
+            rec["why_args"]["names"], "乙、丙、丁",
+            "names are transitive, nearest-first, capped at three",
+        )
+
+    def test_no_dependents_means_no_names_key(self):
+        """A weak leaf with nothing downstream gets a plain weak claim —
+        no example list, and the test must not pass vacuously."""
+        from datetime import datetime, timezone
+
+        from expert_anything.core.coach import recommend
+        from expert_anything.core.learner import normalize
+
+        a = self._asset()
+        now = datetime.now(timezone.utc).isoformat()
+        state = {"concepts": {}, "history": []}
+        for c in a.concepts:
+            m = 0.0 if c.name == "丁" else 0.95
+            state["concepts"][normalize(c.name)] = {
+                "name": c.name, "mastery": m, "sources": [a.asset_id],
+                "last_feedback": "", "updated_at": now,
+            }
+        rec = recommend(a, state, None)
+        self.assertEqual(
+            rec["concept_name"], "丁",
+            "precondition: the weak leaf is the top pick",
+        )
+        self.assertEqual(rec["why_key"], "coach_why_weak")
+        self.assertNotIn(
+            "names", rec["why_args"],
+            "an unlock count of zero must not carry an example list",
+        )
